@@ -1,0 +1,14 @@
+# Quarto / LaTeX intermediates
+.quarto/
+slides/multivariate_calibration.tex
+slides/multivariate_calibration_files/
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+
+# Local rendering checks
+tmp/
