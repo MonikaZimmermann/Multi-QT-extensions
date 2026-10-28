@@ -1,3 +1,6 @@
+# All agent code, experiments, papers, results, and scratch files stay local.
+/agent/
+
 # Quarto / LaTeX intermediates
 .quarto/
 slides/multivariate_calibration.tex
@@ -9,6 +12,11 @@ slides/multivariate_calibration_files/
 *.snm
 *.toc
 *.vrb
+*.pdf
+*.png
+*.csv
+*.md
+*.rds
 
 # Local rendering checks
 tmp/
