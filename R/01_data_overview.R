@@ -63,6 +63,7 @@ for (column in names(forecast_unique)) {
   )
   print(forecast_unique[[column]], max = 100)
 }
+
 # 2. REPORT TABLE: WHAT WAS REPORTED, AND WHEN? --------------------------------
 # A "vintage" ("=" Jahrgang/ Kohorte) is a stored version of an observation. Each row contains ONE
 # reported count for ONE disease/place/target week, as recorded in ONE version.
@@ -138,6 +139,97 @@ print(archive)
 # as the cutoff lets every recorded revision participate in choosing the latest.
 latest <- epix_as_of(archive, archive$versions_end)
 print(latest)
+
+# MISSING DATA: ALL DATES ----------------------------------------------------
+# In every table: n_missing = n_absent + n_na; n_locations counts DISTINCT
+# affected locations, and n_weeks counts DISTINCT affected weeks.
+# Detail tables show only weeks with missing data; summaries include zeros.
+
+# A. FORECASTS: count individual quantile values, separately for every horizon.
+# Expect every observed location and horizon on every reference week between
+# that disease's first and last forecasts, with all quantiles seen at that horizon.
+# This describes coverage, including seasonal breaks or changes in horizons;
+# an absent row does not establish that a forecast should have been submitted.
+forecast_weeks <- forecasts %>%
+  group_by(disease) %>%
+  reframe(reference_date = seq(min(reference_date), max(reference_date), by = "week"))
+forecast_expected <- forecasts %>% distinct(disease, location) %>%
+  inner_join(forecasts %>% group_by(disease, horizon) %>%
+               summarise(n_expected = n_distinct(quantile_level), .groups = "drop"),
+             by = "disease", relationship = "many-to-many")
+forecast_missing_by_location <- forecast_weeks %>%
+  inner_join(forecast_expected, by = "disease", relationship = "many-to-many") %>%
+  left_join(forecasts %>% group_by(disease, horizon, reference_date, location) %>%
+              summarise(n_present = n_distinct(quantile_level),
+                        n_na = sum(is.na(value)), .groups = "drop"),
+            by = c("disease", "horizon", "reference_date", "location")) %>%
+  mutate(n_absent = n_expected - coalesce(n_present, 0L),
+         n_na = coalesce(n_na, 0L), n_missing = n_absent + n_na,
+         is_missing = n_missing > 0, target_end_date = reference_date + 7 * horizon)
+forecast_missing_summary <- forecast_missing_by_location %>%
+  group_by(disease, horizon) %>%
+  summarise(n_missing = sum(n_missing), n_absent = sum(n_absent), n_na = sum(n_na),
+            n_locations = n_distinct(location[is_missing]),
+            n_weeks = n_distinct(reference_date[is_missing]),
+            .groups = "drop")
+forecast_missing_weeks <- forecast_missing_by_location %>%
+  filter(n_missing > 0) %>%
+  group_by(disease, horizon, reference_date, target_end_date) %>%
+  summarise(n_missing = sum(n_missing), n_absent = sum(n_absent), n_na = sum(n_na),
+            n_locations = n_distinct(location), .groups = "drop")
+cat("\nFORECASTS: missing quantile values by disease and horizon\n",
+    "n_absent = absent quantile rows; n_na = stored NA values.\n",
+    "For example, one completely absent 23-quantile forecast contributes 23 missing values.\n",
+    sep = "")
+print(forecast_missing_summary, n = Inf, width = 140)
+cat("\nFORECASTS: affected reference weeks and corresponding target weeks\n")
+print(forecast_missing_weeks, n = Inf, width = 140)
+
+# B. REPORTS AND FINALIZED TRUTHS: weeks below are TARGET weeks, not issue dates.
+# All reports: count NA rows across stored versions; one location/week may
+# contribute several missing values. Do not invent expected revision records.
+# Latest reports: one value per location/target week, including absent rows on
+# the full weekly grid. Use geo_value so all 57 locations, including territories,
+# are included. Finalized truths: count each forecast location/target week once,
+# without multiplying by quantiles/horizons or inventing truths for absent forecasts.
+latest_report_grid <- vintages %>%
+  group_by(disease) %>%
+  reframe(target_end_date = seq(min(target_end_date), max(target_end_date), by = "week")) %>%
+  inner_join(vintages %>% distinct(disease, geo_value),
+             by = "disease", relationship = "many-to-many") %>%
+  left_join(as.data.frame(latest) %>%
+              transmute(disease, geo_value, target_end_date = time_value,
+                        value, present = TRUE),
+            by = c("disease", "geo_value", "target_end_date"))
+report_values <- bind_rows(
+  vintages %>% transmute(source = "all_reports", disease, target_end_date,
+                        place = geo_value, n_absent = 0L, n_na = as.integer(is.na(value))),
+  latest_report_grid %>%
+    transmute(source = "latest_reports", disease, target_end_date, place = geo_value,
+              n_absent = as.integer(is.na(present)),
+              n_na = as.integer(!is.na(present) & is.na(value))),
+  forecasts %>% distinct(disease, location, target_end_date, truth_finalized) %>%
+    transmute(source = "truth_finalized", disease, target_end_date, place = location,
+              n_absent = 0L, n_na = as.integer(is.na(truth_finalized)))
+) %>% mutate(n_missing = n_absent + n_na, is_missing = n_missing > 0)
+report_missing_summary <- report_values %>%
+  group_by(source, disease) %>%
+  summarise(n_missing = sum(n_missing), n_absent = sum(n_absent), n_na = sum(n_na),
+            n_locations = n_distinct(place[is_missing]),
+            n_weeks = n_distinct(target_end_date[is_missing]),
+            .groups = "drop")
+report_missing_weeks <- report_values %>%
+  filter(n_missing > 0) %>%
+  group_by(source, disease, target_end_date) %>%
+  summarise(n_missing = sum(n_missing), n_absent = sum(n_absent), n_na = sum(n_na),
+            n_locations = n_distinct(place), .groups = "drop")
+cat("\nREPORTS AND FINALIZED TRUTHS: missing values by source and disease\n",
+    "All reports count stored versions; latest reports and finalized truths count outcomes.\n",
+    "Absence is checked only for latest reports; other sources count existing NA values.\n",
+    sep = "")
+print(report_missing_summary, n = Inf, width = 140)
+cat("\nREPORTS AND FINALIZED TRUTHS: affected target weeks\n")
+print(report_missing_weeks, n = Inf, width = 140)
 
 # For a historical snapshot, choose the last version ON OR BEFORE the cutoff.
 # The cutoff applies to version (report date), not to the target week's date.
