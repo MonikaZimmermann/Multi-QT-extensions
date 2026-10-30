@@ -5,7 +5,7 @@ disease_name <- "covid"                    # "covid" or "flu"
 location_id <- "US"                       # One location code; ignored if combined=TRUE.
 horizon_id <- 0
 combined <- FALSE                         # TRUE averages independently fitted locations.
-make_phase_overview <- FALSE               # Also compare both diseases, h-1:3, locations and US.
+make_phase_overview <- TRUE               # Also compare both diseases, h-1:3, locations and US.
 use_log_scale <- TRUE                     # TRUE: log1p(counts); FALSE: raw counts for MultiQT.
 # Script 03 inherits this switch when sourced afterward in the same R session.
 scale_method <- "max"                     # Scoring/plots only: "median", "max", or "none".
@@ -85,7 +85,7 @@ run_location <- function(case, case_name, combined) {
   # These count-scale arrays are for scoring, saved forecasts and display only.
   base <- case$base / count_scale
   feedback_observed <- case$feedback_observed / count_scale
-  truth_latest <- case$truth_latest / count_scale  # Scoring target; updates use feedback only.
+  truth_latest <- feedback_observed#case$truth_latest / count_scale # Scoring target; updates use feedback only.
   feedback_by_week <- case$feedback_by_week
   stopifnot(all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
   feedback_date <- case$feedback_date
