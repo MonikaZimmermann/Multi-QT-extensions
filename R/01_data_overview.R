@@ -260,7 +260,7 @@ print(available_then)
 # US remains a separate case and must not be counted as an additional state.
 peak_settings <- list(start_date = as.Date("2024-11-23"),
                       winter_start = as.Date("2025-11-01"),
-                      winter_end = as.Date("2026-05-31"), horizons = 0:3)
+                      winter_end = as.Date("2026-05-31"), horizons = -1:3)
 
 prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
   forecast_columns <- c("disease", "location", "horizon", "reference_date",
