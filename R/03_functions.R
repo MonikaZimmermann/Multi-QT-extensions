@@ -42,7 +42,7 @@ from_tracker <- function(x, transform) {
 
 # Count scale for scores, plots and weighting losses; MultiQT never tracks it.
 # It uses only reports published before the location's first forecast.
-count_scale <- function(case, method = "max") {
+choose_count_scale <- function(case, method = "max") {
   history <- case$scale_history[is.finite(case$scale_history)]
   scale <- 1
   used <- method

@@ -33,7 +33,7 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # Scores use the latest vintage, in counts / count_scale (historical maximum by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
 run_rate_grid <- function(case, keep_weekly = FALSE) {
-  scale <- count_scale(case, settings$scale_method)
+  scaling <- choose_count_scale(case, settings$scale_method)
   s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, settings$transform)
   # If fewer than 20 reports arrive, there are no post-initialization weeks to score.
   eta <- rate_multipliers * s0$scale
@@ -49,7 +49,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
       eta[i], s0$warmup_weeks, settings$transform)
     # Coverage compares counts, so exact ties with integer reports stay ties.
     # The pinball loss is count loss divided by count_scale exactly once.
-    week_scores <- score_quantiles(q, case$truth_latest, case$alpha, scale$scale)
+    week_scores <- score_quantiles(q, case$truth_latest, case$alpha, scaling$scale)
     for (phase in phases) {
       s <- summarize_scores(week_scores, case$alpha, phase_rows[[phase]])
       key <- paste(i, phase)
@@ -62,7 +62,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
     if (keep_weekly && rate_multipliers[i] %in% display_multipliers) {
       week_scores$covered[!post_warmup, ] <- NA
       week_scores$loss[!post_warmup, ] <- NA_real_
-      weekly[[as.character(rate_multipliers[i])]] <- list(q = q / scale$scale,
+      weekly[[as.character(rate_multipliers[i])]] <- list(q = q / scaling$scale,
         covered = week_scores$covered, loss = week_scores$loss)
     }
   }
@@ -74,7 +74,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
   base_loss <- zero$quantile_loss[match(scores$phase, zero$phase)]
   scores$relative_loss <- ifelse(is.finite(base_loss) & base_loss > 0,
     100 * (scores$quantile_loss / base_loss - 1), NA_real_)
-  list(case = case, scale = scale, s0 = s0, weekly = weekly,
+  list(case = case, scaling = scaling, s0 = s0, weekly = weekly,
     scores = data.frame(id, scores, row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL),
     rate_grid = data.frame(id, transform = settings$transform, multiplier = rate_multipliers,
@@ -82,9 +82,9 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
       initialized = s0$initialized, initialization_date = s0$date,
       warmup_weeks = s0$warmup_weeks, initialization_rounds = length(s0$rows),
       consumed_rounds = length(s0$consumed_rows), raw_error_scale = s0$raw_scale,
-      error_scale = s0$scale, scale_floor = s0$floor, scale_method = scale$method,
-      scale_used = scale$used, count_scale = scale$scale, scale_as_of = case$scale_as_of,
-      reference_weeks = scale$reference_weeks))
+      error_scale = s0$scale, scale_floor = s0$floor, scale_method = scaling$method,
+      scale_used = scaling$used, count_scale = scaling$scale, scale_as_of = case$scale_as_of,
+      reference_weeks = scaling$reference_weeks))
 }
 runs <- list()
 for (disease in diseases) for (location in settings$location_ids) for (horizon in settings$horizons) {
@@ -271,8 +271,8 @@ for (location in settings$location_ids) {
   columns <- match(plot_alpha, case$alpha)
   dates <- case$target_date
   ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "3 months")
-  observed <- case$truth_latest / run$scale$scale
-  base <- case$base[, columns] / run$scale$scale
+  observed <- case$truth_latest / run$scaling$scale
+  base <- case$base[, columns] / run$scaling$scale
   forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
   plot_limits <- range(0, observed, base, unlist(forecasts), na.rm = TRUE)
   loss_limits <- range(0, unlist(lapply(run$weekly, function(x) x$loss[, columns])), na.rm = TRUE)
@@ -304,8 +304,8 @@ for (location in settings$location_ids) {
     "| horizon", season_horizon, "|", min(dates), "to", max(dates)),
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
-    " | Scores/plots: counts / historical ", run$scale$used, " (",
-    format(run$scale$scale, trim = TRUE), ") | Vertical line: largest count in the selected winter."),
+    " | Scores/plots: counts / historical ", run$scaling$used, " (",
+    format(run$scaling$scale, trim = TRUE), ") | Vertical line: largest count in the selected winter."),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
