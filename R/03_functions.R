@@ -281,6 +281,7 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   weights <- array(0, c(n, k, columns), dimnames = list(dimnames(forecasts)[[1]],
     dimnames(forecasts)[[2]], if (per_quantile) dimnames(forecasts)[[3]] else "all levels"))
   lambda_used <- matrix(NA_real_, n, columns)
+  log_mass <- function(x) apply(x, 2, function(v) max(v) + log(sum(exp(v - max(v)))))
   q <- base
   for (week in seq_len(n)) {
     admitted <- which(birth < week)
@@ -313,7 +314,6 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
       updated <- log_weights[eligible, , drop = FALSE] - sweep(loss, 2, learning_rate, `*`)
       if (length(sleeping)) {
         # Shift the eligible experts' log weights so that their total mass is unchanged.
-        log_mass <- function(x) apply(x, 2, function(v) max(v) + log(sum(exp(v - max(v)))))
         updated <- sweep(updated, 2, log_mass(log_weights[eligible, , drop = FALSE]) -
           log_mass(updated), `+`)
       }
@@ -345,7 +345,7 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
     if (length(active) && week > warmup_weeks) {
       stopifnot(all(is.finite(p)), max(abs(colSums(p) - 1)) < 1e-10)
       current <- matrix(forecasts[week, active, ], length(active), a)
-      # Weight first, then repair crossings. Preserve an all-base mixture exactly.
+      # Weight first, then repair crossings of per-level mixtures. Keep an all-base mixture exact.
       if (all(current == rep(base[week, ], each = length(active)))) {
         q[week, ] <- base[week, ]
       } else {
