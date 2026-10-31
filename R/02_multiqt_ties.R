@@ -35,12 +35,11 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 run_rate_grid <- function(case, keep_weekly = FALSE) {
   scaling <- choose_count_scale(case, settings$scale_method)
   s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, settings$transform)
-  # If fewer than 20 reports arrive, there are no post-initialization weeks to score.
+  # If fewer than 20 reports arrive, every multiplier keeps the base.
   eta <- rate_multipliers * s0$scale
   eta[rate_multipliers == 0] <- 0
-  # Evaluate only forecasts issued strictly after initialization, including m=0.
-  post_warmup <- seq_len(nrow(case$base)) > s0$warmup_weeks
-  scored <- post_warmup & is.finite(case$truth_latest)
+  # Score every issued week, including the S0 warmup, where every m issues the base.
+  scored <- is.finite(case$truth_latest)
   phase_rows <- lapply(setNames(phases, phases), function(phase) which(scored &
     phase_weeks(case, phase, weeks_before_peak, weeks_after_peak)))
   scores <- scores_by_level <- weekly <- list()
@@ -58,10 +57,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
       scores_by_level[[key]] <- data.frame(phase, multiplier = rate_multipliers[i],
         eta = eta[i], n_weeks = s$n_weeks, s$by_level)
     }
-    # Weekly diagnostics for the season plot omit warmup and the initialization week.
     if (keep_weekly && rate_multipliers[i] %in% display_multipliers) {
-      week_scores$covered[!post_warmup, ] <- NA
-      week_scores$loss[!post_warmup, ] <- NA_real_
       weekly[[as.character(rate_multipliers[i])]] <- list(q = q / scaling$scale,
         covered = week_scores$covered, loss = week_scores$loss)
     }
@@ -115,7 +111,7 @@ settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
   score_units, "per location")
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
-  overall = "Overall (full history after warmup)")
+  overall = "Overall (full history)")
 phase_colours <- c(before = "#D55E00", after = "#0072B2", overall = "gray25")
 phase_pch <- c(before = 17, after = 16, overall = 15)   # m = 0: open version of the symbol.
 phase_open_pch <- c(before = 2, after = 1, overall = 0)
@@ -309,7 +305,7 @@ for (location in settings$location_ids) {
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
-  mtext("Coverage residual = 1(latest reported count <= quantile) - alpha; warmup weeks are not scored.",
+  mtext("Coverage residual = 1(latest reported count <= quantile) - alpha.",
     side = 1, outer = TRUE, line = 2, cex = 0.75)
 }
 dev.off()
