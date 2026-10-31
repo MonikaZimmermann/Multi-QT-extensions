@@ -149,31 +149,40 @@ summarize_scores <- function(scores, alpha, weeks) {
 # counts; feedback_by_week[[w]]: the earlier rows whose feedback is released at
 # issue week w. eta: one rate, or one per week, in tracker units. The first
 # warmup_weeks forecasts keep the base and their reports are never replayed.
+# Optional leaky shift of all levels (leak = 0: standard MultiQT): each report adds
+# leak * mean(alpha - covered); the shift is multiplied by decay (one value, or one
+# per week) at every issue week and capped at +-leak_bound.
 # Returns the adjusted forecasts in counts.
 multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
-                    warmup_weeks = 0L, transform = "log1p") {
+                    warmup_weeks = 0L, transform = "log1p",
+                    leak = 0, decay = .5, leak_bound = .2) {
   n <- nrow(base)
   # Nothing to learn (eta = 0, or S0 never initialized): keep the exact base.
-  if (warmup_weeks >= n || isTRUE(all(eta == 0))) return(base)
+  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0)) return(base)
   if (length(eta) == 1L) eta <- rep(eta, n)
+  if (length(decay) == 1L) decay <- rep(decay, n)
   base_tracker <- to_tracker(base, transform)
   feedback_tracker <- to_tracker(feedback, transform)
   stopifnot(ncol(base) == length(alpha), length(feedback) == n,
     length(feedback_by_week) == n, length(eta) == n, all(is.finite(eta)), all(eta >= 0),
     all(is.finite(base_tracker)), all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
   offsets <- numeric(length(alpha))
+  shift <- 0
   q_tracker <- base_tracker
   for (week in seq_len(n)) {
     if (week <= warmup_weeks) next
+    shift <- shift * decay[week]
     for (past_week in feedback_by_week[[week]]) {
       # Compare with the HISTORICAL ISSUED forecast in tracker units.
       # At alpha=.9, eta=.01, a miss adds .009; coverage subtracts .001.
       covered <- feedback_tracker[past_week] <= q_tracker[past_week, ]
       offsets <- offsets + eta[week] * (alpha - covered)
+      shift <- shift + leak * mean(alpha - covered)
     }
+    shift <- min(leak_bound, max(-leak_bound, shift))
     # Project only the issued forecasts, NOT the offsets ("lazy" MultiQT).
     # isoreg restores quantile order: e.g., (12,10) becomes (11,11).
-    q_tracker[week, ] <- isoreg(base_tracker[week, ] + offsets)$yf
+    q_tracker[week, ] <- isoreg(base_tracker[week, ] + offsets + shift)$yf
   }
   # Do not clip negative predictions: that would change the issued coverage indicators.
   q <- from_tracker(q_tracker, transform)
@@ -184,10 +193,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
 }
 
 # 5. EXPERT CREATORS ------------------------------------------------------
-# Both creators return the same expert object:
+# All creators return the same expert object:
 #   forecasts  [week x expert x level] in counts / count_scale, NA before birth;
 #   birth_week the first issue week of each expert;
-#   experts    metadata: expert name, multiplier, eta and start date.
+#   experts    metadata: expert name, eta, start date (and multiplier).
 # scale is the error_scale() result; eta = multiplier * S0.
 
 # One MultiQT expert per rate multiplier. All experts issue from the first week,
@@ -232,6 +241,52 @@ make_restart_experts <- function(case, multipliers, scale, count_scale = 1, tran
   list(forecasts = forecasts, birth_week = birth_week,
     experts = data.frame(expert = names, multiplier, eta = multiplier * scale$scale,
       start_date = case$reference_date[birth_week]))
+}
+
+# Diverse experts: a small bank whose experts differ in where their correction
+# comes from. Every expert except the base runs a slow MultiQT (eta = slow, tracker
+# units) on its own starting forecast, so each stays calibrated in the long run.
+# All experts issue the base during the S0 warmup.
+#   base     the original forecast;
+#   slow     slow MultiQT on the base;
+#   leaky    slow MultiQT plus a leaky shift of all levels (see multiqt()), halved
+#            every week since the previous issue;
+#   damp=k   start from the base minus k times its implied growth: base median minus
+#            the latest released report, in tracker units, clipped to [-1, 1]
+#            (k = 1 centres on the latest report, k < 0 extrapolates further);
+#   width=w  start from the base quantiles moved w times as far from the base median.
+make_diverse_experts <- function(case, scale, count_scale = 1, transform = "log1p",
+                                 slow = .01, leak = .2, damping = c(-.5, .5, 1),
+                                 widths = c(.75, 1.5)) {
+  n <- nrow(case$base)
+  base_tracker <- to_tracker(case$base, transform)
+  mid <- base_tracker[, match(.5, case$alpha)]
+  # Latest row whose first report is released by each issue week (none: no growth).
+  latest <- cummax(vapply(case$feedback_by_week, function(rows) max(0L, rows), integer(1)))
+  implied <- mid - to_tracker(case$feedback_observed[ifelse(latest > 0, latest, NA)], transform)
+  implied <- pmin(1, pmax(-1, ifelse(is.finite(implied), implied, 0)))
+  # Starting forecasts in counts, floored at zero counts.
+  starts <- list(slow = case$base, leaky = case$base)
+  for (k in damping) starts[[paste0("damp=", k)]] <-
+    from_tracker(pmax(base_tracker - k * implied, 0), transform)
+  for (w in widths) starts[[paste0("width=", w)]] <-
+    from_tracker(pmax(mid + w * (base_tracker - mid), 0), transform)
+  decay <- .5^c(1, pmax(1, as.numeric(diff(case$reference_date)) / 7))
+  warmup <- seq_len(n) <= scale$warmup_weeks
+  names <- c("base", names(starts))
+  forecasts <- array(NA_real_, c(n, length(names), length(case$alpha)),
+    dimnames = list(as.character(case$reference_date), names, as.character(case$alpha)))
+  forecasts[, "base", ] <- case$base / count_scale
+  for (name in names(starts)) {
+    start <- starts[[name]]
+    start[warmup, ] <- case$base[warmup, ]
+    forecasts[, name, ] <- multiqt(start, case$feedback_observed, case$feedback_by_week,
+      case$alpha, slow, scale$warmup_weeks, transform,
+      leak = if (name == "leaky") leak else 0, decay = decay) / count_scale
+  }
+  list(forecasts = forecasts, birth_week = rep(1L, length(names)),
+    experts = data.frame(expert = names, eta = c(0, rep(slow, length(starts))),
+      start_date = case$reference_date[1]))
 }
 
 # Keep some experts of an expert object, e.g. the restart copies with one multiplier.

@@ -18,6 +18,11 @@ slope_rate_max <- .1                       # Tracker-unit cap; independent of th
 restart_multiplier <- .05
 restart_multipliers <- c(.01, .05, .2)     # Smaller grid at each new start.
 restart_lambda <- 2.72                     # Fixed meta-rate on scaled-count pinball loss.
+# Diverse experts: slow MultiQT on differently corrected starting forecasts.
+diverse_slow_rate <- .01                   # Tracker units, the same for every expert.
+diverse_leak <- .2                         # Leaky shift per report; halves every week, cap +-.2.
+diverse_damping <- c(-.5, .5, 1)           # Start from the base minus k * implied growth.
+diverse_widths <- c(.75, 1.5)              # Start from the base intervals scaled by w.
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")
@@ -65,7 +70,10 @@ run_methods <- function(case) {
   # 5. SEVERAL TRACKERS: WEIGHT THEIR FORECASTS ------------------------
   # Rate grid: one persistent expert per multiplier. Restarts: a fresh copy per
   # multiplier at every issue week after warmup; no permanent base expert.
+  # Diverse experts: the base plus slow MultiQT on differently corrected bases.
   rate_experts <- make_rate_experts(case, settings$expert_multipliers, s0, count_scale, transform)
+  diverse_experts <- make_diverse_experts(case, s0, count_scale, transform, diverse_slow_rate,
+    diverse_leak, diverse_damping, diverse_widths)
   restart_experts <- make_restart_experts(case, restart_multipliers, s0, count_scale, transform)
   fixed_restarts <- select_experts(restart_experts,
     restart_experts$experts$multiplier == restart_multiplier)
@@ -81,7 +89,10 @@ run_methods <- function(case) {
     shared_common = weigh(rate_experts, per_quantile = FALSE),
     restart_uniform = weigh(fixed_restarts, lambda = 0),
     restart_weighted = weigh(fixed_restarts, lambda = restart_lambda),
-    restart_grid = weigh(restart_experts, lambda = restart_lambda))
+    restart_grid = weigh(restart_experts, lambda = restart_lambda),
+    diverse_uniform = weigh(diverse_experts, lambda = 0),
+    diverse_shared = weigh(diverse_experts),
+    diverse_shared_common = weigh(diverse_experts, per_quantile = FALSE))
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
   # The first-start control has exactly the same birth rule as the restart copies.
   predictions$restart_persistent <- base
@@ -114,7 +125,8 @@ run_methods <- function(case) {
     location_name = case$location_name, horizon = case$horizon)
   list(case = case, scaling = scaling, s0 = s0, truth = truth, predictions = predictions,
     weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
-    rate_experts = rate_experts, restart_experts = restart_experts, weekly = weekly,
+    rate_experts = rate_experts, restart_experts = restart_experts,
+    diverse_experts = diverse_experts, weekly = weekly,
     scores = data.frame(id, do.call(rbind, scores), row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL))
 }
@@ -160,14 +172,18 @@ labels <- c(original = "Original",
   restart_grid = "Starts x rate grid: learned",
   restart_uniform_outer = "Starts equal + outer",
   restart_weighted_outer = "Starts learned + outer",
-  restart_grid_outer = "Starts x rate grid + outer")
+  restart_grid_outer = "Starts x rate grid + outer",
+  diverse_uniform = "Diverse experts: equal",
+  diverse_shared = paste0("Diverse experts: learned + sharing (H=", H, ")"),
+  diverse_shared_common = "Diverse experts: learned + sharing, common weights")
 colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
   oracle_target = "#CC79A7", uniform = "#E69F00", weighted = "#56B4E9",
   weighted_common = "#56B4E9", shared = "#882255", shared_common = "#882255",
   shared_outer = "#D55E00", shared_common_outer = "#D55E00",
   restart_persistent = "#0072B2", restart_uniform = "#E69F00", restart_weighted = "#009E73",
   restart_grid = "#882255", restart_uniform_outer = "#56B4E9",
-  restart_weighted_outer = "#D55E00", restart_grid_outer = "#CC79A7")
+  restart_weighted_outer = "#D55E00", restart_grid_outer = "#CC79A7",
+  diverse_uniform = "#E69F00", diverse_shared = "#009E73", diverse_shared_common = "#009E73")
 # Common weights across quantile levels: dashed lines and triangles.
 common <- setNames(grepl("_common", names(labels)), names(labels))
 line_types <- ifelse(common, 2, 1)
@@ -178,7 +194,9 @@ method_groups <- list(
     "shared", "shared_common", "shared_outer", "shared_common_outer"),
   "Weekly starts: immediate admission" = c("original", "restart_persistent", "restart_uniform",
     "restart_weighted", "restart_grid", "restart_uniform_outer", "restart_weighted_outer",
-    "restart_grid_outer"))
+    "restart_grid_outer"),
+  "Diverse experts" = c("original", "shared", "shared_common", "diverse_uniform",
+    "diverse_shared", "diverse_shared_common"))
 score_units <- if (settings$scale_method == "none") "counts" else
   paste0("counts / ", settings$scale_method)
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
@@ -275,16 +293,21 @@ for (run in runs) {
 }
 dev.off()
 
-# 10. ISSUED RATE-GRID WEIGHTS OVER TIME -----------------------------
+# 10. ISSUED WEIGHTS OVER TIME ---------------------------------------
 # These are the weights used to mix forecasts before crossing repair or an outer
 # correction. The outer methods keep their underlying ensemble's weights.
 # Rows 0.1-0.9: one weight vector per level; last row: common weights for all levels.
-weight_columns <- data.frame(method = c("uniform", "weighted", "shared"),
-  common_method = c("uniform", "weighted_common", "shared_common"),
-  title = c("Equal weights", "Learned, no sharing", "Learned + sharing"))
-rate_colours <- setNames(c("gray45", hcl.colors(length(settings$expert_multipliers) - 1L, "Viridis")),
-  as.character(settings$expert_multipliers))
-plot_weight_distribution <- function(run, weights, title, row_label, first_column, last_row) {
+# One page per location and expert bank; the base expert (m = 0) is gray.
+weight_pages <- list(
+  "Frozen rate-grid weights" = list(palette = "Viridis", columns = data.frame(
+    method = c("uniform", "weighted", "shared"),
+    common_method = c("uniform", "weighted_common", "shared_common"),
+    title = c("Equal weights", "Learned, no sharing", "Learned + sharing"))),
+  "Diverse expert weights" = list(palette = "Dark 3", columns = data.frame(
+    method = c("diverse_uniform", "diverse_shared"),
+    common_method = c("diverse_uniform", "diverse_shared_common"),
+    title = c("Equal weights", "Learned + sharing"))))
+plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row) {
   times <- as.numeric(run$case$target_date)
   par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, 1.5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1),
@@ -293,7 +316,7 @@ plot_weight_distribution <- function(run, weights, title, row_label, first_colum
   bottom <- numeric(length(times))
   for (j in seq_len(ncol(weights))) {
     top <- bottom + weights[, j]
-    rect(times - .45 * 7, bottom, times + .45 * 7, top, col = rate_colours[j], border = NA)
+    rect(times - .45 * 7, bottom, times + .45 * 7, top, col = fills[j], border = NA)
     bottom <- top
   }
   abline(h = .5, col = adjustcolor("white", .6), lty = 3)
@@ -304,25 +327,28 @@ plot_weight_distribution <- function(run, weights, title, row_label, first_colum
 }
 cairo_pdf(file.path(figure_dir, "multiqt_weight_timelines.pdf"), width = 18,
   height = 1.45 * (length(plot_levels) + 1) + 3.7, family = "DejaVu Sans")
-for (run in runs) {
-  stopifnot(identical(dimnames(run$weights$shared)[[2]], paste0("m=", names(rate_colours))))
+for (run in runs) for (page in names(weight_pages)) {
+  columns <- weight_pages[[page]]$columns
+  experts <- dimnames(run$weights[[columns$method[1]]])[[2]]
+  fills <- c("gray45", hcl.colors(length(experts) - 1L, weight_pages[[page]]$palette))
   n_rows <- length(plot_levels) + 1L
-  panel_ids <- matrix(seq_len(n_rows * nrow(weight_columns)), ncol = nrow(weight_columns), byrow = TRUE)
+  panel_ids <- matrix(seq_len(n_rows * nrow(columns)), ncol = nrow(columns), byrow = TRUE)
   layout(rbind(panel_ids, max(panel_ids) + 1L), heights = c(rep(1, n_rows), .8))
   par(oma = c(4.8, .8, 5.2, .8), mgp = c(2, .4, 0), cex = .9)
-  for (row in seq_len(n_rows)) for (j in seq_len(nrow(weight_columns))) {
+  for (row in seq_len(n_rows)) for (j in seq_len(nrow(columns))) {
     level_row <- row <= length(plot_levels)
-    weights <- if (level_row) run$weights[[weight_columns$method[j]]][, , match(plot_levels[row], run$case$alpha)] else
-      run$weights[[weight_columns$common_method[j]]][, , 1]
-    plot_weight_distribution(run, weights, if (row == 1L) weight_columns$title[j] else "",
+    weights <- if (level_row) run$weights[[columns$method[j]]][, , match(plot_levels[row], run$case$alpha)] else
+      run$weights[[columns$common_method[j]]][, , 1]
+    stopifnot(identical(colnames(weights), experts))
+    plot_weight_distribution(run, weights, fills, if (row == 1L) columns$title[j] else "",
       if (level_row) paste("alpha =", plot_levels[row]) else "Common\n(all levels)",
       first_column = j == 1L, last_row = row == n_rows)
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  legend("center", paste("m =", names(rate_colours)), fill = rate_colours,
-    border = NA, ncol = 6, bty = "n", cex = .95)
-  mtext("Frozen rate-grid weights", side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.3)
+  legend("center", experts, fill = fills, border = NA, ncol = ceiling(length(experts) / 2),
+    bty = "n", cex = .95)
+  mtext(page, side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.3)
   mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
   mtext("Target date | Weight at issuance for each target | Dotted line: winter peak",
     side = 1, outer = TRUE, line = .4, cex = .85)
