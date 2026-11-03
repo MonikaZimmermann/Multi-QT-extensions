@@ -1,10 +1,77 @@
-# Purpose: understand the two data files and how reported outcomes are revised.
+# Purpose: download and understand the two data files and how reported outcomes
+# are revised.
 # Run from the project root: Rscript R/01_data_overview.R
-# install.packages(c("nanoparquet", "pak"))
+# install.packages(c("nanoparquet", "pak", "epidatr", "epidatasets"))
 # pak::pkg_install("cmu-delphi/epiprocess@main")
 .libPaths(c("agent/tmp/multiqt-lib", .libPaths()))  # Same local package folder as script 02.
 library(epiprocess)
 library(dplyr)  # glimpse() used in this overview.
+
+# 0. DOWNLOAD THE DATA ONCE ----------------------------------------------------
+# Both tables are downloaded once and stored as Parquet in the project root; the
+# sections below only load the stored files. Delete either file to download both
+# again, so the observed counts stored with the forecasts match the reports.
+forecasts_path <- "cmu_timeseries_hub_forecasts.parquet"
+vintages_path <- "nhsn_vintages_epidata.parquet"
+if (!all(file.exists(c(forecasts_path, vintages_path)))) {
+  # Forecasts: every CMU-TimeSeries submission to the CDC forecast hubs. Keep the
+  # hospital admission quantiles; the hubs also hold ED-visit targets.
+  hubs <- c(covid = "CDCgov/covid19-forecast-hub", flu = "cdcepi/FluSight-forecast-hub")
+  downloaded_forecasts <- bind_rows(lapply(names(hubs), function(disease) {
+    files <- jsonlite::fromJSON(paste0("https://api.github.com/repos/", hubs[[disease]],
+                                       "/contents/model-output/CMU-TimeSeries"))
+    files <- files[grepl("\\.csv$", files$name), ]
+    message("Fetching ", nrow(files), " ", disease, " forecast files")
+    bind_rows(lapply(files$download_url, function(url) {
+      read.csv(url, colClasses = c(location = "character", output_type_id = "character")) %>%
+        filter(target == paste("wk inc", disease, "hosp"), output_type == "quantile")
+    })) %>%
+      transmute(disease, reference_date = as.Date(reference_date), target, horizon,
+                target_end_date = as.Date(target_end_date), location,
+                quantile_level = as.numeric(output_type_id), value)
+  }))
+
+  # Reports: every stored version of the weekly COVID and flu admissions for all
+  # states, territories and the US total from the Delphi Epidata API (source
+  # "nhsn") via epidatr. Needs DELPHI_EPIDATA_KEY for sensible rate limits.
+  signals <- c(covid = "confirmed_admissions_covid_ew", flu = "confirmed_admissions_flu_ew")
+  # One request per signal keeps each response small enough to retry cheaply.
+  downloaded_reports <- bind_rows(lapply(names(signals), function(disease) {
+    message("Fetching ", signals[[disease]])
+    epidatr::epidata_archive(
+      source = "nhsn",
+      signals = signals[[disease]],
+      geo_type = c("state", "nation"),
+      geo_values = "*"
+    ) %>% mutate(disease = disease)
+  }))
+  # reference_time is the Saturday ending the target week; report_time is the
+  # version. Locations get the forecast-table codes (FIPS codes and "US");
+  # territories without forecasts keep a missing location.
+  census <- epidatasets::state_census
+  downloaded_vintages <- downloaded_reports %>%
+    transmute(disease, geo_value,
+              location = if_else(geo_value == "us", "US",
+                                 census$fips[match(geo_value, census$abbr)]),
+              target_end_date = reference_time, version = as.Date(report_time), value) %>%
+    mutate(location = if_else(location %in% downloaded_forecasts$location,
+                              location, NA_character_)) %>%
+    arrange(disease, location, geo_value, target_end_date, version)
+
+  # The hubs supply no observed counts: truth_finalized is the latest stored
+  # report of each target week, and missing while the week is unreported.
+  latest_reports <- downloaded_vintages %>%
+    filter(!is.na(location)) %>%
+    group_by(disease, location, target_end_date) %>%
+    slice_max(version, n = 1) %>%
+    ungroup() %>%
+    select(disease, location, target_end_date, truth_finalized = value)
+  downloaded_forecasts %>%
+    left_join(latest_reports, by = c("disease", "location", "target_end_date")) %>%
+    arrange(disease, reference_date, horizon, location, quantile_level) %>%
+    nanoparquet::write_parquet(forecasts_path)
+  nanoparquet::write_parquet(downloaded_vintages, vintages_path)
+}
 
 # 1. FORECAST TABLE: WHAT WAS PREDICTED? ---------------------------------------
 # Each row contains ONE quantile of a submitted forecast. For a fixed disease,
@@ -49,11 +116,12 @@ library(dplyr)  # glimpse() used in this overview.
 #
 # value             The predicted hospitalization threshold at this quantile level.
 #
-# truth_finalized   The later observed count supplied alongside forecasts for
-#                   evaluation. It is the SAME outcome across the 23 quantile rows
-#                   for the same disease, location and target week. Note that this #                   seems to be the final reported vintage for covid but not for flu.
+# truth_finalized   The latest stored report of the target week (section 2),
+#                   added at download for evaluation. It is the SAME outcome
+#                   across the 23 quantile rows for the same disease, location
+#                   and target week, and missing while the week is unreported.
 #
-forecasts <- nanoparquet::read_parquet("cmu_timeseries_submitted_forecasts.parquet")
+forecasts <- nanoparquet::read_parquet(forecasts_path)
 glimpse(forecasts)
 forecast_unique <- lapply(forecasts, unique)
 for (column in names(forecast_unique)) {
@@ -101,11 +169,11 @@ for (column in names(forecast_unique)) {
 # count was still subject to revision. These dates describe the archive; without
 # a submission timestamp we cannot say which reports the model had actually seen.
 
-# The report archive
-# begins on Nov 19, 2024 with a bulk load of older target weeks; it does not
-# show when those older counts were originally published.
+# The report archive (downloaded in section 0) covers target weeks from Aug 2020
+# on. It begins on Nov 19, 2024 with a bulk load of older target weeks; it does
+# not show when those older counts were originally published.
 
-vintages <- nanoparquet::read_parquet("nhsn_vintages.parquet")
+vintages <- nanoparquet::read_parquet(vintages_path)
 glimpse(vintages)
 vintage_unique <- lapply(vintages, unique)
 for (column in names(vintage_unique)) {
