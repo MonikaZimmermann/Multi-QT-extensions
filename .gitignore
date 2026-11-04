@@ -12,7 +12,6 @@ slides/multivariate_calibration_files/
 *.snm
 *.toc
 *.vrb
-*.pdf
 *.png
 *.csv
 *.md
