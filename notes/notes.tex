@@ -1,0 +1,43 @@
+\documentclass[11pt,a4paper]{article}
+
+% Basic formatting and mathematics.
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{graphicx,booktabs,enumitem}
+\usepackage[colorlinks=true,allcolors=blue]{hyperref}
+
+% Shortcuts you can change or extend.
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\K}{\mathcal{K}}
+\newcommand{\ind}{\mathbf{1}}
+\DeclareMathOperator{\cov}{cov}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+
+\newtheorem{proposition}{Proposition}[section]
+\theoremstyle{definition}
+\newtheorem{definition}[proposition]{Definition}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\title{MultiQT notes}
+\author{} % Add your name here if you wish.
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Studentized score}
+Writing the score as a signed residual gives the usual additive MultiQT correction. Studentizing that residual lead to multiplicatively scaled offsets in a MulitQT update or offsets in a scaled coordinate system. With changing scale, the accumulated correction as well as the new offset are scaled. Thus, a positive offset that was built up in a underprediction/ upswing phase can easily be removed after the peak (so the idea). With quantile specific scales the ordering constraint lead to the feasible set being a diagonally transformed shifted isotonic cone. This is still an isotnic cone and a closed convex polyhedron with a unique Euclidean projection (weighted isotonic regression). The gradient steps now optimize weighted quantile loss.
+
+\section{question and ides}
+\begin{itemize}
+  \item What other scores would be reasonable to consider, i.e. what property of the base forecast do I need to recalibrate? Instead of asking for 1d PIT calibration, could I ask for 1d hdr-calibration? With studentized scores, or in general strictly increasing and invertible scores, the coverage indicator does not change. 
+\end{itemize}
+
+
+\end{document}
