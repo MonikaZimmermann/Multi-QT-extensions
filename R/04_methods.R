@@ -141,6 +141,18 @@ for (location in settings$location_ids) {
   message("Methods: ", disease_name, " | ", location, " | horizon ", horizon_id)
   runs[[location]] <- run_methods(case)
 }
+# A method whose issued forecasts equal an earlier method's at a location is that
+# method's duplicate there, e.g. the first restart copy equals Fixed MultiQT when
+# the warmup is replayed and restart_multiplier = reference_multiplier.
+for (location in names(runs)) {
+  p <- runs[[location]]$predictions
+  methods <- names(p)
+  runs[[location]]$duplicate_of <- unlist(lapply(seq_along(methods)[-1], function(i) {
+    twin <- Find(function(j) identical(unname(p[[methods[i]]]), unname(p[[methods[j]]])),
+      seq_len(i - 1L))
+    if (is.null(twin)) NULL else setNames(methods[twin], methods[i])
+  }))
+}
 saveRDS(runs, file.path(result_dir, "issued_forecasts.rds"))
 summary_scores <- do.call(rbind, lapply(runs, `[[`, "scores"))
 rownames(summary_scores) <- NULL
@@ -213,6 +225,11 @@ plot_title <- function(run = NULL) paste(disease_name, "| horizon", horizon_id, 
     paste(run$case$location_name, paste0("(", run$case$location, ")")), "| full history |",
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
   "| feedback delay", settings$feedback_delay, "week(s)")
+# Plots leave out a method whose identical twin is drawn in the same plot.
+shown_methods <- function(run, methods) {
+  twins <- run$duplicate_of[names(run$duplicate_of) %in% methods]
+  setdiff(methods, names(twins)[twins %in% methods])
+}
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 date_ticks <- function(dates) pretty(as.Date(range(dates), origin = "1970-01-01"), n = 4)
@@ -227,7 +244,7 @@ for (b in seq_along(plot_levels)) {
 }
 cairo_pdf(file.path(figure_dir, "multiqt_method_forecasts.pdf"), width = 18, height = 16, family = "DejaVu Sans")
 for (run in runs) for (group_name in names(method_groups)) {
-  method_names <- method_groups[[group_name]]
+  method_names <- shown_methods(run, method_groups[[group_name]])
   layout(rbind(blocks, 2L * length(plot_levels) + 1L), heights = c(rep(c(2, 1), 3), .45))
   par(oma = c(1.5, 0, 4, 0), mgp = c(2.4, .6, 0), cex = .85)
   dates <- run$case$target_date
@@ -293,9 +310,18 @@ tradeoff_shapes <- setNames(ifelse(outer_variant, ifelse(common[tradeoff_methods
 tradeoff_shapes["original"] <- 1
 tradeoff_sizes <- ifelse(tradeoff_methods == "original", 2.2, 1.6)
 names(tradeoff_sizes) <- tradeoff_methods
+# Duplicates (identical forecasts) are not drawn; those hidden at every location
+# also leave the legend, and a footnote names each pair.
+hidden_everywhere <- Reduce(intersect, lapply(runs, function(run)
+  setdiff(tradeoff_methods, shown_methods(run, tradeoff_methods))))
+hidden_pairs <- unique(unlist(lapply(runs, function(run) {
+  hidden <- setdiff(tradeoff_methods, shown_methods(run, tradeoff_methods))
+  if (length(hidden)) paste(labels[hidden], "=", labels[run$duplicate_of[hidden]])
+})))
 # Legend: one column per group, headed by the group name.
 legend_groups <- lapply(setNames(names(method_groups), names(method_groups)), function(group_name)
-  c(if (group_name == names(method_groups)[1]) "original", names(home_group)[home_group == group_name]))
+  setdiff(c(if (group_name == names(method_groups)[1]) "original",
+    names(home_group)[home_group == group_name]), hidden_everywhere))
 legend_rows <- 1L + max(lengths(legend_groups))
 legend_entries <- unlist(lapply(names(legend_groups), function(group_name) c(group_name,
   legend_groups[[group_name]], rep("", legend_rows - 1L - length(legend_groups[[group_name]])))))
@@ -307,9 +333,9 @@ cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 
   height = 3.3 * n_locations + 3, family = "DejaVu Sans")
 layout(rbind(matrix(seq_len(3 * n_locations), n_locations, 3, byrow = TRUE), 3 * n_locations + 1L),
   heights = c(rep(1, n_locations), .9))
-par(oma = c(3, 0, 3, 0), mgp = c(2.4, .7, 0))
+par(oma = c(4, 0, 3, 0), mgp = c(2.4, .7, 0))
 for (run in runs) {
-  scores <- run$scores[run$scores$method %in% tradeoff_methods, ]
+  scores <- run$scores[run$scores$method %in% shown_methods(run, tradeoff_methods), ]
   # Original last, so it stays visible on top of the other methods.
   scores <- scores[order(scores$method == "original"), ]
   xlim <- c(0, 1.1 * max(1e-8, scores$quantile_loss, na.rm = TRUE))
@@ -344,6 +370,8 @@ mtext("Calibration error (CE): mean absolute coverage residual after averaging w
 mtext(paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
   "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
   side = 1, outer = TRUE, line = 1.7, cex = .8)
+if (length(hidden_pairs)) mtext(paste("Not drawn (identical forecasts):",
+  paste(hidden_pairs, collapse = "; ")), side = 1, outer = TRUE, line = 2.9, cex = .8)
 dev.off()
 
 # 10. ISSUED WEIGHTS OVER TIME ---------------------------------------
