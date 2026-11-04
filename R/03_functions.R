@@ -7,27 +7,39 @@
 # 1. SHARED SETTINGS -----------------------------------------------------
 # Scripts 02 and 04 read these settings, so a change here applies to both.
 multiqt_settings <- function() list(
-  location_ids = c("US", "06", "48", "12", "36"),  # US, California, Texas, Florida, New York.
+  location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
   horizons = -1:3,
-  transform = "log1p",              # MultiQT tracks log1p(counts); "identity": raw counts.
+  transform = "identity",              # MultiQT tracks log1p(counts); "identity": raw counts.
   scale_method = "max",             # Scores/plots/weighting losses: "max", "median" or "none".
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
+  replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
+  feedback_delay = 2L,              # Weeks after the first report before MultiQT learns from a forecast.
+  score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   scale_floor = 1e-6,               # Guard on the error scale, not each rate.
   reference_multiplier = .05,       # Fixed MultiQT: eta = .05 * S0.
   H = 8L,                           # Lookback for learned lambda; sharing uses 1/(2H).
   lambda_start = 2.72,
-  # No forecasts were issued 2025-10-25 to 2025-11-15, so a longer pre-peak window
-  # misses weeks for locations with December/early-January peaks.
-  weeks_before_peak = 3L,           # before = weeks -3..0, including the peak week.
-  weeks_after_peak = 8L)            # after = weeks 1..8.
+  # Window lengths in weeks. No forecasts were issued 2025-10-25 to 2025-11-15, so
+  # COVID after-peak windows of September 2025 peaks miss some weeks.
+  weeks_before_peak = 8L,           # before = weeks -7..0: 8 weeks, including the peak week.
+  weeks_after_peak = 8L)            # after = weeks 1..8: 8 weeks.
 
 # 2. CASES, SCALES AND WINDOWS --------------------------------------------
 # Prepared cases are named disease_location_horizon, e.g. covid_06_0.
-get_case <- function(prepared, disease, location, horizon) {
+# feedback_delay selects the online feedback: each forecast is learned from the
+# report available feedback_delay weeks after its first report (0: first report).
+get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L) {
   case <- prepared$cases[[paste(disease, location, horizon, sep = "_")]]
   if (is.null(case)) stop("No prepared case ", disease, " ", location, " h", horizon,
     ". Rerun Rscript R/01_data_overview.R.")
+  feedback <- case$feedback_by_delay[[as.character(feedback_delay)]]
+  if (is.null(feedback)) stop("No feedback with a ", feedback_delay, "-week delay. Add it to ",
+    "feedback_delays in R/01_data_overview.R and rerun it.")
+  case$feedback_delay <- feedback_delay
+  case$feedback_observed <- feedback$observed
+  case$feedback_date <- feedback$date
+  case$feedback_by_week <- feedback$by_week
   case
 }
 
@@ -65,12 +77,15 @@ choose_count_scale <- function(case, method = "max") {
 # https://delphi-forecasting-reports.netlify.app/calibration_experiments/e01_eta_settings
 # The whole release batch of the freeze week is consumed as warmup (no replay), but
 # only its first `rounds` rows enter S0. With fewer releases every week is warmup.
-error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p") {
+# replay = TRUE keeps S0 but has no warmup weeks: MultiQT learns from the first
+# week on, so S0 uses reports released later (hindsight, acceptable here).
+error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
+                        replay = FALSE) {
   feedback_by_week <- case$feedback_by_week
   week <- match(TRUE, cumsum(lengths(feedback_by_week)) >= rounds)
   initialized <- !is.na(week)
-  warmup_weeks <- if (initialized) week else length(feedback_by_week)
-  released <- Reduce(c, feedback_by_week[seq_len(warmup_weeks)], init = integer())
+  freeze_week <- if (initialized) week else length(feedback_by_week)
+  released <- Reduce(c, feedback_by_week[seq_len(freeze_week)], init = integer())
   rows <- head(released, rounds)
   raw_scale <- scale <- NA_real_
   if (initialized) {
@@ -79,36 +94,38 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p") {
     raw_scale <- as.numeric(quantile(abs(residuals), .9, names = FALSE))
     scale <- max(floor, raw_scale)
   }
+  warmup_weeks <- if (replay && initialized) 0L else freeze_week
   list(initialized = initialized, warmup_weeks = warmup_weeks,
-    date = if (initialized) case$reference_date[warmup_weeks] else as.Date(NA),
-    rows = rows, consumed_rows = released, raw_scale = raw_scale, scale = scale,
-    rounds = rounds, floor = floor)
+    date = if (initialized) case$reference_date[freeze_week] else as.Date(NA),
+    rows = rows, consumed_rows = if (warmup_weeks > 0L) released else integer(),
+    raw_scale = raw_scale, scale = scale, rounds = rounds, floor = floor)
 }
 
 # Peak-relative windows, as a logical vector over the case's weeks. The peak is
-# the largest latest-reported count in the prepared winter (hindsight label only).
-# before = weeks -3..0 and after = weeks 1..8 inside the winter; overall = all weeks.
-phase_weeks <- function(case, phase, before = 3L, after = 8L) {
+# the largest latest-reported count in the disease's peak window (hindsight label only).
+# before and after are window lengths: before = weeks -(before - 1)..0, including the
+# peak week, and after = weeks 1..after, inside the peak window; overall = all weeks.
+phase_weeks <- function(case, phase, before = 8L, after = 8L) {
   week <- case$relative_week
   switch(phase,
-    before = case$within_winter & week >= -before & week <= 0,
-    after = case$within_winter & week >= 1 & week <= after,
+    before = case$within_peak_window & week > -before & week <= 0,
+    after = case$within_peak_window & week >= 1 & week <= after,
     overall = rep(TRUE, length(week)),
     stop("Unknown phase ", phase))
 }
 
-# A maximum on the winter edge may be the tail of an earlier wave, and missing
+# A maximum on the window edge may be the tail of an earlier wave, and missing
 # weeks shorten the before/after windows. Report both, but keep the location.
-check_peak_window <- function(case, before = 3L, after = 8L) {
+check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest) {
   label <- paste0(case$disease, " | ", case$location_name, " (", case$location,
     ") | horizon ", case$horizon)
   if (case$peak_boundary)
-    warning(label, ": winter maximum on the edge of the winter window (",
+    warning(label, ": maximum on the edge of the peak window (",
       case$peak_date, "); location kept.", call. = FALSE, immediate. = TRUE)
-  weeks <- seq.int(-before, after)
+  weeks <- seq.int(1L - before, after)
   i <- match(weeks, case$relative_week)
   ok <- !is.na(i)
-  ok[ok] <- case$within_winter[i[ok]] & is.finite(case$truth_latest[i[ok]])
+  ok[ok] <- case$within_peak_window[i[ok]] & is.finite(truth[i[ok]])
   if (!all(ok))
     warning(label, ": no scored target in peak-relative week(s) ",
       paste(weeks[!ok], collapse = ","), "; location kept.", call. = FALSE, immediate. = TRUE)
@@ -116,6 +133,18 @@ check_peak_window <- function(case, before = 3L, after = 8L) {
 }
 
 # 3. SCORING --------------------------------------------------------------
+# Truth for coverage, coverage residuals and quantile losses. "latest": the latest
+# stored report of each target week. "feedback": the report the online updates
+# learned from at the case's feedback delay (NA for weeks never released).
+score_truth <- function(case, target = "latest") switch(target,
+  latest = case$truth_latest,
+  feedback = case$feedback_observed,
+  stop("Unknown score target ", target))
+score_truth_label <- function(target, delay = 0L) switch(target,
+  latest = "latest reported counts",
+  feedback = paste0("reports ", delay, " week(s) after the first report"),
+  stop("Unknown score target ", target))
+
 # Coverage and pinball loss of quantile forecasts q [week x level] against one
 # truth per week. Pass counts with their count_scale to compare coverage on the
 # count scale (exact integer ties stay ties); the loss is in counts / count_scale.
@@ -145,9 +174,9 @@ summarize_scores <- function(scores, alpha, weeks) {
 }
 
 # 4. STANDARD MULTIQT -----------------------------------------------------
-# base: issued quantiles [week x level] in counts; feedback: first-use reported
-# counts; feedback_by_week[[w]]: the earlier rows whose feedback is released at
-# issue week w. eta: one rate, or one per week, in tracker units. The first
+# base: issued quantiles [week x level] in counts; feedback: reported counts at
+# the case's feedback delay; feedback_by_week[[w]]: the earlier rows whose feedback
+# is released at issue week w. eta: one rate, or one per week, in tracker units. The first
 # warmup_weeks forecasts keep the base and their reports are never replayed.
 # Optional leaky shift of all levels (leak = 0: standard MultiQT): each report adds
 # leak * mean(alpha - covered); the shift is multiplied by decay (one value, or one
@@ -262,8 +291,10 @@ make_diverse_experts <- function(case, scale, count_scale = 1, transform = "log1
   base_tracker <- to_tracker(case$base, transform)
   mid <- base_tracker[, match(.5, case$alpha)]
   # Latest row whose first report is released by each issue week (none: no growth).
-  latest <- cummax(vapply(case$feedback_by_week, function(rows) max(0L, rows), integer(1)))
-  implied <- mid - to_tracker(case$feedback_observed[ifelse(latest > 0, latest, NA)], transform)
+  # First reports at any feedback delay: the starting point uses what is known then.
+  first <- case$feedback_by_delay[["0"]]
+  latest <- cummax(vapply(first$by_week, function(rows) max(0L, rows), integer(1)))
+  implied <- mid - to_tracker(first$observed[ifelse(latest > 0, latest, NA)], transform)
   implied <- pmin(1, pmax(-1, ifelse(is.finite(implied), implied, 0)))
   # Starting forecasts in counts, floored at zero counts.
   starts <- list(slow = case$base, leaky = case$base)

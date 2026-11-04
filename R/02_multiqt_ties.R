@@ -6,7 +6,7 @@ source("R/03_functions.R")
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
 season_disease <- "covid"                 # Season forecast plot only: "covid" or "flu".
-season_horizon <- 0                       # Season forecast plot only: -1, 0, 1, 2 or 3.
+season_horizon <- 2                       # Season forecast plot only: -1, 0, 1, 2 or 3.
 diseases <- c("covid", "flu")
 expert_multipliers <- settings$expert_multipliers
 multiplier_min <- min(expert_multipliers[expert_multipliers > 0])
@@ -28,18 +28,23 @@ dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 # 2. RUN MULTIQT ON THE RATE GRID, ONE LOCATION AT A TIME ----------------
-# 01 supplies full issue histories and first-use feedback in raw counts.
-# MultiQT tracks log1p(counts) or counts and learns only from first-use feedback.
-# Scores use the latest vintage, in counts / count_scale (historical maximum by default).
+# 01 supplies full issue histories and the online feedback in raw counts.
+# MultiQT tracks log1p(counts) or counts and learns only from the feedback released
+# so far: the report available feedback_delay weeks after the first report.
+# Scores use score_truth() (latest vintage by default), in counts / count_scale
+# (historical maximum by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
 run_rate_grid <- function(case, keep_weekly = FALSE) {
   scaling <- choose_count_scale(case, settings$scale_method)
-  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, settings$transform)
+  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, settings$transform,
+    settings$replay_warmup)
   # If fewer than 20 reports arrive, every multiplier keeps the base.
   eta <- rate_multipliers * s0$scale
   eta[rate_multipliers == 0] <- 0
-  # Score every issued week, including the S0 warmup, where every m issues the base.
-  scored <- is.finite(case$truth_latest)
+  # Score every issued week, including the S0 warmup, where every m issues the base
+  # unless the warmup is replayed.
+  truth <- score_truth(case, settings$score_target)
+  scored <- is.finite(truth)
   phase_rows <- lapply(setNames(phases, phases), function(phase) which(scored &
     phase_weeks(case, phase, weeks_before_peak, weeks_after_peak)))
   scores <- scores_by_level <- weekly <- list()
@@ -48,7 +53,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
       eta[i], s0$warmup_weeks, settings$transform)
     # Coverage compares counts, so exact ties with integer reports stay ties.
     # The pinball loss is count loss divided by count_scale exactly once.
-    week_scores <- score_quantiles(q, case$truth_latest, case$alpha, scaling$scale)
+    week_scores <- score_quantiles(q, truth, case$alpha, scaling$scale)
     for (phase in phases) {
       s <- summarize_scores(week_scores, case$alpha, phase_rows[[phase]])
       key <- paste(i, phase)
@@ -73,7 +78,9 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
   list(case = case, scaling = scaling, s0 = s0, weekly = weekly,
     scores = data.frame(id, scores, row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL),
-    rate_grid = data.frame(id, transform = settings$transform, multiplier = rate_multipliers,
+    rate_grid = data.frame(id, transform = settings$transform,
+      feedback_delay = case$feedback_delay, score_target = settings$score_target,
+      multiplier = rate_multipliers,
       eta, ensemble_expert = rate_multipliers %in% expert_multipliers,
       initialized = s0$initialized, initialization_date = s0$date,
       warmup_weeks = s0$warmup_weeks, initialization_rounds = length(s0$rows),
@@ -84,8 +91,9 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
 }
 runs <- list()
 for (disease in diseases) for (location in settings$location_ids) for (horizon in settings$horizons) {
-  case <- get_case(prepared, disease, location, horizon)
-  check_peak_window(case, weeks_before_peak, weeks_after_peak)
+  case <- get_case(prepared, disease, location, horizon, settings$feedback_delay)
+  check_peak_window(case, weeks_before_peak, weeks_after_peak,
+    score_truth(case, settings$score_target))
   message("Rate grid: ", disease, " | ", location, " | horizon ", horizon)
   runs[[paste(disease, location, horizon, sep = "_")]] <- run_rate_grid(case,
     keep_weekly = disease == season_disease && horizon == season_horizon)
@@ -107,9 +115,11 @@ score_units <- if (settings$scale_method == "none") "counts" else
   paste0("counts / historical ", settings$scale_method)
 tracker_label <- if (settings$transform == "log1p") "Log1p-count tracking" else "Count tracking"
 settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
-  settings$warmup_rounds, "released rows | Scored against latest reported counts in",
+  settings$warmup_rounds, if (settings$replay_warmup) "released rows (warmup replayed)" else
+  "released rows", "| Feedback delay", settings$feedback_delay, "week(s) | Scored against",
+  score_truth_label(settings$score_target, settings$feedback_delay), "in",
   score_units, "per location")
-phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak, " to 0)"),
+phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
   overall = "Overall (full history)")
 phase_colours <- c(before = "#D55E00", after = "#0072B2", overall = "gray25")
@@ -129,11 +139,11 @@ multiplier_ticks <- multiplier_ticks[multiplier_ticks >= min(rate_multipliers[po
 multiplier_tick_labels <- trimws(formatC(multiplier_ticks, format = "fg", digits = 4))
 
 # 4. CALIBRATION ERROR VS MEAN QUANTILE LOSS ON THE MULTIPLIER GRID ----------
-# Each panel is one location and horizon. A thin line per phase follows the dense
-# grid; dots mark the script 04 expert multipliers and grow with m.
+# Each panel is one location and horizon. Dots mark the script 04 expert multipliers
+# and grow with m; the axes span only the plotted points.
 # This is exploratory, not held-out rate selection. Short-window calibration is descriptive.
 plot_tradeoff_panel <- function(rows, title) {
-  rows <- rows[order(rows$multiplier), ]
+  rows <- rows[rows$multiplier %in% c(0, dot_multipliers), ]
   finite <- is.finite(rows$quantile_loss) & is.finite(rows$coverage_error)
   if (!any(finite)) {
     plot.new()
@@ -149,8 +159,6 @@ plot_tradeoff_panel <- function(rows, title) {
     z <- rows[rows$phase == phase, ]
     support <- c(support, z$n_weeks[1])
     if (!any(is.finite(z$quantile_loss))) next
-    lines(z$quantile_loss[z$multiplier > 0], z$coverage_error[z$multiplier > 0],
-      col = adjustcolor(phase_colours[phase], .7), lwd = .8)
     dots <- z[z$multiplier %in% dot_multipliers, ]
     points(dots$quantile_loss, dots$coverage_error, pch = phase_pch[phase],
       col = phase_colours[phase], cex = dot_size(dots$multiplier))
@@ -161,8 +169,14 @@ plot_tradeoff_panel <- function(rows, title) {
   mtext(paste("Weeks before / after / overall:", paste(support, collapse = " / ")),
     side = 3, line = .1, cex = .6)
 }
+# One row per location and one column per horizon, legend below.
+n_rows <- length(settings$location_ids)
+n_columns <- length(settings$horizons)
+page_height <- 3.1 * n_rows + 1.5   # 17 inches for 5 locations.
 plot_tradeoff_page <- function(rows, disease, title) {
-  layout(rbind(matrix(seq_len(25), 5, 5, byrow = TRUE), 26), heights = c(rep(1, 5), .4))
+  panels <- n_rows * n_columns
+  layout(rbind(matrix(seq_len(panels), n_rows, n_columns, byrow = TRUE), panels + 1L),
+    heights = c(rep(1, n_rows), .4))
   par(oma = c(1, 0, 4, 0), mar = c(3.6, 3.6, 2.6, .8), mgp = c(2.2, .6, 0), cex = .8)
   for (location in settings$location_ids) for (horizon in settings$horizons)
     plot_tradeoff_panel(rows[rows$location == location & rows$horizon == horizon, ],
@@ -178,7 +192,7 @@ plot_tradeoff_page <- function(rows, disease, title) {
   mtext(paste(settings_label, "| Lower left is better."), side = 3, outer = TRUE, line = .7, cex = .85)
 }
 # Calibration error = mean over levels of |coverage - alpha|; loss = mean over levels.
-cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = 17, family = "DejaVu Sans")
+cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = page_height, family = "DejaVu Sans")
 for (disease in diseases)
   plot_tradeoff_page(scores[scores$disease == disease, ], disease,
     "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels")
@@ -186,7 +200,7 @@ dev.off()
 
 # The same comparison for each quantile level: one page per disease and level.
 # Averaging levels hides which quantiles struggle; CE here is |coverage - alpha| itself.
-cairo_pdf(file.path(figure_dir, "multiqt_by_level.pdf"), width = 17, height = 17, family = "DejaVu Sans")
+cairo_pdf(file.path(figure_dir, "multiqt_by_level.pdf"), width = 17, height = page_height, family = "DejaVu Sans")
 for (disease in diseases) for (level in sort(unique(scores_by_level$alpha))) {
   rows <- scores_by_level[scores_by_level$disease == disease & scores_by_level$alpha == level, ]
   plot_tradeoff_page(rows, disease, paste0("Fixed-rate MultiQT at quantile level alpha = ", level,
@@ -231,7 +245,7 @@ for (location in settings$location_ids) {
       if (!any(is.finite(z[[metric]][z$multiplier > 0])))
         text(sqrt(prod(range(rate_multipliers[positive]))), mean(limits), "No usable phase scores")
     }
-  mtext(paste(location_names[location], "| Fixed-rate MultiQT: loss and calibration before and after the winter peak"),
+  mtext(paste(location_names[location], "| Fixed-rate MultiQT: loss and calibration before and after the peak"),
     side = 3, outer = TRUE, line = 2, cex = 1.3)
   mtext(settings_label, side = 3, outer = TRUE, line = .5, cex = .9)
   legend(grconvertX(.5, "ndc", "user"), grconvertY(.035, "ndc", "user"), phase_labels,
@@ -241,7 +255,7 @@ for (location in settings$location_ids) {
 }
 dev.off()
 
-# 6. INSPECT THE TIME SERIES AROUND THE WINTER PEAK -------------------
+# 6. INSPECT THE TIME SERIES AROUND THE PEAK -------------------------
 plot_alpha <- c(0.15, 0.5, 0.75)
 alpha_colours <- c("#0072B2", "#009E73", "#D55E00")
 colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(display_multipliers[-1]))) /
@@ -258,6 +272,8 @@ plot_season_diagnostic <- function(dates, values, limits, y_label, title, ticks,
   if (show_time) axis.Date(1, at = ticks, format = "%b\n%Y", cex.axis = 0.8)
   abline(v = as.numeric(peak_date), col = "gray40", lty = 3)
 }
+truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
+truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 cairo_pdf(file.path(figure_dir, "multiqt_season_forecasts.pdf"), width = 18, height = 15, family = "DejaVu Sans")
 # Six multipliers per page; each column block holds forecast, coverage and loss panels.
 layout(rbind(cbind(1:3, 4:6, 7:9), cbind(10:12, 13:15, 16:18)), heights = c(2, 1, 1, 2, 1, 1))
@@ -267,7 +283,7 @@ for (location in settings$location_ids) {
   columns <- match(plot_alpha, case$alpha)
   dates <- case$target_date
   ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "3 months")
-  observed <- case$truth_latest / run$scaling$scale
+  observed <- score_truth(case, settings$score_target) / run$scaling$scale
   base <- case$base[, columns] / run$scaling$scale
   forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
   plot_limits <- range(0, observed, base, unlist(forecasts), na.rm = TRUE)
@@ -287,7 +303,7 @@ for (location in settings$location_ids) {
     matlines(dates, q, col = multiplier_colours[i], lty = 1, lwd = c(1, 2, 1))
     lines(dates, observed, type = "o", pch = 16, cex = 0.5)
     abline(v = as.numeric(case$peak_date), lty = 3, col = "gray40")
-    legend("topright", c("Latest reported counts", "Original", "Fixed MultiQT", "Winter peak (retrospective)"),
+    legend("topright", c(truth_legend, "Original", "Fixed MultiQT", "Peak (retrospective)"),
       col = c("black", "gray50", multiplier_colours[i], "gray40"),
       lty = c(1, 2, 1, 3), pch = c(16, NA, NA, NA), cex = 0.7, bty = "n")
     residual <- sweep(run$weekly[[key]]$covered[, columns], 2, plot_alpha, "-")
@@ -301,11 +317,11 @@ for (location in settings$location_ids) {
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
     " | Scores/plots: counts / historical ", run$scaling$used, " (",
-    format(run$scaling$scale, trim = TRUE), ") | Vertical line: largest count in the selected winter."),
+    format(run$scaling$scale, trim = TRUE), ") | Vertical line: largest count in the peak window."),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
-  mtext("Coverage residual = 1(latest reported count <= quantile) - alpha.",
+  mtext(paste0("Coverage residual = 1(", truth_label, " <= quantile) - alpha."),
     side = 1, outer = TRUE, line = 2, cex = 0.75)
 }
 dev.off()

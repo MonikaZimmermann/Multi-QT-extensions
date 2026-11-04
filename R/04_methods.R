@@ -6,7 +6,7 @@ source("R/03_functions.R")
 
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 disease_name <- "covid"                    # "covid" or "flu"
-horizon_id <- 0                            # -1, 0, 1, 2 or 3
+horizon_id <- 2                            # -1, 0, 1, 2 or 3
 settings <- multiqt_settings()             # Locations, tracker, experts, H and windows (R/03_functions.R).
 transform <- settings$transform
 H <- settings$H
@@ -34,14 +34,15 @@ write_result <- function(rows, filename)
   write.csv(rows, file.path(result_dir, filename), row.names = FALSE)
 
 # 2. RUN EACH LOCATION INDEPENDENTLY --------------------------------
-# Peaks are the largest latest-reported count in the prepared winter window.
+# Peaks are the largest latest-reported count in the disease's peak window.
 # Only the target oracle uses that hindsight date to choose forecasts.
 # Alignment changes evaluation coordinates, never when feedback becomes available.
 # Every location starts fresh: offsets, expert weights, lambda and loss history.
 run_methods <- function(case) {
   scaling <- choose_count_scale(case, settings$scale_method)
   count_scale <- scaling$scale
-  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, transform)
+  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, transform,
+    settings$replay_warmup)
   # Keep stored predictions and the scoring/weighting inputs in counts / count_scale.
   base <- case$base / count_scale
   feedback <- case$feedback_observed / count_scale
@@ -106,10 +107,12 @@ run_methods <- function(case) {
     predictions[[paste0(method, "_outer")]] <- adjust(predictions[[method]] * count_scale,
       outer_rate, s0$warmup_weeks)
 
-  # 6. SCORE AGAINST THE LATEST VINTAGE ---------------------------------
-  # The online updates above saw only first-use feedback.
+  # 6. SCORE AGAINST THE CHOSEN TARGET ----------------------------------
+  # The online updates above saw only the feedback released so far: the report
+  # available feedback_delay weeks after the first report. Scores use
+  # score_truth(): the latest vintage by default.
   # Counts are already scaled: do not divide quantile loss a second time.
-  truth <- case$truth_latest / count_scale
+  truth <- score_truth(case, settings$score_target) / count_scale
   windows <- lapply(setNames(phases, phases), function(phase) which(is.finite(truth) &
     phase_weeks(case, phase, settings$weeks_before_peak, settings$weeks_after_peak)))
   weekly <- lapply(predictions, score_quantiles, truth = truth, alpha = case$alpha)
@@ -132,8 +135,9 @@ run_methods <- function(case) {
 }
 runs <- list()
 for (location in settings$location_ids) {
-  case <- get_case(prepared, disease_name, location, horizon_id)
-  check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak)
+  case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay)
+  check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak,
+    score_truth(case, settings$score_target))
   message("Methods: ", disease_name, " | ", location, " | horizon ", horizon_id)
   runs[[location]] <- run_methods(case)
 }
@@ -202,15 +206,19 @@ score_units <- if (settings$scale_method == "none") "counts" else
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
 mean_loss_axis_label <- paste("Mean", tolower(loss_axis_label))
 window_titles <- c(overall = "Full observed history",
-  before = paste0("Up to winter peak (weeks -", settings$weeks_before_peak, " to 0)"),
-  after = paste0("After winter peak (weeks 1 to ", settings$weeks_after_peak, ")"))
-plot_title <- function(run) paste(disease_name, "| horizon", horizon_id, "|",
-  run$case$location_name, paste0("(", run$case$location, ")"), "| full history |",
-  if (transform == "log1p") "log1p(counts) updates" else "raw-count updates")
+  before = paste0("Up to peak (weeks -", settings$weeks_before_peak - 1, " to 0)"),
+  after = paste0("After peak (weeks 1 to ", settings$weeks_after_peak, ")"))
+plot_title <- function(run = NULL) paste(disease_name, "| horizon", horizon_id, "|",
+  if (is.null(run)) "all locations" else
+    paste(run$case$location_name, paste0("(", run$case$location, ")")), "| full history |",
+  if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
+  "| feedback delay", settings$feedback_delay, "week(s)")
+truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
+truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 date_ticks <- function(dates) pretty(as.Date(range(dates), origin = "1970-01-01"), n = 4)
 
 # 8. FORECASTS AND WEEKLY QUANTILE LOSS PER LEVEL ----------------------
-# Each level panel shows the latest reported counts and every method's issued
+# Each level panel shows the scoring target (score_truth()) and every method's issued
 # alpha-quantile; the panel below shows that level's weekly pinball loss.
 blocks <- matrix(0L, 6, 3)
 for (b in seq_along(plot_levels)) {
@@ -247,50 +255,95 @@ for (run in runs) for (group_name in names(method_groups)) {
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  legend("center", c("Latest reported counts", labels[method_names]),
+  legend("center", c(truth_legend, labels[method_names]),
     col = c("black", colours[method_names]), lty = c(NA, line_types[method_names]),
     pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n")
   mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 2, font = 2, cex = 1.15)
   mtext(paste("Issued alpha-quantile forecasts and their weekly pinball loss in", score_units,
-    "against the latest reported counts | Dotted line: winter peak"), side = 3, outer = TRUE, line = .5)
+    "against the", truth_label, "| Dotted line: peak"), side = 3, outer = TRUE, line = .5)
 }
 dev.off()
 
 # 9. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
+# One page: one row per location, one column per window, every method in each panel.
+# A method is coloured by the first group that lists it: one colour family per group,
+# one shade per method; common-weight and outer variants share their method's shade.
 # CE = mean over levels of |coverage - alpha| over the window's weeks. Axes are
-# shared by all pages of a location; up to winter peak includes the peak week.
-cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 14, height = 5.5, family = "DejaVu Sans")
+# shared by the three windows of a location; up to peak includes the peak week.
+group_palettes <- c("Single trackers" = "Blues 3", "Rate-grid experts" = "Oranges",
+  "Weekly starts: immediate admission" = "Greens 3", "Diverse experts" = "Purples 3")
+home_group <- character()
+for (group_name in names(method_groups)) for (method in method_groups[[group_name]])
+  if (!method %in% c("original", names(home_group))) home_group[method] <- group_name
+base_method <- sub("_outer$", "", sub("_common", "", names(home_group)))
+tradeoff_colours <- c(original = "black")
+for (group_name in names(group_palettes)) {
+  members <- home_group == group_name
+  bases <- unique(base_method[members])
+  # Sequential palettes run dark to light; drop the two lightest shades.
+  shades <- hcl.colors(length(bases) + 2L, group_palettes[[group_name]])[seq_along(bases)]
+  tradeoff_colours[names(home_group)[members]] <- shades[match(base_method[members], bases)]
+}
+# Original: open circle. Filled circle: weights per level; triangle: common weights;
+# square: + outer MultiQT; diamond: common weights + outer.
+tradeoff_methods <- names(tradeoff_colours)
+outer_variant <- grepl("_outer$", tradeoff_methods)
+tradeoff_shapes <- setNames(ifelse(outer_variant, ifelse(common[tradeoff_methods], 18, 15),
+  ifelse(common[tradeoff_methods], 17, 16)), tradeoff_methods)
+tradeoff_shapes["original"] <- 1
+tradeoff_sizes <- ifelse(tradeoff_methods == "original", 2.2, 1.6)
+names(tradeoff_sizes) <- tradeoff_methods
+# Legend: one column per group, headed by the group name.
+legend_groups <- lapply(setNames(names(method_groups), names(method_groups)), function(group_name)
+  c(if (group_name == names(method_groups)[1]) "original", names(home_group)[home_group == group_name]))
+legend_rows <- 1L + max(lengths(legend_groups))
+legend_entries <- unlist(lapply(names(legend_groups), function(group_name) c(group_name,
+  legend_groups[[group_name]], rep("", legend_rows - 1L - length(legend_groups[[group_name]])))))
+legend_method <- legend_entries %in% tradeoff_methods
+legend_header <- legend_entries %in% names(legend_groups)
+
+n_locations <- length(runs)
+cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 15,
+  height = 3.3 * n_locations + 3, family = "DejaVu Sans")
+layout(rbind(matrix(seq_len(3 * n_locations), n_locations, 3, byrow = TRUE), 3 * n_locations + 1L),
+  heights = c(rep(1, n_locations), .9))
+par(oma = c(3, 0, 3, 0), mgp = c(2.4, .7, 0))
 for (run in runs) {
-  xlim <- c(0, 1.1 * max(1e-8, run$scores$quantile_loss, na.rm = TRUE))
-  ylim <- c(0, 1.1 * max(.01, run$scores$coverage_error, na.rm = TRUE))
-  for (group_name in names(method_groups)) {
-    method_names <- method_groups[[group_name]]
-    layout(rbind(1:3, c(4, 4, 4)), heights = c(1, .22))
-    par(oma = c(3, 0, 3, 0), mgp = c(2.6, .7, 0))
-    for (phase in phases) {
-      rows <- run$scores[run$scores$phase == phase & run$scores$method %in% method_names, ]
-      par(mar = c(4, 4, 4, 1))
-      plot(NA, xlim = xlim, ylim = ylim, xlab = mean_loss_axis_label, ylab = "Calibration error",
-        main = "")
-      mtext(window_titles[phase], side = 3, line = 1.8, font = 2, cex = .95)
-      grid(col = "gray90")
-      mtext(paste(rows$n_weeks[1], "weeks"), side = 3, line = .25, cex = .8)
-      points(rows$quantile_loss, rows$coverage_error, col = colours[rows$method],
-        pch = point_shapes[rows$method], cex = 1.3)
-      if (!any(is.finite(rows$coverage_error)))
-        text(mean(xlim), mean(ylim), "No observations inside winter", cex = .8)
-    }
-    par(mar = c(0, 0, 0, 0))
-    plot.new()
-    legend("center", labels[method_names], col = colours[method_names],
-      pch = point_shapes[method_names], ncol = 3, bty = "n", cex = .8)
-    mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 1, font = 2, cex = .9)
-    mtext("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
-      side = 1, outer = TRUE, line = .5, cex = .8)
-    mtext("Triangles: one weight vector shared by all quantile levels. Up to winter peak includes the peak week.",
-      side = 1, outer = TRUE, line = 1.8, cex = .8)
+  scores <- run$scores[run$scores$method %in% tradeoff_methods, ]
+  # Original last, so it stays visible on top of the other methods.
+  scores <- scores[order(scores$method == "original"), ]
+  xlim <- c(0, 1.1 * max(1e-8, scores$quantile_loss, na.rm = TRUE))
+  ylim <- c(0, 1.1 * max(.01, scores$coverage_error, na.rm = TRUE))
+  for (phase in phases) {
+    rows <- scores[scores$phase == phase, ]
+    par(mar = c(3.8, 4, 3.4, 1))
+    plot(NA, xlim = xlim, ylim = ylim, xlab = mean_loss_axis_label, ylab = "Calibration error",
+      main = "")
+    mtext(paste(run$case$location_name, "|", window_titles[phase]), side = 3, line = 1.6,
+      font = 2, cex = .85)
+    mtext(paste(rows$n_weeks[1], "weeks"), side = 3, line = .3, cex = .75)
+    grid(col = "gray90")
+    points(rows$quantile_loss, rows$coverage_error, col = tradeoff_colours[rows$method],
+      pch = tradeoff_shapes[rows$method], cex = tradeoff_sizes[rows$method],
+      lwd = ifelse(rows$method == "original", 2, 1))
+    if (!any(is.finite(rows$coverage_error)))
+      text(mean(xlim), mean(ylim), "No observations inside the peak window", cex = .8)
   }
 }
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend("center", ifelse(legend_method, labels[legend_entries], legend_entries),
+  col = ifelse(legend_method, tradeoff_colours[legend_entries], NA),
+  pch = ifelse(legend_method, tradeoff_shapes[legend_entries], NA),
+  pt.cex = ifelse(legend_method, tradeoff_sizes[legend_entries], 1),
+  pt.lwd = ifelse(legend_entries == "original", 2, 1),
+  text.font = ifelse(legend_header, 2, 1), ncol = length(legend_groups), bty = "n", cex = 1.05)
+mtext(plot_title(), side = 3, outer = TRUE, line = 1, font = 2, cex = 1.05)
+mtext("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
+  side = 1, outer = TRUE, line = .5, cex = .8)
+mtext(paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
+  "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
+  side = 1, outer = TRUE, line = 1.7, cex = .8)
 dev.off()
 
 # 10. ISSUED WEIGHTS OVER TIME ---------------------------------------
@@ -350,7 +403,7 @@ for (run in runs) for (page in names(weight_pages)) {
     bty = "n", cex = .95)
   mtext(page, side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.3)
   mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
-  mtext("Target date | Weight at issuance for each target | Dotted line: winter peak",
+  mtext("Target date | Weight at issuance for each target | Dotted line: peak",
     side = 1, outer = TRUE, line = .4, cex = .85)
   mtext("Rows alpha = 0.1-0.9: one weight vector per quantile level. Last row: one weight vector for all levels, learned from the mean pinball loss.",
     side = 1, outer = TRUE, line = 1.6, cex = .8)
