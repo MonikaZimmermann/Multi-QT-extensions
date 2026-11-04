@@ -112,7 +112,7 @@ run_methods <- function(case) {
   # available feedback_delay weeks after the first report. Scores use
   # score_truth(): the latest vintage by default.
   # Counts are already scaled: do not divide quantile loss a second time.
-  truth <- score_truth(case, settings$score_target) / count_scale
+  truth <- score_truth(case, settings$score_target, settings$score_filled) / count_scale
   windows <- lapply(setNames(phases, phases), function(phase) which(is.finite(truth) &
     phase_weeks(case, phase, settings$weeks_before_peak, settings$weeks_after_peak)))
   weekly <- lapply(predictions, score_quantiles, truth = truth, alpha = case$alpha)
@@ -137,7 +137,7 @@ runs <- list()
 for (location in settings$location_ids) {
   case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay)
   check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak,
-    score_truth(case, settings$score_target))
+    score_truth(case, settings$score_target, settings$score_filled))
   message("Methods: ", disease_name, " | ", location, " | horizon ", horizon_id)
   runs[[location]] <- run_methods(case)
 }
@@ -398,7 +398,9 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   for (j in seq_len(ncol(weights))) {
     top <- bottom + weights[, j]
     # Full-week bars, widened by 2% so neighbours overlap and no seam shows between them.
-    rect(times - .52 * 7, bottom, times + .52 * 7, top, col = fills[j], border = NA)
+    # Filled rounds are drawn lighter.
+    rect(times - .52 * 7, bottom, times + .52 * 7, top,
+      col = ifelse(run$case$filled, adjustcolor(fills[j], .45), fills[j]), border = NA)
     bottom <- top
   }
   abline(h = .5, col = adjustcolor("white", .6), lty = 3)
@@ -436,5 +438,8 @@ for (run in runs) for (page in names(weight_pages)) {
     side = 1, outer = TRUE, line = .4, cex = .85)
   mtext("Rows alpha = 0.1-0.9: one weight vector per quantile level. Last row: one weight vector for all levels, learned from the mean pinball loss.",
     side = 1, outer = TRUE, line = 1.6, cex = .8)
+  if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a CMU forecast, filled with",
+    "the latest earlier CMU forecast of the same target week."), side = 1, outer = TRUE,
+    line = 2.8, cex = .8)
 }
 dev.off()

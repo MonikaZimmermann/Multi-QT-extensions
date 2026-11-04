@@ -238,18 +238,57 @@ print(available_then)
 # US remains a separate case and must not be counted as an additional state.
 # feedback_delays: the delays (weeks after the first report) prepared for the
 # online feedback; feedback_delay in R/03_functions.R chooses one of them.
-# Peak windows per disease: COVID's middle wave (summer 2025). Flu has no summer
+# Peak windows per disease: COVID's middle wave (summer 2025), ending after the
+# November trough so 8 weeks after a September peak stay inside. Flu has no summer
 # wave; its 2024/25 winter misses the fewest forecast rounds (one, 2025-01-25).
+# fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
+# see fill_missing_rounds() below.
 peak_settings <- list(start_date = as.Date("2024-11-23"),
                       peak_start = as.Date(c(covid = "2025-06-01", flu = "2024-11-23")),
-                      peak_end = as.Date(c(covid = "2025-10-31", flu = "2025-05-31")),
-                      horizons = -1:3, feedback_delays = 0:4)
+                      peak_end = as.Date(c(covid = "2025-11-30", flu = "2025-05-31")),
+                      horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
+
+# A missing horizon-h forecast of round r is filled with the latest earlier forecast
+# of the same target week: the horizon-(h + k) forecast issued k weeks earlier, with
+# the smallest k. It uses no information after r. Only gaps of at most max_gap
+# consecutive missing rounds are filled (not the flu off-season), and the longest
+# horizon has no earlier forecast to fill from. filled_from is the source round
+# (NA for issued forecasts).
+fill_missing_rounds <- function(forecasts, max_gap) {
+  forecasts$filled_from <- as.Date(NA)
+  if (max_gap < 1L) return(forecasts)
+  key <- paste(forecasts$disease, forecasts$location)
+  filled <- list()
+  for (k in unique(key)) {
+    f <- forecasts[key == k, , drop = FALSE]
+    for (h in sort(unique(f$horizon))) {
+      rounds <- sort(unique(f$reference_date[f$horizon == h]))
+      weeks <- seq(min(rounds), max(rounds), by = 7)
+      missing <- weeks[!weeks %in% rounds]
+      if (!length(missing)) next
+      gap <- cumsum(c(1L, diff(as.numeric(missing)) != 7))
+      missing <- missing[ave(seq_along(missing), gap, FUN = length) <= max_gap]
+      for (i in seq_along(missing)) for (later in seq_len(max(f$horizon) - h)) {
+        source <- f[f$reference_date == missing[i] - 7 * later & f$horizon == h + later, , drop = FALSE]
+        if (!nrow(source)) next
+        stopifnot(all(source$target_end_date == missing[i] + 7 * h))
+        source$filled_from <- source$reference_date
+        source$reference_date <- missing[i]
+        source$horizon <- h
+        filled[[length(filled) + 1L]] <- source
+        break
+      }
+    }
+  }
+  rbind(forecasts, do.call(rbind, filled))
+}
 
 prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
   forecast_columns <- c("disease", "location", "horizon", "reference_date",
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
     forecasts$reference_date >= settings$start_date, forecast_columns])
+  selected <- fill_missing_rounds(selected, settings$fill_gaps_up_to)
   reports <- as.data.frame(vintages[!is.na(vintages$location),
     c("disease", "location", "geo_value", "target_end_date", "version", "value")])
   group_key <- function(x) paste(x$disease, x$location, sep = "_")
@@ -360,6 +399,8 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
         geo_value = r$geo_value[1], location_name = location_name, horizon = as.integer(horizon),
         alpha = alpha, base = base, reference_date = reference_date, target_date = target_date,
         truth_finalized = z$truth_finalized,
+        # Filled rounds: the source round of the earlier forecast (see fill_missing_rounds()).
+        filled = !is.na(z$filled_from), filled_from = z$filled_from,
         # Latest stored report of each target week: scoring target only, never feedback.
         truth_latest = latest$value[match(target_date, latest$target_end_date)],
         # Online feedback per delay; get_case() in R/03_functions.R selects one.

@@ -16,6 +16,7 @@ multiqt_settings <- function() list(
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
   feedback_delay = 2L,              # Weeks after the first report before MultiQT learns from a forecast.
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
+  score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
   scale_floor = 1e-6,               # Guard on the error scale, not each rate.
   reference_multiplier = .05,       # Fixed MultiQT: eta = .05 * S0.
   H = 8L,                           # Lookback for learned lambda; sharing uses 1/(2H).
@@ -136,10 +137,15 @@ check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_
 # Truth for coverage, coverage residuals and quantile losses. "latest": the latest
 # stored report of each target week. "feedback": the report the online updates
 # learned from at the case's feedback delay (NA for weeks never released).
-score_truth <- function(case, target = "latest") switch(target,
-  latest = case$truth_latest,
-  feedback = case$feedback_observed,
-  stop("Unknown score target ", target))
+# filled = FALSE leaves filled rounds unscored; MultiQT still issues and learns there.
+score_truth <- function(case, target = "latest", filled = TRUE) {
+  truth <- switch(target,
+    latest = case$truth_latest,
+    feedback = case$feedback_observed,
+    stop("Unknown score target ", target))
+  if (!filled) truth[case$filled] <- NA
+  truth
+}
 score_truth_label <- function(target, delay = 0L) switch(target,
   latest = "latest reported counts",
   feedback = paste0("reports ", delay, " week(s) after the first report"),

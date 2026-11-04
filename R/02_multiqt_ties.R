@@ -43,7 +43,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
   eta[rate_multipliers == 0] <- 0
   # Score every issued week, including the S0 warmup, where every m issues the base
   # unless the warmup is replayed.
-  truth <- score_truth(case, settings$score_target)
+  truth <- score_truth(case, settings$score_target, settings$score_filled)
   scored <- is.finite(truth)
   phase_rows <- lapply(setNames(phases, phases), function(phase) which(scored &
     phase_weeks(case, phase, weeks_before_peak, weeks_after_peak)))
@@ -93,7 +93,7 @@ runs <- list()
 for (disease in diseases) for (location in settings$location_ids) for (horizon in settings$horizons) {
   case <- get_case(prepared, disease, location, horizon, settings$feedback_delay)
   check_peak_window(case, weeks_before_peak, weeks_after_peak,
-    score_truth(case, settings$score_target))
+    score_truth(case, settings$score_target, settings$score_filled))
   message("Rate grid: ", disease, " | ", location, " | horizon ", horizon)
   runs[[paste(disease, location, horizon, sep = "_")]] <- run_rate_grid(case,
     keep_weekly = disease == season_disease && horizon == season_horizon)
@@ -283,7 +283,7 @@ for (location in settings$location_ids) {
   columns <- match(plot_alpha, case$alpha)
   dates <- case$target_date
   ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "3 months")
-  observed <- score_truth(case, settings$score_target) / run$scaling$scale
+  observed <- score_truth(case, settings$score_target, settings$score_filled) / run$scaling$scale
   base <- case$base[, columns] / run$scaling$scale
   forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
   plot_limits <- range(0, observed, base, unlist(forecasts), na.rm = TRUE)
