@@ -15,6 +15,7 @@ slides/multivariate_calibration_files/
 # PDFs: only the workflow plots directly in output/pdf/ are tracked.
 *.pdf
 !/output/pdf/*.pdf
+!/notes/*.pdf
 *.png
 *.csv
 *.md
