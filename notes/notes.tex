@@ -6,7 +6,7 @@
 \usepackage{lmodern}
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
-\usepackage{graphicx,booktabs,enumitem}
+\usepackage{graphicx,booktabs,tabularx,enumitem}
 \usepackage[colorlinks=true,allcolors=blue]{hyperref}
 
 % Shortcuts you can change or extend.
@@ -14,7 +14,10 @@
 \newcommand{\A}{\mathcal{A}}
 \newcommand{\K}{\mathcal{K}}
 \newcommand{\ind}{\mathbf{1}}
+\newcommand{\std}{\mathrm{std}}
+\newcommand{\stu}{\mathrm{stu}}
 \DeclareMathOperator{\cov}{cov}
+\DeclareMathOperator{\diag}{diag}
 \DeclareMathOperator*{\argmin}{arg\,min}
 \DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
 
@@ -33,6 +36,280 @@
 
 \section{Studentized score}
 Writing the score as a signed residual gives the usual additive MultiQT correction. Studentizing that residual lead to multiplicatively scaled offsets in a MulitQT update or offsets in a scaled coordinate system. With changing scale, the accumulated correction as well as the new offset are scaled. Thus, a positive offset that was built up in a underprediction/ upswing phase can easily be removed after the peak (so the idea). With quantile specific scales the ordering constraint lead to the feasible set being a diagonally transformed shifted isotonic cone. This is still an isotnic cone and a closed convex polyhedron with a unique Euclidean projection (weighted isotonic regression). The gradient steps now optimize weighted quantile loss. The coverage criterion and calibration target are unchanged (strictly increasing invertible transformation). 
+
+\subsection{standard MulitQT - \cite{multiqt}}
+Let $\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$ and let
+$b_t=(b_t^\alpha)_{\alpha\in\A}$ be the base quantile forecasts available
+before observing $y_t$. Define
+\[
+ \K=\{q\in\R^m:q^{\alpha_1}\le\cdots\le q^{\alpha_m}\},
+ \qquad
+ \Pi_C(x)=\argmin_{z\in C}\norm{z-x}^2,
+\]
+where $C$ is a nonempty closed convex set. Assume $b_t\in\K$.
+The original MultiQT procedure is
+\begin{align}
+ \theta_t&=\Pi_{\K-b_t}(\tilde\theta_t),
+ &q_t^\std&=b_t+\theta_t,\label{eq:standard-projection}\\
+ \cov_t^{\std,\alpha}&=\ind\{y_t\le q_t^{\std,\alpha}\},
+ &\tilde\theta_{t+1}^\alpha
+ &=\tilde\theta_t^\alpha-\eta(\cov_t^{\std,\alpha}-\alpha).
+ \label{eq:standard-update}
+\end{align}
+Here $\tilde\theta_t$ is the hidden offset and $\theta_t$ is the played
+(projected) offset. Both have outcome units. 
+
+We can rewrite this update procedure in the original score-threshold update by \cite{pid} with the resiudal as score:
+
+A score function $S_t(y)$ maps a candidate outcome to a real number.
+Let $r_t=S_t(y_t)$ be the observed score and $c_t$ its issued threshold.
+The corresponding prediction set is
+\begin{equation}
+ \mathcal P_t=\{y:S_t(y)\le c_t\},
+ \qquad \mathrm{err}_t=\ind\{r_t>c_t\}.
+ \label{eq:score-set}
+\end{equation}.
+Then update according to
+\begin{align}
+ c_{t+1}
+ &=c_t+\eta(\mathrm{err}_t-\delta)\notag\\
+ &=c_t-\eta\bigl(\ind\{r_t\le c_t\}-\alpha\bigr).
+ \label{eq:pid-update}
+\end{align}
+The second line follows from
+$\mathrm{err}_t=1-\ind\{r_t\le c_t\}$ and setting $\delta=1-\alpha$. The threshold $c_t$ is measured in score units and determines a prediction set through score inversion.
+For the signed affine scores below, that set's endpoint is the outcome
+quantile forecast.
+
+With quantile loss and holding the observed score fixed: 
+
+\begin{equation}
+ \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
+ \label{eq:pinball}
+\end{equation}
+
+\begin{equation}
+ \partial_z\rho_\alpha(z,r)=
+ \begin{cases}
+ \{-\alpha\},&z<r,\\
+ [-\alpha,1-\alpha],&z=r,\\
+ \{1-\alpha\},&z>r.
+ \end{cases}
+ \label{eq:subgradient}
+\end{equation}
+Selecting $1-\alpha$ at equality gives
+\begin{equation}
+ g_\alpha(z;r)=\ind\{r\le z\}-\alpha
+ \ \in\ \partial_z\rho_\alpha(z,r).
+ \label{eq:score-gradient}
+\end{equation}
+Thus $c_{t+1}=c_t-\eta g_\alpha(c_t;r_t)$ is
+\eqref{eq:pid-update}. The score's distance from the threshold affects the
+loss; the side of the threshold determines the update direction and size.
+
+For each level define the score and its observed value by
+\begin{equation}
+ S_t^{\std,\alpha}(y)=y-b_t^\alpha,
+ \qquad r_t^{\std,\alpha}=y_t-b_t^\alpha.
+ \label{eq:standard-score}
+\end{equation}
+Using $\theta_t^\alpha$ as the score threshold gives
+\begin{equation}
+ \{y:S_t^{\std,\alpha}(y)\le\theta_t^\alpha\}
+ =(-\infty,b_t^\alpha+\theta_t^\alpha]
+ =(-\infty,q_t^{\std,\alpha}].
+ \label{eq:residual-inversion}
+\end{equation}
+Consequently,
+\begin{equation}
+ \cov_t^{\std,\alpha}
+ =\ind\{y_t\le b_t^\alpha+\theta_t^\alpha\}
+ =\ind\{r_t^{\std,\alpha}\le\theta_t^\alpha\}.
+ \label{eq:standard-coverage}
+\end{equation}
+and substitution into \eqref{eq:standard-update} gives
+\begin{equation}
+ \boxed{
+ \tilde\theta_{t+1}^\alpha
+ =\tilde\theta_t^\alpha
+ -\eta\bigl(\ind\{r_t^{\std,\alpha}\le\theta_t^\alpha\}-\alpha\bigr).
+ }
+ \label{eq:residual-update}
+\end{equation}
+The original MultiQT loss has the exact residual-coordinate representation
+\begin{align}
+ \ell_t^\std(\theta)
+ &=\sum_{\alpha\in\A}\rho_\alpha(b_t^\alpha+\theta^\alpha,y_t)\notag\\
+ &=\sum_{\alpha\in\A}\rho_\alpha(\theta^\alpha,y_t-b_t^\alpha)
+ =\sum_{\alpha\in\A}\rho_\alpha(\theta^\alpha,r_t^{\std,\alpha}).
+ \label{eq:standard-loss}
+\end{align}
+
+The threshold $c_t$ of the scalar score tracker corresponds
+to the offset $\theta_t^\alpha$ when the score is $y-b_t^\alpha$.
+For a single level the constraint is all of $\R$, so the hidden and played
+states coincide and \eqref{eq:residual-update} is exactly scalar quantile
+tracking. For multiple levels, MultiQT uses a joint projection: evaluate
+$g_\alpha$ at the played $\theta_t^\alpha$, but apply the increment to the
+hidden $\tilde\theta_t^\alpha$. 
+
+Now replace the residual as score by the studentized residual:
+
+Choose finite scales $\sigma_t^\alpha>0$ from information available at
+issuance. They are fixed when the threshold is optimized. Define
+\begin{equation}
+ S_t^{\stu,\alpha}(y)=\frac{y-b_t^\alpha}{\sigma_t^\alpha},
+ \qquad r_t^{\stu,\alpha}=\frac{y_t-b_t^\alpha}{\sigma_t^\alpha}.
+ \label{eq:student-score}
+\end{equation}
+Use $\tilde u_t$ and $u_t$ for hidden and played thresholds in studentized
+units. Inverting the score gives
+\begin{align}
+ S_t^{\stu,\alpha}(y)\le u_t^\alpha
+ &\quad\Longleftrightarrow\quad
+ y\le b_t^\alpha+\sigma_t^\alpha u_t^\alpha,\notag\\
+ q_t^{\stu,\alpha}&=b_t^\alpha+\sigma_t^\alpha u_t^\alpha,
+ \qquad
+ \cov_t^{\stu,\alpha}=\ind\{r_t^{\stu,\alpha}\le u_t^\alpha\}.
+ \label{eq:student-inversion}
+\end{align}
+
+
+Standard MultiQT tracks the outcome-unit residual threshold
+$\theta_t^\alpha$ and issues $b_t^\alpha+\theta_t^\alpha$.
+Studentization tracks $u_t^\alpha$ and issues
+$b_t^\alpha+\sigma_t^\alpha u_t^\alpha$.
+The factor $\sigma_t^\alpha$ enters through the inverse score map.
+
+
+Apply the same quantile-loss construction to the studentized scores:
+\begin{align}
+ \ell_t^\stu(u)
+ &=\sum_{\alpha\in\A}\rho_\alpha(u^\alpha,r_t^{\stu,\alpha})\notag\\
+ &=\sum_{\alpha\in\A}\frac1{\sigma_t^\alpha}
+ \rho_\alpha(b_t^\alpha+\sigma_t^\alpha u^\alpha,y_t).
+ \label{eq:student-loss}
+\end{align}
+Using \eqref{eq:score-gradient}, its selected subgradient is
+\begin{equation}
+ g_t^{\stu,\alpha}(u_t)
+ =\ind\{r_t^{\stu,\alpha}\le u_t^\alpha\}-\alpha
+ =\cov_t^{\stu,\alpha}-\alpha.
+ \label{eq:student-gradient}
+\end{equation}
+The chain rule gives the same result. Away from ties, for one level,
+\begin{align}
+ \frac{\partial}{\partial u^\alpha}
+ \left[\frac{\rho_\alpha(b_t^\alpha+\sigma_t^\alpha u^\alpha,y_t)}
+ {\sigma_t^\alpha}\right]
+ &=\frac1{\sigma_t^\alpha}
+ \bigl(\ind\{y_t\le b_t^\alpha+\sigma_t^\alpha u^\alpha\}-\alpha\bigr)
+ \sigma_t^\alpha\notag\\
+ &=\ind\{r_t^{\stu,\alpha}\le u^\alpha\}-\alpha.
+ \label{eq:scale-cancellation}
+\end{align}
+At a tie use the selected subgradient in \eqref{eq:score-gradient}.
+The inverse scale in the loss cancels the scale in the inverse score map.
+
+Retaining MultiQT's lazy update therefore gives
+\begin{equation}
+ \boxed{
+ \tilde u_{t+1}^\alpha
+ =\tilde u_t^\alpha-\eta g_t^{\stu,\alpha}(u_t)
+ =\tilde u_t^\alpha-\eta\left(
+ \ind\left\{\frac{y_t-b_t^\alpha}{\sigma_t^\alpha}\le u_t^\alpha\right\}
+ -\alpha\right).
+ }
+ \label{eq:student-update}
+\end{equation}
+Initialize $\tilde u_1=0$. The score is compared with the \emph{played}
+threshold; the increment is applied to the \emph{hidden} threshold.
+The next section specifies the projection that produces $u_t$.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+ & Standard MultiQT & Studentized extension\\
+\midrule
+Observed score & $r_t^{\std,\alpha}=y_t-b_t^\alpha$
+ & $r_t^{\stu,\alpha}=(y_t-b_t^\alpha)/\sigma_t^\alpha$\\
+Gradient & $\ind\{r_t^{\std,\alpha}\le\theta_t^\alpha\}-\alpha$
+ & $\ind\{r_t^{\stu,\alpha}\le u_t^\alpha\}-\alpha$\\
+Update origin & $\tilde\theta_t^\alpha$ & $\tilde u_t^\alpha$\\
+Issued forecast & $b_t^\alpha+\theta_t^\alpha$
+ & $b_t^\alpha+\sigma_t^\alpha u_t^\alpha$\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The gradient has the same form because both losses apply
+quantile loss to a score threshold. The observed scores, state units, and
+issued forecasts change. An unnormalized outcome-unit loss would instead
+have gradient $\sigma_t^\alpha(\cov_t^{\stu,\alpha}-\alpha)$ with respect
+to $u^\alpha$, and would define a different update.
+
+Now derive the monotone constraints or feasible space for projection:
+
+The constraint always concerns the outcome forecasts:
+$q_t^{\alpha_1}\le\cdots\le q_t^{\alpha_m}$.
+For the ordinary residual score, this requires
+\begin{align}
+ b_t+\theta\in\K
+ &\quad\Longleftrightarrow\quad \theta\in C_t^\std:=\K-b_t,
+ \label{eq:standard-constraint}\\
+ \theta^{\alpha_i}-\theta^{\alpha_{i+1}}
+ &\le b_t^{\alpha_{i+1}}-b_t^{\alpha_i},\qquad i=1,\ldots,m-1.
+ \label{eq:standard-adjacent}
+\end{align}
+For studentization, set
+\[
+ A_t=\diag(\sigma_t^{\alpha_1},\ldots,\sigma_t^{\alpha_m}),
+ \qquad q_t^\stu=b_t+A_tu_t.
+\]
+Then
+\begin{equation}
+ \boxed{
+ C_t^\stu=\{u\in\R^m:b_t+A_tu\in\K\}
+ =A_t^{-1}(\K-b_t).
+ }
+ \label{eq:student-constraint}
+\end{equation}
+
+This is a closed convex set given by linear inequalities. It contains zero
+when $b_t\in\K$. In general $A_t^{-1}\K\ne\K$, so it cannot be simplified
+to $\K-A_t^{-1}b_t$ for unequal scales. Compared to original MultiQT with residual constraint $\theta+b_t\in\K$, we now have $A_tu+b_t\in\K$. But Euclidean projection is feasible.
+
+\begin{equation}
+ u_t=\Pi_{C_t^\stu}(\tilde u_t),
+ \qquad q_t^\stu=b_t+A_tu_t.
+ \label{eq:student-projection}
+\end{equation}
+Substituting $u=A_t^{-1}(q-b_t)$ into the projection objective yields
+\begin{align}
+ q_t^\stu
+ &=\argmin_{q\in\K}\norm{A_t^{-1}(q-b_t)-\tilde u_t}^2\notag\\
+ &=\argmin_{q\in\K}\sum_{\alpha\in\A}
+ \frac{(q^\alpha-b_t^\alpha-\sigma_t^\alpha\tilde u_t^\alpha)^2}
+ {(\sigma_t^\alpha)^2}.
+ \label{eq:weighted-projection}
+\end{align}
+Define $\Pi_\K^W(v)=\argmin_{q\in\K}(q-v)^\top W(q-v)$ for a
+positive-definite matrix $W$. The exact identity is
+\begin{equation}
+ \boxed{
+ b_t+A_t\Pi_{A_t^{-1}(\K-b_t)}(\tilde u_t)
+ =\Pi_\K^{A_t^{-2}}(b_t+A_t\tilde u_t).
+ }
+ \label{eq:projection-identity}
+\end{equation}
+Thus the implementation is weighted isotonic regression of
+$v_t^\alpha=b_t^\alpha+\sigma_t^\alpha\tilde u_t^\alpha$ with weights
+$w_t^\alpha=1/(\sigma_t^\alpha)^2$.
+
+
+
+
 
 \section{question and ides}
 \begin{itemize}
