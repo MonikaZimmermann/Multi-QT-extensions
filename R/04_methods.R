@@ -397,7 +397,8 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   bottom <- numeric(length(times))
   for (j in seq_len(ncol(weights))) {
     top <- bottom + weights[, j]
-    rect(times - .45 * 7, bottom, times + .45 * 7, top, col = fills[j], border = NA)
+    # Full-week bars, widened by 2% so neighbours overlap and no seam shows between them.
+    rect(times - .52 * 7, bottom, times + .52 * 7, top, col = fills[j], border = NA)
     bottom <- top
   }
   abline(h = .5, col = adjustcolor("white", .6), lty = 3)
