@@ -12,6 +12,9 @@ slides/multivariate_calibration_files/
 *.snm
 *.toc
 *.vrb
+# PDFs: only the workflow plots directly in output/pdf/ are tracked.
+*.pdf
+!/output/pdf/*.pdf
 *.png
 *.csv
 *.md
@@ -19,7 +22,3 @@ slides/multivariate_calibration_files/
 
 # Local rendering checks
 tmp/
-
-# Outputs of the removed averaging over locations (combined)
-/output/pdf/combined/
-/output/results/combined/
