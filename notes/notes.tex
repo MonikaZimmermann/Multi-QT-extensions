@@ -307,6 +307,29 @@ Thus the implementation is weighted isotonic regression of
 $v_t^\alpha=b_t^\alpha+\sigma_t^\alpha\tilde u_t^\alpha$ with weights
 $w_t^\alpha=1/(\sigma_t^\alpha)^2$.
 
+The ordinary residual case has forecast-space metric $I$;
+the studentized case has metric $A_t^{-2}$. These weights follow from the
+chosen Euclidean geometry of the tracked score coordinates.
+
+For $S_t^\alpha(y)=(y-b_t^\alpha)/\sigma_t$, we have $A_t=\sigma_t I$.
+Positive scalar multiplication preserves $\K$:
+\begin{equation}
+ C_t^\stu=\K-b_t/\sigma_t,
+ \qquad q_t^\stu=\Pi_\K(b_t+\sigma_t\tilde u_t).
+ \label{eq:common-scale}
+\end{equation}
+All projection weights are equal and cancel. Equivalently, run standard
+MultiQT on base $b_t/\sigma_t$ and outcome $y_t/\sigma_t$, then multiply
+the issued forecast by $\sigma_t$.
+
+If $\sigma_t=\sigma$ is constant, standard MultiQT on the original inputs
+is also equivalent after converting the state and learning rate:
+\begin{equation}
+ \tilde\theta_t=\sigma\tilde u_t,
+ \qquad\eta_\std=\sigma\eta_\stu.
+ \label{eq:constant-common-scale}
+\end{equation}
+
 
 
 
