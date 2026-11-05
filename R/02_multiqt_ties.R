@@ -32,7 +32,7 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # MultiQT tracks log1p(counts) or counts and learns only from the feedback released
 # so far: the report available feedback_delay weeks after the first report.
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
-# (historical maximum by default).
+# (per 100k residents by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
 # multipliers: the grid to run (default: the dense plot grid; it must contain 0).
 run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipliers) {
@@ -127,8 +127,7 @@ print(scores[scores$disease == season_disease & scores$horizon == season_horizon
   c("location", "multiplier", "n_weeks", "quantile_loss", "coverage_error")], row.names = FALSE)
 
 # 3. PLOT SETTINGS ---------------------------------------------------
-score_units <- if (settings$scale_method == "none") "counts" else
-  paste0("counts / historical ", settings$scale_method)
+score_units <- count_scale_label(settings$scale_method)
 tracker_label <- if (settings$transform == "log1p") "Log1p-count tracking" else "Count tracking"
 settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
   settings$warmup_rounds, if (settings$replay_warmup) "released rows (warmup replayed)" else

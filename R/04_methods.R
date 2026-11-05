@@ -17,7 +17,7 @@ slope_rate_max <- .1                       # Tracker-unit cap; independent of th
 # Weekly restart comparison: each copy votes from birth, initially forecasting the base.
 restart_multiplier <- .05
 restart_multipliers <- c(.01, .05, .2)     # Smaller grid at each new start.
-restart_lambda <- 2.72                     # Fixed meta-rate on scaled-count pinball loss.
+restart_lambda <- 2.72                     # Fixed meta-rate on pinball losses relative to the base's.
 # Diverse experts: slow MultiQT on differently corrected starting forecasts.
 diverse_slow_rate <- .01                   # Tracker units, the same for every expert.
 diverse_leak <- .2                         # Leaky shift per report; halves every week, cap +-.2.
@@ -125,10 +125,13 @@ run_methods <- function(case) {
   restart_experts <- make_restart_experts(case, restart_multipliers, s0, count_scale, transform)
   fixed_restarts <- select_experts(restart_experts,
     restart_experts$experts$multiplier == restart_multiplier)
-  # Each weighting learns from released count-scale pinball losses of issued forecasts.
+  # Each weighting learns from released pinball losses of issued forecasts, divided by
+  # the base's mean loss over the S0 rows, so the count scale does not change the weights.
   # Their deterministic average still uses LEARNED weights; equal averaging is a control.
+  loss_scale <- weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
   weigh <- function(experts, ...) exp_weights(experts, base, feedback, case$feedback_by_week,
-    case$alpha, H = H, lambda_start = settings$lambda_start, warmup_weeks = s0$warmup_weeks, ...)
+    case$alpha, H = H, lambda_start = settings$lambda_start, warmup_weeks = s0$warmup_weeks,
+    loss_scale = loss_scale, ...)
   mixtures <- list(
     uniform = weigh(rate_experts, lambda = 0),
     weighted = weigh(rate_experts, sharing = FALSE),
@@ -296,8 +299,7 @@ method_groups <- list(
     "median_constant"),
   "Studentized full base" = c("original", "fixed", "studentized_full", "studentized_levels",
     "studentized_level_rms"))
-score_units <- if (settings$scale_method == "none") "counts" else
-  paste0("counts / ", settings$scale_method)
+score_units <- count_scale_label(settings$scale_method)
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
 mean_loss_axis_label <- paste("Mean", tolower(loss_axis_label))
 window_titles <- c(overall = "Full observed history",

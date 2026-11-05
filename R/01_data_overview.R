@@ -232,8 +232,8 @@ print(available_then)
 #   locations : one selected maximum per disease/location (including US);
 #   cases     : named disease_location_horizon lists, e.g. covid_18_0.
 # Each case contains its raw forecast matrix, quantiles, online feedback per delay,
-# latest-vintage truth for scoring, dates, peak-relative week labels, and the
-# historical counts needed for scaling.
+# latest-vintage truth for scoring, dates, peak-relative week labels, the
+# population (counts per 100k residents) and the historical counts for other scalings.
 # Scripts 02/03 can choose scaling later without reopening the raw data files.
 # US remains a separate case and must not be counted as an additional state.
 # feedback_delays: the delays (weeks after the first report) prepared for the
@@ -319,6 +319,10 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
     if (r$location[1] == "72") location_name <- "Puerto Rico"
     if (r$location[1] == "US") location_name <- "United States"
     stopifnot(!is.na(location_name))
+    # 2019 census population (FIPS "00" is the US), for counts per 100k residents.
+    census <- epidatasets::state_census
+    population <- census$pop[match(if (r$location[1] == "US") "00" else r$location[1], census$fips)]
+    stopifnot(is.finite(population), population > 0)
     locations[[key]] <- data.frame(disease = r$disease[1], location = r$location[1],
       geo_value = r$geo_value[1], location_name, peak_date, peak_value = window$value[best],
       boundary_peak = best %in% c(1L, nrow(window)), tied_peak_n = length(tied),
@@ -396,7 +400,8 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
       history <- history[history$target_end_date <= scale_as_of & is.finite(history$value), , drop = FALSE]
       case_id <- paste(key, horizon, sep = "_")
       cases[[case_id]] <- list(disease = z$disease[1], location = z$location[1],
-        geo_value = r$geo_value[1], location_name = location_name, horizon = as.integer(horizon),
+        geo_value = r$geo_value[1], location_name = location_name, population = population,
+        horizon = as.integer(horizon),
         alpha = alpha, base = base, reference_date = reference_date, target_date = target_date,
         truth_finalized = z$truth_finalized,
         # Filled rounds: the source round of the earlier forecast (see fill_missing_rounds()).

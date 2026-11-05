@@ -1,8 +1,9 @@
 # Functions for scripts 02 and 04. Sourcing this file only defines functions:
 #   source("R/03_functions.R")
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
-# Forecasts are tracked in tracker units (log1p(counts) or counts); predictions,
-# scores and expert weights use counts / count_scale.
+# Forecasts are tracked in tracker units (log1p(counts) or counts); predictions
+# and scores use counts / count_scale (per 100k residents by default); the expert
+# weights learn from losses relative to the base's (weighting_loss_scale()).
 
 # 1. SHARED SETTINGS -----------------------------------------------------
 # Scripts 02 and 04 read these settings, so a change here applies to both.
@@ -10,7 +11,7 @@ multiqt_settings <- function() list(
   location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
   horizons = -1:3,
   transform = "identity",              # MultiQT tracks log1p(counts); "identity": raw counts.
-  scale_method = "max",             # Scores/plots/weighting losses: "max", "median" or "none".
+  scale_method = "population",      # Scores/plots: per 100k residents ("population"), or "max", "median" or "none".
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
@@ -53,9 +54,17 @@ from_tracker <- function(x, transform) {
   if (transform == "log1p") expm1(x) else x
 }
 
-# Count scale for scores, plots and weighting losses; MultiQT never tracks it.
-# It uses only reports published before the location's first forecast.
-choose_count_scale <- function(case, method = "max") {
+# Count scale for scores and plots; MultiQT never tracks it, and the expert weights
+# divide it out (weighting_loss_scale()). "population": counts per 100k residents
+# (2019 census, stored by R/01_data_overview.R). "max" and "median": of the reports
+# published before the location's first forecast. "none": counts.
+choose_count_scale <- function(case, method = "population") {
+  if (method == "population") {
+    if (is.null(case$population)) stop("No population in the prepared data. ",
+      "Rerun Rscript R/01_data_overview.R.")
+    return(list(scale = case$population / 1e5, used = method, method = method,
+      reference_weeks = NA_integer_))
+  }
   history <- case$scale_history[is.finite(case$scale_history)]
   scale <- 1
   used <- method
@@ -72,6 +81,10 @@ choose_count_scale <- function(case, method = "max") {
   }
   list(scale = scale, used = used, method = method, reference_weeks = length(history))
 }
+count_scale_label <- function(method) switch(method,
+  population = "counts per 100k residents",
+  none = "counts",
+  paste0("counts / historical ", method))
 
 # Frozen error scale S0: Q90 of the absolute base errors in tracker units, pooled
 # over all quantile levels of the first `rounds` released rows. eta = m * S0.
@@ -100,6 +113,21 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
     date = if (initialized) case$reference_date[freeze_week] else as.Date(NA),
     rows = rows, consumed_rows = if (warmup_weeks > 0L) released else integer(),
     raw_scale = raw_scale, scale = scale, rounds = rounds, floor = floor)
+}
+
+# Reference loss that makes the expert weights unit-free: the base's mean pinball loss
+# over the S0 rows (error_scale()), against the reports learned from, in counts /
+# count_scale like the weighting losses. exp_weights() divides its losses by it, so
+# lambda_start and fixed lambdas act alike under every count scale and location.
+# Like S0, it uses the S0 rows in hindsight when the warmup is replayed. 1 without S0
+# (then every week is warmup and the weights never update).
+weighting_loss_scale <- function(case, scale, count_scale = 1, floor = 1e-6) {
+  if (!scale$initialized) return(1)
+  rows <- scale$rows
+  error <- (case$feedback_observed[rows] - case$base[rows, , drop = FALSE]) / count_scale
+  loss <- pmax(error, 0) * rep(case$alpha, each = length(rows)) +
+    pmax(-error, 0) * rep(1 - case$alpha, each = length(rows))
+  max(floor, mean(loss))
 }
 
 # Scale sigma_t of the median residuals y - b (tracker units) for the studentized
@@ -465,7 +493,9 @@ select_experts <- function(experts, keep) list(
 # https://github.com/isgibbs/DtACI/blob/main/DtACI.R
 # experts: object from make_rate_experts() or make_restart_experts().
 # base, feedback: counts / count_scale; the weights learn from pinball losses in
-#   these units, released by feedback_by_week like the MultiQT updates.
+#   these units divided by loss_scale (weighting_loss_scale(): the base's mean loss
+#   over the S0 rows), released by feedback_by_week like the MultiQT updates. The
+#   division makes lambda unit-free: the count scale does not change the weights.
 # lambda: "learned" starts at lambda_start and, after H updates, uses
 #   sqrt((log(2 K H) + 1) / sum of the previous H second moments); a number fixes
 #   lambda; 0 gives the uniform average of the active experts.
@@ -481,7 +511,8 @@ select_experts <- function(experts, keep) list(
 # [week x expert x level, or x 1 if common] and the lambda used at each issue week.
 exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
                         lambda = "learned", sharing = TRUE, H = 8L, share = 1 / (2 * H),
-                        per_quantile = TRUE, lambda_start = 2.72, warmup_weeks = 0L) {
+                        per_quantile = TRUE, lambda_start = 2.72, warmup_weeks = 0L,
+                        loss_scale = 1) {
   forecasts <- experts$forecasts
   birth <- experts$birth_week
   n <- nrow(base); k <- length(birth); a <- length(alpha)
@@ -489,7 +520,8 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   stopifnot(identical(dim(forecasts), c(n, k, a)), length(feedback) == n,
     length(feedback_by_week) == n, learned || (is.numeric(lambda) &&
       length(lambda) == 1L && is.finite(lambda) && lambda >= 0),
-    !sharing || (is.finite(share) && share > 0 && share <= 1))
+    !sharing || (is.finite(share) && share > 0 && share <= 1),
+    length(loss_scale) == 1L, is.finite(loss_scale), loss_scale > 0)
   learn <- learned || lambda > 0
   columns <- if (per_quantile) a else 1L     # One weight vector per level, or one for all.
   learning_rate <- rep(if (learned) lambda_start else lambda, columns)
@@ -521,8 +553,8 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
         # If recent losses are all zero, keep the previous finite learning rate.
       }
       error <- feedback[past] - matrix(forecasts[past, eligible, ], length(eligible), a)
-      loss <- pmax(error, 0) * rep(alpha, each = length(eligible)) +
-        pmax(-error, 0) * rep(1 - alpha, each = length(eligible))
+      loss <- (pmax(error, 0) * rep(alpha, each = length(eligible)) +
+        pmax(-error, 0) * rep(1 - alpha, each = length(eligible))) / loss_scale
       if (!per_quantile) loss <- matrix(rowMeans(loss), ncol = 1L)
       stopifnot(all(is.finite(loss)))
       # Experts without a forecast for this row sleep and keep their mass.
