@@ -9,12 +9,12 @@ disease_name <- "covid"                    # "covid" or "flu"
 horizon_id <- 2                            # -1, 0, 1, 2 or 3
 settings <- multiqt_settings()             # Locations, tracker, experts and windows (R/03_functions.R).
 transform <- settings$transform
-# The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
-# on the tuning season by R/05_tuning.R for this disease and tracker (tuned_parameters()).
-params <- tuned_parameters(disease_name, transform)
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")
+# The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
+# on the tuning period by R/05_tuning.R for this disease, tracker and design.
+params <- tuned_parameters(disease_name, transform, design = prepared$settings$design)
 seasons <- c("all", prepared$settings$evaluation_seasons)   # Scored: each season and all.
 result_dir <- "output/results/peak_reasoning"
 figure_dir <- "output/pdf"
@@ -199,13 +199,14 @@ method_groups <- list(
 score_units <- count_scale_label(settings$scale_method)
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
 mean_loss_axis_label <- paste("Mean", tolower(loss_axis_label))
-evaluation_label <- paste(prepared$settings$evaluation_seasons, collapse = " and ")
-window_titles <- c(overall = paste("Seasons", evaluation_label),
+evaluation_label <- prepared$settings$evaluation_label
+window_titles <- c(overall = paste0(toupper(substr(evaluation_label, 1, 1)),
+  substring(evaluation_label, 2)),
   before = paste0("Up to peak (weeks -", settings$weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", settings$weeks_after_peak, ")"))
 plot_title <- function(run = NULL) paste(disease_name, "| horizon", horizon_id, "|",
   if (is.null(run)) "all locations" else
-    paste(run$case$location_name, paste0("(", run$case$location, ")")), "| seasons",
+    paste(run$case$location_name, paste0("(", run$case$location, ")")), "| evaluation:",
   evaluation_label, "|",
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
   "| feedback delay", settings$feedback_delay, "week(s)")
@@ -217,7 +218,7 @@ shown_methods <- function(run, methods) {
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 date_ticks <- function(dates) pretty(as.Date(range(dates), origin = "1970-01-01"), n = 6)
-# Background of the time plots: the tuning season shaded, dotted lines at the peaks.
+# Background of the time plots: the tuning period shaded, dotted lines at the peaks.
 mark_time <- function(case, col = "gray60") {
   tuning <- case$target_date[case$period == "tuning"]
   usr <- par("usr")
@@ -271,7 +272,7 @@ for (run in runs) for (group_name in names(method_groups)) {
     pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n", text.width = NA)
   mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 2, font = 2, cex = 1.15)
   mtext(paste("Issued alpha-quantile forecasts and their weekly pinball loss in", score_units,
-    "against the", truth_label, "| Dotted lines: peaks | Gray: tuning season (not scored)"),
+    "against the", truth_label, "| Dotted lines: peaks | Gray: tuning period (not scored)"),
     side = 3, outer = TRUE, line = .5)
 }
 dev.off()

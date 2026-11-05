@@ -677,15 +677,21 @@ method_parameters <- function() list(
   # Residual scales (studentized median, constant sigma, level RMS): "rms" or "median"
   # (robust to one outlying residual; see residual_scale()).
   residual_estimator = "rms",
+  # Every studentized scale is clipped to these multiples of S0 (tracker units). Near 0
+  # (e.g. a base of zero width) the offsets grow without effect for weeks; a jump (e.g.
+  # a broken base forecast or report) then multiplies all of them. c(0, Inf): no limits.
+  sigma_bounds = c(.05, 1),
   by_method = list())
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
   if (is.null(value)) params[[name]] else value
 }
-# The values R/05_tuning.R chose for one disease and tracker transform, as by_method
-# overrides of params; the defaults where none were tuned (with a message).
+# The values R/05_tuning.R chose for one disease and tracker transform under a design
+# of R/01_data_overview.R, as by_method overrides of params; the defaults where none
+# were tuned (with a message).
 tuned_parameters <- function(disease, transform, params = method_parameters(),
-                             path = "output/results/tuning/tuned_settings.csv") {
+                             design = "seasons", dir = "output/results/tuning") {
+  path <- file.path(dir, paste0("tuned_settings_", design, ".csv"))
   tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
     transform = character())
   tuned <- tuned[tuned$disease == disease & tuned$transform == transform, , drop = FALSE]
@@ -753,10 +759,15 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   }
   # Studentized median MultiQT (median_multiqt()): Fixed MultiQT's coverage indicator
   # and update on the base median b_t, issued as b_t + sigma_t * offsets.
+  # Studentized scales stay within sigma_bounds * S0 (missing scales stay missing).
+  bound <- function(scale) if (!s0$initialized) scale else
+    pmin(pmax(scale, params$sigma_bounds[1] * s0$scale), params$sigma_bounds[2] * s0$scale)
   sigma <- median_sigma(case, "residuals", params$median_window, params$median_min_rows,
     settings$scale_floor, transform, estimator = params$residual_estimator)
+  sigma$scale <- bound(sigma$scale)
   base_sigma <- median_sigma(case, "base", floor = settings$scale_floor, transform = transform,
     levels = params$median_base_levels)
+  base_sigma$scale <- bound(base_sigma$scale)
   # The original base is issued until sigma_t exists (and during the S0 warmup without replay).
   median_warmup_weeks <- max(s0$warmup_weeks, sigma$warmup_weeks)
   # Offsets before the first update: normal quantiles, or t quantiles of a residual divided
@@ -787,14 +798,15 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     warmup_weeks, transform, sigma = scales) / count_scale
   if (want("studentized_full"))
     predictions$studentized_full <- full("studentized_full", base_sigma$scale)
-  level_scales <- if (want("studentized_levels")) level_sigma(case, settings$scale_floor, transform)
+  level_scales <- if (want("studentized_levels")) bound(level_sigma(case, settings$scale_floor,
+    transform))
   if (want("studentized_levels"))
     predictions$studentized_levels <- full("studentized_levels", level_scales)
   # The residual scales exist once median_min_rows residuals are released, as for the median.
   if (want("studentized_level_rms"))
     predictions$studentized_level_rms <- full("studentized_level_rms",
-      level_residual_sigma(case, params$median_window, params$median_min_rows,
-        settings$scale_floor, transform, params$residual_estimator), median_warmup_weeks)
+      bound(level_residual_sigma(case, params$median_window, params$median_min_rows,
+        settings$scale_floor, transform, params$residual_estimator)), median_warmup_weeks)
 
   # What if we knew the true peak? Hindsight benchmark: bypass correction for postpeak
   # targets, even if issued prepeak (each week's nearest peak). Setting eta=0 instead
