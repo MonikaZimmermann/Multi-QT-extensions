@@ -118,6 +118,32 @@ write_result(do.call(rbind, lapply(runs, function(run)
   data.frame(location = rep(run$case$location, nrow(run$restart_experts$experts)),
     run$restart_experts$experts, birth_week = run$restart_experts$birth_week))),
   "restart_experts.csv")
+# The context and both expert distributions are saved at issuance, alongside the
+# actual mixed weights. The gate describes declining context, not a peak probability.
+switch_runs <- Filter(function(run) !is.null(run$soft_switch), runs)
+if (length(switch_runs)) {
+  write_result(do.call(rbind, lapply(switch_runs, function(run) data.frame(
+    disease = run$case$disease, location = run$case$location,
+    location_name = run$case$location_name, horizon = run$case$horizon,
+    target_date = run$case$target_date, run$soft_switch$gate,
+    lambda_baseline = run$soft_switch$regime_lambda[, "baseline"],
+    lambda_declining = run$soft_switch$regime_lambda[, "declining"],
+    # A gate-weighted summary of the two learning rates, not a third update rate.
+    lambda_average = as.numeric(run$lambda$diverse_soft_switch)))), "soft_switch_gate.csv")
+  write_result(do.call(rbind, lapply(switch_runs, function(run) {
+    regimes <- run$soft_switch$regime_weights
+    weights <- list(baseline = regimes[, , "baseline"],
+      declining = regimes[, , "declining"], issued = run$weights$diverse_soft_switch[, , 1])
+    do.call(rbind, lapply(names(weights), function(context) {
+      values <- weights[[context]]
+      data.frame(disease = run$case$disease, location = run$case$location,
+        location_name = run$case$location_name, horizon = run$case$horizon,
+        reference_date = rep(run$case$reference_date, ncol(values)),
+        target_date = rep(run$case$target_date, ncol(values)), context,
+        expert = rep(colnames(values), each = nrow(values)), weight = as.vector(values))
+    }))
+  })), "soft_switch_weights.csv")
+}
 
 # 7. PLOT SETTINGS ---------------------------------------------------
 # Labels show each method's own value of its tuned setting (tuned_setting in R/03).
@@ -157,6 +183,8 @@ labels <- c(original = "Original",
     "H=", par_of("diverse_shared", "H"), ")"),
   diverse_shared_common = paste0("Diverse experts: learned + sharing, common weights (",
     slow("diverse_shared_common"), ")"),
+  diverse_soft_switch = paste0("Diverse experts: soft switching (strength=",
+    value("diverse_soft_switch"), ")"),
   studentized = paste0("Studentized median (", residual_label, ", ", params$median_start,
     " start, ", eta("studentized"), ")"),
   studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",
@@ -177,10 +205,12 @@ colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
   restart_grid = "#882255", restart_uniform_outer = "#56B4E9",
   restart_weighted_outer = "#D55E00", restart_grid_outer = "#CC79A7",
   diverse_uniform = "#E69F00", diverse_shared = "#009E73", diverse_shared_common = "#009E73",
+  diverse_soft_switch = "#7B3294",
   studentized = "#D55E00", studentized_base = "#009E73", median_constant = "#CC79A7",
   studentized_full = "#D55E00", studentized_levels = "#009E73", studentized_level_rms = "#CC79A7")
 # Common weights across quantile levels: dashed lines and triangles.
 common <- setNames(grepl("_common", names(labels)), names(labels))
+common["diverse_soft_switch"] <- TRUE
 line_types <- ifelse(common, 2, 1)
 point_shapes <- ifelse(common, 17, 16)
 method_groups <- list(
@@ -191,7 +221,7 @@ method_groups <- list(
     "restart_weighted", "restart_grid", "restart_uniform_outer", "restart_weighted_outer",
     "restart_grid_outer"),
   "Diverse experts" = c("original", "shared", "shared_common", "diverse_uniform",
-    "diverse_shared", "diverse_shared_common"),
+    "diverse_shared", "diverse_shared_common", "diverse_soft_switch"),
   "Studentized median" = c("original", "fixed", "studentized", "studentized_base",
     "median_constant"),
   "Studentized full base" = c("original", "fixed", "studentized_full", "studentized_levels",
@@ -453,8 +483,9 @@ weight_pages <- list(
     method = c("diverse_uniform", "diverse_shared"),
     common_method = c("diverse_uniform", "diverse_shared_common"),
     title = c("Equal weights", "Learned + sharing"))))
-plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row) {
-  times <- as.numeric(run$case$target_date)
+plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row,
+                                     dates = run$case$target_date) {
+  times <- as.numeric(dates)
   par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, 1.5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1),
     xaxs = "i", yaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
@@ -471,7 +502,7 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   abline(h = .5, col = adjustcolor("white", .6), lty = 3)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
   axis(2, at = c(0, .5, 1), las = 1, cex.axis = .75)
-  if (last_row) axis.Date(1, at = date_ticks(run$case$target_date), format = "%b %Y", cex.axis = .8)
+  if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
   box(col = "gray70")
 }
 cairo_pdf(file.path(figure_dir, "multiqt_weight_timelines.pdf"), width = 18,
@@ -508,3 +539,56 @@ for (run in runs) for (page in names(weight_pages)) {
     line = 2.8, cex = .8)
 }
 dev.off()
+
+# 11. SOFT SWITCHING: CONTEXT AND COMMON WEIGHTS ---------------------
+# Issue dates align the signal with the information used for that forecast. Each
+# regime learns from delayed own-horizon losses using the context saved at issuance.
+if (length(switch_runs)) {
+  cairo_pdf(file.path(figure_dir, "multiqt_soft_switch_timelines.pdf"), width = 15,
+    height = 11, family = "DejaVu Sans")
+  for (run in switch_runs) {
+    signal <- run$soft_switch$gate
+    regimes <- run$soft_switch$regime_weights
+    dates <- run$case$reference_date
+    experts <- dimnames(regimes)[[2]]
+    fills <- c("gray45", hcl.colors(length(experts) - 1L, "Dark 3"))
+    layout(matrix(1:5, ncol = 1), heights = c(1.1, 1, 1, 1, .45))
+    par(oma = c(4.4, .5, 4.1, .5), mgp = c(2, .4, 0), cex = .9)
+    par(mar = c(.4, 3.7, 2.1, .6))
+    plot(dates, signal$gate, type = "n", xlim = range(dates) + c(-.5, .5) * 7,
+      ylim = c(0, 1.18), xaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
+      ylab = "Context weight", main = "Declining context at issuance")
+    axis(2, at = c(0, .5, 1), las = 1, cex.axis = .8)
+    abline(h = .5, col = "gray70", lty = 3)
+    abline(v = as.numeric(run$case$peaks$peak_date), col = "gray50", lty = 3)
+    score_names <- c("path_score", "nowcast_score", "revision_score")
+    score_colours <- c("#0072B2", "#D55E00", "#009E73")
+    broken <- break_gaps(dates, as.matrix(signal[c(score_names, "gate")]))
+    for (j in seq_along(score_names)) lines(broken$dates, broken[[2]][, j],
+      col = score_colours[j], lwd = 1)
+    lines(broken$dates, broken[[2]][, "gate"], col = colours["diverse_soft_switch"], lwd = 2)
+    points(dates, signal$gate, col = colours["diverse_soft_switch"], pch = 16, cex = .3)
+    legend("topleft", c("Forecast path", "Nowcast change", "Same-target revisions", "Mixed gate"),
+      col = c(score_colours, colours["diverse_soft_switch"]), lty = 1, lwd = c(1, 1, 1, 2),
+      ncol = 4, bty = "n", cex = .85)
+    plot_weight_distribution(run, regimes[, , "baseline"], fills,
+      "Baseline-context expert weights", "Weight", TRUE, FALSE, dates)
+    plot_weight_distribution(run, regimes[, , "declining"], fills,
+      "Declining-context expert weights", "Weight", TRUE, FALSE, dates)
+    plot_weight_distribution(run, run$weights$diverse_soft_switch[, , 1], fills,
+      "Issued mixture: (1 - gate) x baseline + gate x declining", "Weight", TRUE, TRUE, dates)
+    par(mar = c(0, 0, 0, 0))
+    plot.new()
+    legend("center", experts, fill = fills, border = NA, ncol = ceiling(length(experts) / 2),
+      bty = "n", cex = .9)
+    mtext(labels["diverse_soft_switch"], side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
+    mtext(plot_title(run), side = 3, outer = TRUE, line = .8, cex = .9)
+    mtext("Issue date | Common expert weights across quantile levels | Dotted lines: hindsight peaks",
+      side = 1, outer = TRUE, line = .4, cex = .85)
+    mtext("The gate is a context weight, not a peak probability; missing signals contribute a neutral score of 0.5.",
+      side = 1, outer = TRUE, line = 1.6, cex = .8)
+    if (any(run$case$filled)) mtext("Lighter bars: filled forecast rounds.",
+      side = 1, outer = TRUE, line = 2.8, cex = .8)
+  }
+  dev.off()
+}

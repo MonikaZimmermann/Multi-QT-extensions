@@ -40,7 +40,76 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L) 
   case$feedback_observed <- feedback$observed
   case$feedback_date <- feedback$date
   case$feedback_by_week <- feedback$by_week
+  # Cross-horizon inputs for the soft-switch method. Keep the workflow's selected
+  # base and its original availability/filling flags; no outcomes enter this panel.
+  case$context_forecasts <- do.call(rbind, lapply(-1:3, function(h) {
+    other <- prepared$cases[[paste(disease, location, h, sep = "_")]]
+    if (is.null(other) || !identical(other$base_name, case$base_name)) return(NULL)
+    mid <- match(.5, other$alpha)
+    if (is.na(mid)) return(NULL)
+    data.frame(reference_date = other$reference_date, target_date = other$target_date,
+      as_of = other$as_of, horizon = h, median = other$base[, mid], filled = other$filled)
+  }))
   case
+}
+
+# Three prospective trend signals, in log1p(counts) for either tracker. Each
+# lookup uses an exact reference/target date, excludes filled forecasts, and must
+# have been available by that issue's as-of cutoff. Missing signals are neutral.
+# The gate describes current issue context, not a peak probability or the target
+# horizon's future state. In particular, h=-1 is available at reference t, not t-1.
+transition_gate <- function(case, strength = 1, width = .05, threshold = .05) {
+  stopifnot(length(strength) == 1L, is.finite(strength), strength >= 0, strength <= 1,
+    length(width) == 1L, is.finite(width), width > 0,
+    length(threshold) == 1L, is.finite(threshold), threshold >= 0)
+  dates <- case$reference_date
+  signals <- matrix(NA_real_, length(dates), 3L,
+    dimnames = list(NULL, c("path", "nowcast", "revision")))
+  history <- case$context_forecasts
+  if (!is.null(history) && nrow(history)) {
+    stopifnot(!anyDuplicated(history[c("reference_date", "horizon")]),
+      all(history$target_date == history$reference_date + 7 * history$horizon))
+    keys <- paste(history$reference_date, history$horizon)
+    lookup <- function(reference, horizon, cutoff) {
+      j <- match(paste(reference, horizon), keys)
+      ok <- !is.na(j) & !is.na(history$as_of[j]) & !is.na(cutoff) &
+        history$as_of[j] <= cutoff & !is.na(history$filled[j]) & !history$filled[j] &
+        is.finite(history$median[j]) & history$median[j] >= 0
+      value <- rep(NA_real_, length(j))
+      value[ok] <- log1p(history$median[j[ok]])
+      value
+    }
+    for (i in seq_along(dates)) {
+      t <- dates[i]; cutoff <- case$as_of[i]
+      current <- lookup(t, -1:3, cutoff)
+      # Four current/future forecasts suffice if h=-1 is missing. Otherwise include
+      # its edge to h=0 too, as in the descriptive five-point curve.
+      if (all(is.finite(current[2:5]))) signals[i, "path"] <-
+        max(-diff(current), na.rm = TRUE)
+      previous_row <- match(paste(t - 7, -1), keys)
+      previous_cutoff <- if (is.na(previous_row)) as.Date(NA) else history$as_of[previous_row]
+      if (is.na(cutoff) || is.na(previous_cutoff) || previous_cutoff > cutoff) next
+      previous <- lookup(t - 7, -1, previous_cutoff)
+      before_previous <- lookup(t - 14, -1, previous_cutoff)
+      growth <- current[1] - previous
+      previous_growth <- previous - before_previous
+      if (is.finite(growth) && is.finite(previous_growth))
+        signals[i, "nowcast"] <- max(-growth, min(previous_growth, previous_growth - growth))
+      # Compare each nowcast with older horizons j for its SAME target. The prior
+      # revision is reconstructed at its own cutoff, not with information from t.
+      revision <- current[1] - lookup(t - 7 * (1:4), 0:3, cutoff)
+      previous_revision <- previous - lookup(t - 7 * (2:5), 0:3, previous_cutoff)
+      common <- is.finite(revision) & is.finite(previous_revision)
+      if (sum(common) >= 2L) signals[i, "revision"] <- min(-median(revision[common]),
+        -median(revision[common] - previous_revision[common]))
+    }
+  }
+  scores <- plogis((signals - log1p(threshold)) / log1p(width))
+  scores[!is.finite(scores)] <- .5         # Unknown evidence pulls towards neutral.
+  gate <- pmin(.95, pmax(.05, .5 + strength * (rowMeans(scores) - .5)))
+  data.frame(reference_date = dates, signals, path_score = scores[, "path"],
+    nowcast_score = scores[, "nowcast"], revision_score = scores[, "revision"],
+    gate, n_available = rowSums(is.finite(signals)))
 }
 
 to_tracker <- function(x, transform) {
@@ -551,10 +620,14 @@ select_experts <- function(experts, keep) list(
 # The first warmup_weeks forecasts keep the base and their reports are not replayed.
 # Returns the mixture q [week x level] in counts / count_scale, the issued weights
 # [week x expert x level, or x 1 if common] and the lambda used at each issue week.
+# update_weight: nonnegative multiplier saved for each forecast at issuance; a
+# released row uses update_weight[past], never the current context. It scales the
+# loss (including its second moment) and the fixed-share exposure. Ones preserve
+# ordinary weighting; zeros leave the bank untouched for that released row.
 exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
                         lambda = "learned", sharing = TRUE, H = 8L, share = 1 / (2 * H),
                         per_quantile = TRUE, lambda_start = 2.72, warmup_weeks = 0L,
-                        loss_scale = 1) {
+                        loss_scale = 1, update_weight = rep(1, nrow(base))) {
   forecasts <- experts$forecasts
   birth <- experts$birth_week
   n <- nrow(base); k <- length(birth); a <- length(alpha)
@@ -563,7 +636,8 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
     length(feedback_by_week) == n, learned || (is.numeric(lambda) &&
       length(lambda) == 1L && is.finite(lambda) && lambda >= 0),
     !sharing || (is.finite(share) && share > 0 && share <= 1),
-    length(loss_scale) == 1L, is.finite(loss_scale), loss_scale > 0)
+    length(loss_scale) == 1L, is.finite(loss_scale), loss_scale > 0,
+    length(update_weight) == n, all(is.finite(update_weight)), all(update_weight >= 0))
   learn <- learned || lambda > 0
   columns <- if (per_quantile) a else 1L     # One weight vector per level, or one for all.
   learning_rate <- rep(if (learned) lambda_start else lambda, columns)
@@ -579,6 +653,7 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   for (week in seq_len(n)) {
     admitted <- which(birth < week)
     if (learn && week > warmup_weeks) for (past in feedback_by_week[[week]]) {
+      if (update_weight[past] == 0) next
       eligible <- admitted[birth[admitted] <= past]
       if (length(eligible) < 2L) next          # A single expert keeps all of its mass.
       sleeping <- setdiff(admitted, eligible)
@@ -598,6 +673,7 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
       loss <- (pmax(error, 0) * rep(alpha, each = length(eligible)) +
         pmax(-error, 0) * rep(1 - alpha, each = length(eligible))) / loss_scale
       if (!per_quantile) loss <- matrix(rowMeans(loss), ncol = 1L)
+      loss <- loss * update_weight[past]
       stopifnot(all(is.finite(loss)))
       # Experts without a forecast for this row sleep and keep their mass.
       mass <- 1 - colSums(p[sleeping, , drop = FALSE])
@@ -618,8 +694,10 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
       p[admitted, ] <- sweep(p[admitted, , drop = FALSE], 2,
         colSums(p[admitted, , drop = FALSE]), `/`)
       if (sharing) {
-        p[eligible, ] <- (1 - share) * p[eligible, , drop = FALSE] +
-          rep(share * mass / length(eligible), each = length(eligible))
+        share_now <- if (update_weight[past] == 1) share else
+          -expm1(update_weight[past] * log1p(-share))
+        p[eligible, ] <- (1 - share_now) * p[eligible, , drop = FALSE] +
+          rep(share_now * mass / length(eligible), each = length(eligible))
         log_weights[admitted, ] <- log(p[admitted, , drop = FALSE])
       }
     }
@@ -652,6 +730,36 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   list(q = q, weights = weights, lambda = lambda_used)
 }
 
+# Two context-conditioned weight banks for the SAME experts, learned separately
+# for this location and forecast horizon. Twice the saved membership normalizes
+# neutral context (.5) to the ordinary update, so switch_strength=0 is exactly the
+# common-weight comparator. Both banks use the ordinary own-horizon delayed loss.
+# Their learned lambda uses context-scaled moments: this is a heuristic extension
+# of exponential weighting, not a new calibration or peak-detection guarantee.
+soft_switch_weights <- function(experts, base, feedback, feedback_by_week, alpha,
+                                gate, ...) {
+  stopifnot(length(gate) == nrow(base), all(is.finite(gate)), all(gate >= 0 & gate <= 1))
+  baseline <- exp_weights(experts, base, feedback, feedback_by_week, alpha,
+    per_quantile = FALSE, update_weight = 2 * (1 - gate), ...)
+  declining <- exp_weights(experts, base, feedback, feedback_by_week, alpha,
+    per_quantile = FALSE, update_weight = 2 * gate, ...)
+  weights <- sweep(baseline$weights, 1, 1 - gate, `*`) +
+    sweep(declining$weights, 1, gate, `*`)
+  q <- (1 - gate) * baseline$q + gate * declining$q
+  # Keep identical forecasts, in particular the base during warmup, exact.
+  same <- rowSums(baseline$q != declining$q) == 0
+  q[same, ] <- baseline$q[same, , drop = FALSE]
+  regimes <- array(c(baseline$weights, declining$weights),
+    dim = c(dim(weights)[1:2], 2L),
+    dimnames = c(dimnames(weights)[1:2], list(c("baseline", "declining"))))
+  # lambda is an average diagnostic for the existing reporting interface. The
+  # actual updates use the two separate learning rates returned in regime_lambda.
+  list(q = q, weights = weights,
+    lambda = (1 - gate) * baseline$lambda + gate * declining$lambda,
+    regime_weights = regimes,
+    regime_lambda = cbind(baseline = baseline$lambda[, 1], declining = declining$lambda[, 1]))
+}
+
 # 7. THE RECALIBRATION METHODS OF SCRIPTS 04 AND 05 ----------------------------
 # Settings of the methods. Rates are multiples m of S0 (eta = m * S0, so they act alike
 # for both trackers and every location), except median_rate (in units of sigma_t) and
@@ -669,6 +777,9 @@ method_parameters <- function() list(
   # Diverse experts: slow MultiQT (eta = m * S0) on differently corrected starting forecasts.
   diverse_slow_multiplier = .008, diverse_leak = .2, diverse_damping = c(-.5, .5, 1),
   diverse_widths = c(.75, 1.5),
+  # Soft switch: sigmoid scale/centre on log1p(counts), independent of tracker units.
+  # strength=0 is the ordinary diverse common-weight mixture; 1 uses all the signal.
+  switch_strength = 1, switch_width = .05, switch_threshold = .05,
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
   # residuals (the base until median_min_rows exist) or from the base width between
   # median_base_levels; median_start: "normal" or "t" start of the residual median methods.
@@ -684,6 +795,9 @@ method_parameters <- function() list(
   by_method = list())
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
+  # Reuse the comparator's tuned expert bank unless explicitly overridden.
+  if (is.null(value) && method == "diverse_soft_switch")
+    value <- params$by_method$diverse_shared_common[[name]]
   if (is.null(value)) params[[name]] else value
 }
 # The values R/05_tuning.R chose for one disease and tracker transform under a design
@@ -707,6 +821,7 @@ tuned_setting <- c(fixed = "fixed_multiplier", absolute_slope = "slope_min_multi
   restart_weighted = "restart_lambda", restart_grid = "restart_lambda",
   diverse_uniform = "diverse_slow_multiplier", diverse_shared = "diverse_slow_multiplier",
   diverse_shared_common = "diverse_slow_multiplier",
+  diverse_soft_switch = "switch_strength",
   studentized = "median_rate", studentized_base = "median_rate", median_constant = "median_rate",
   studentized_full = "median_rate", studentized_levels = "median_rate",
   studentized_level_rms = "median_rate",
@@ -717,7 +832,7 @@ method_names <- c("original", "fixed", "absolute_slope", "studentized", "student
   "median_constant", "studentized_full", "studentized_levels", "studentized_level_rms",
   "oracle_target", "uniform", "weighted", "weighted_common", "shared", "shared_common",
   "restart_uniform", "restart_weighted", "restart_grid", "diverse_uniform", "diverse_shared",
-  "diverse_shared_common", "restart_persistent", "shared_outer", "shared_common_outer",
+  "diverse_shared_common", "diverse_soft_switch", "restart_persistent", "shared_outer", "shared_common_outer",
   "restart_uniform_outer", "restart_weighted_outer", "restart_grid_outer")
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
@@ -869,6 +984,17 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     mixtures$diverse_shared <- weigh("diverse_shared", diverse("diverse_shared"))
   if (want("diverse_shared_common")) mixtures$diverse_shared_common <-
     weigh("diverse_shared_common", diverse("diverse_shared_common"), per_quantile = FALSE)
+  soft_switch <- NULL
+  if (want("diverse_soft_switch")) {
+    gate <- transition_gate(case, par("diverse_soft_switch", "switch_strength"),
+      par("diverse_soft_switch", "switch_width"), par("diverse_soft_switch", "switch_threshold"))
+    soft_switch <- soft_switch_weights(diverse("diverse_soft_switch"), base, feedback,
+      case$feedback_by_week, case$alpha, gate$gate, H = par("diverse_soft_switch", "H"),
+      lambda_start = par("diverse_soft_switch", "lambda_start"),
+      warmup_weeks = s0$warmup_weeks, loss_scale = loss_scale)
+    soft_switch$gate <- gate
+    mixtures$diverse_soft_switch <- soft_switch
+  }
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
   # The first-start control has exactly the same birth rule as the restart copies.
   if (want("restart_persistent")) {
@@ -889,5 +1015,5 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     constant_sigma = constant_sigma, predictions = predictions,
     weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
     rate_experts = rate_experts, restart_experts = restart_experts,
-    diverse_experts = if (length(diverse_banks)) diverse_banks[[1]])
+    diverse_experts = if (length(diverse_banks)) diverse_banks[[1]], soft_switch = soft_switch)
 }
