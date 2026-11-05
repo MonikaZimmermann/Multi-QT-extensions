@@ -201,35 +201,48 @@ level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
   scale
 }
 
-# Peak-relative windows, as a logical vector over the case's weeks. The peak is
-# the largest latest-reported count in the disease's peak window (hindsight label only).
-# before and after are window lengths: before = weeks -(before - 1)..0, including the
-# peak week, and after = weeks 1..after, inside the peak window; overall = all weeks.
-phase_weeks <- function(case, phase, before = 8L, after = 8L) {
+# Peak-relative windows, as a logical vector over the case's weeks, within the given
+# period(s) of the target week: "evaluation" (2024/25 and 2025/26 by default),
+# "tuning" (2023/24) or "other". A peak is the largest latest-reported count of a
+# season or, for covid, a half season (R/01_data_overview.R; hindsight label only);
+# each week counts from its nearest peak. before and after are window lengths:
+# before = weeks -(before - 1)..0, including the peak week, and after = weeks
+# 1..after; overall = all weeks of the period(s).
+phase_weeks <- function(case, phase, before = 8L, after = 8L, period = "evaluation") {
   week <- case$relative_week
+  in_period <- case$period %in% period
   switch(phase,
-    before = case$within_peak_window & week > -before & week <= 0,
-    after = case$within_peak_window & week >= 1 & week <= after,
-    overall = rep(TRUE, length(week)),
+    before = in_period & week > -before & week <= 0,
+    after = in_period & week >= 1 & week <= after,
+    overall = in_period,
     stop("Unknown phase ", phase))
 }
 
-# A maximum on the window edge may be the tail of an earlier wave, and missing
-# weeks shorten the before/after windows. Report both, but keep the location.
-check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest) {
+# A maximum on the edge of its (half) season may be the tail of another wave, and
+# missing weeks shorten the before/after windows. Report both, but keep the peak.
+check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest,
+                              period = "evaluation") {
   label <- paste0(case$disease, " | ", case$location_name, " (", case$location,
     ") | horizon ", case$horizon)
-  if (case$peak_boundary)
-    warning(label, ": maximum on the edge of the peak window (",
-      case$peak_date, "); location kept.", call. = FALSE, immediate. = TRUE)
   weeks <- seq.int(1L - before, after)
-  i <- match(weeks, case$relative_week)
-  ok <- !is.na(i)
-  ok[ok] <- case$within_peak_window[i[ok]] & is.finite(truth[i[ok]])
-  if (!all(ok))
-    warning(label, ": no scored target in peak-relative week(s) ",
-      paste(weeks[!ok], collapse = ","), "; location kept.", call. = FALSE, immediate. = TRUE)
-  invisible(all(ok) && !case$peak_boundary)
+  ok_all <- TRUE
+  for (k in which(case$peaks$period %in% period)) {
+    peak <- case$peaks[k, ]
+    peak_label <- paste0(label, " | ", peak$season,
+      if (peak$half != "season") paste0(" ", peak$half), " peak ", peak$peak_date)
+    if (peak$boundary_peak)
+      warning(peak_label, ": maximum on the edge of its (half) season; peak kept.",
+        call. = FALSE, immediate. = TRUE)
+    rows <- which(case$peak_index == k)
+    i <- rows[match(weeks, case$relative_week[rows])]
+    ok <- !is.na(i)
+    ok[ok] <- case$period[i[ok]] %in% period & is.finite(truth[i[ok]])
+    if (!all(ok))
+      warning(peak_label, ": no scored target in peak-relative week(s) ",
+        paste(weeks[!ok], collapse = ","), "; peak kept.", call. = FALSE, immediate. = TRUE)
+    ok_all <- ok_all && all(ok) && !peak$boundary_peak
+  }
+  invisible(ok_all)
 }
 
 # 3. SCORING --------------------------------------------------------------

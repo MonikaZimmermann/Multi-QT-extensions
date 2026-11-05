@@ -162,34 +162,54 @@ cutoff <- as.Date("2025-01-11")
 available_then <- epix_as_of(archive, cutoff)
 print(available_then)
 
-# 5. PREPARE ONE PEAK-ALIGNED DATASET FOR SCRIPTS 02 AND 03 --------------------
-# Keep every location's full forecast chronology and raw count units. The peak
-# only supplies a retrospective time label; it does not affect online feedback.
-# Each disease/location uses its largest latest-reported weekly count inside its
-# disease's peak window. Boundary maxima are retained; ties use the earliest date.
-# No reports outside the peak window are used to choose its maximum.
+# 5. PREPARE THE DATA FOR SCRIPTS 02 AND 04 ------------------------------------
+# Keep every location's full forecast chronology in raw count units, from the first
+# 2023/24 round on. Seasons run from October to September and are set by the target
+# week: 2023/24 tunes the methods' settings, 2024/25 and 2025/26 evaluate them.
+# Peaks only label weeks in hindsight; they do not affect online feedback. A peak is
+# the largest latest-reported weekly count of a season (flu) or a half season (covid:
+# October to March and April to September, one for the winter and one for the summer
+# wave). Only peaks whose week was forecast are kept. Boundary maxima are retained;
+# ties use the earliest date. Each target week belongs to its nearest peak.
 #
 # The output contains:
-#   settings  : common start date, peak windows and prepared horizons;
-#   locations : one selected maximum per disease/location (including US);
-#   cases     : named disease_location_horizon lists, e.g. covid_18_0.
+#   settings : the settings below;
+#   peaks    : one row per disease, location and (half) season with a forecast peak;
+#   cases    : named disease_location_horizon lists, e.g. covid_18_0.
 # Each case contains its raw forecast matrix, quantiles, online feedback per delay,
-# latest-vintage truth for scoring, dates, peak-relative week labels, the
-# population (counts per 100k residents) and the historical counts for other scalings.
-# Scripts 02/03 can choose scaling later without reopening the raw data files.
+# latest-vintage truth for scoring, dates, seasons and periods, peak-relative week
+# labels, the population (counts per 100k residents) and the historical counts for
+# other scalings. Scripts 02/04 choose the scaling without reopening the data files.
 # US remains a separate case and must not be counted as an additional state.
+#
+# base: the base forecasts per disease. "windowed_seasonal": R/00_base_forecasts.R,
+#   Delphi's forecaster, made on Wednesdays (the generation date) from the reports as
+#   of that day. "cmu_hub": the CMU-TimeSeries submissions (covid from 2024-11-23 only).
+#   The online feedback of a round uses the reports as of the base's generation date
+#   (windowed_seasonal) or the day before the reference date (cmu_hub).
+# final_data_through: there are no report versions before 2024-11-19. Target weeks
+#   ending by this date get a first report with their latest value on the Wednesday
+#   after the week (target_end_date + 4), so in 2023/24 MultiQT learns from final
+#   counts, as the windowed_seasonal forecasts were made from final counts.
 # feedback_delays: the delays (weeks after the first report) prepared for the
-# online feedback; feedback_delay in R/03_functions.R chooses one of them.
-# Peak windows per disease: COVID's middle wave (summer 2025), ending after the
-# November trough so 8 weeks after a September peak stay inside. Flu has no summer
-# wave; its 2024/25 winter misses the fewest forecast rounds (one, 2025-01-25).
+#   online feedback; feedback_delay in R/03_functions.R chooses one of them.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
-# see fill_missing_rounds() below.
-peak_settings <- list(start_date = as.Date("2024-11-23"),
-                      peak_start = as.Date(c(covid = "2025-06-01", flu = "2024-11-23")),
-                      peak_end = as.Date(c(covid = "2025-11-30", flu = "2025-05-31")),
-                      horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
+#   see fill_missing_rounds() below; the gap from May to November 2024 stays.
+prepare_settings <- list(base = c(covid = "windowed_seasonal", flu = "cmu_hub"),
+                         start_date = as.Date("2023-10-14"), season_start_month = 10L,
+                         tuning_seasons = "2023/24",
+                         evaluation_seasons = c("2024/25", "2025/26"),
+                         half_season_peaks = c(covid = TRUE, flu = FALSE),
+                         final_data_through = as.Date("2024-06-01"),
+                         horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
+# Season of a date (October to September, e.g. "2024/25") and its half season.
+season_of <- function(date, start_month = 10L) {
+  year <- as.integer(format(date, "%Y")) - (as.integer(format(date, "%m")) < start_month)
+  paste0(year, "/", substr(year + 1L, 3L, 4L))
+}
+half_season_of <- function(date, start_month = 10L)
+  ifelse((as.integer(format(date, "%m")) - start_month) %% 12L < 6L, "winter", "summer")
 # A missing horizon-h forecast of round r is filled with the latest earlier forecast
 # of the same target week: the horizon-(h + k) forecast issued k weeks earlier, with
 # the smallest k. It uses no information after r. Only gaps of at most max_gap
@@ -225,18 +245,40 @@ fill_missing_rounds <- function(forecasts, max_gap) {
   rbind(forecasts, do.call(rbind, filled))
 }
 
-prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
+prepare_data <- function(forecasts, vintages, settings) {
   forecast_columns <- c("disease", "location", "horizon", "reference_date",
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
     forecasts$reference_date >= settings$start_date, forecast_columns])
   selected <- fill_missing_rounds(selected, settings$fill_gaps_up_to)
+  # Reports as of each round: the base's generation date, or the day before the
+  # reference date. Filled rounds: the Wednesday before the reference date.
+  generation <- unique(as.data.frame(forecasts[!is.na(forecasts$generation_date),
+    c("disease", "reference_date", "generation_date")]))
+  stopifnot(!anyDuplicated(generation[c("disease", "reference_date")]))
+  round_as_of <- function(disease, reference_date) {
+    if (settings$base[[disease]] == "cmu_hub") return(reference_date - 1)
+    as_of <- generation$generation_date[match(paste(disease, reference_date),
+      paste(generation$disease, generation$reference_date))]
+    as.Date(ifelse(is.na(as_of), reference_date - 3, as_of), origin = "1970-01-01")
+  }
   reports <- as.data.frame(vintages[!is.na(vintages$location),
     c("disease", "location", "geo_value", "target_end_date", "version", "value")])
+  # Final counts before the report versions: a first report of the latest value on the
+  # Wednesday after the week, before every stored version.
+  reports <- reports[order(reports$disease, reports$location, reports$target_end_date,
+    reports$version), , drop = FALSE]
+  final <- reports[!duplicated(reports[c("disease", "location", "target_end_date")],
+    fromLast = TRUE) & reports$target_end_date <= settings$final_data_through, , drop = FALSE]
+  final$version <- final$target_end_date + 4
+  stopifnot(all(final$version < min(reports$version)))
+  reports <- rbind(final, reports)
   group_key <- function(x) paste(x$disease, x$location, sep = "_")
   forecast_groups <- split(seq_len(nrow(selected)), group_key(selected))
   report_groups <- split(seq_len(nrow(reports)), group_key(reports))
-  cases <- locations <- list()
+  periods <- function(season) ifelse(season %in% settings$tuning_seasons, "tuning",
+    ifelse(season %in% settings$evaluation_seasons, "evaluation", "other"))
+  cases <- peaks <- list()
   for (key in names(forecast_groups)) {
     f <- selected[forecast_groups[[key]], , drop = FALSE]
     report_rows <- report_groups[[key]]
@@ -245,17 +287,7 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
     r <- r[order(r$target_end_date, r$version), , drop = FALSE]
     stopifnot(!anyDuplicated(r[c("target_end_date", "version")]),
               length(unique(r$geo_value)) == 1L)
-    # Choose latest vintages first; missing newest values never fall back to an
-    # older finite vintage. This ordering also applies to scaling and feedback.
-    latest <- r[!duplicated(r$target_end_date, fromLast = TRUE), , drop = FALSE]
-    peak_start <- settings$peak_start[[r$disease[1]]]
-    peak_end <- settings$peak_end[[r$disease[1]]]
-    window <- latest[latest$target_end_date >= peak_start &
-      latest$target_end_date <= peak_end & is.finite(latest$value), , drop = FALSE]
-    if (!nrow(window)) stop("No observations in the peak window for ", key)
-    best <- which.max(window$value)
-    tied <- which(window$value == window$value[best])
-    peak_date <- as.Date(as.numeric(window$target_end_date[best]), origin = "1970-01-01")
+    disease <- r$disease[1]
     location_name <- state.name[match(toupper(r$geo_value[1]), state.abb)]
     if (r$location[1] == "11") location_name <- "District of Columbia"
     if (r$location[1] == "72") location_name <- "Puerto Rico"
@@ -265,24 +297,58 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
     census <- epidatasets::state_census
     population <- census$pop[match(if (r$location[1] == "US") "00" else r$location[1], census$fips)]
     stopifnot(is.finite(population), population > 0)
-    locations[[key]] <- data.frame(disease = r$disease[1], location = r$location[1],
-      geo_value = r$geo_value[1], location_name, peak_date, peak_value = window$value[best],
-      boundary_peak = best %in% c(1L, nrow(window)), tied_peak_n = length(tied),
-      last_tied_date = max(window$target_end_date[tied]), n_window_weeks = nrow(window),
-      peak_start, peak_end)
+    # Choose latest vintages first; missing newest values never fall back to an
+    # older finite vintage. This ordering also applies to scaling and feedback.
+    latest <- r[!duplicated(r$target_end_date, fromLast = TRUE), , drop = FALSE]
+
+    # Peaks: the largest latest report of each tuning or evaluation (half) season,
+    # among the reported weeks of that (half) season; kept if its week was forecast.
+    half <- settings$half_season_peaks[[disease]]
+    part_of <- function(date) {
+      season <- season_of(date, settings$season_start_month)
+      if (half) paste(season, half_season_of(date, settings$season_start_month)) else season
+    }
+    latest_part <- part_of(latest$target_end_date)
+    location_peaks <- list()
+    for (part in unique(part_of(f$target_end_date))) {
+      window <- latest[latest_part == part & is.finite(latest$value), , drop = FALSE]
+      season <- season_of(window$target_end_date[1], settings$season_start_month)
+      if (!nrow(window) || periods(season) == "other") next
+      best <- which.max(window$value)
+      if (!window$target_end_date[best] %in% f$target_end_date) next
+      tied <- which(window$value == window$value[best])
+      location_peaks[[part]] <- data.frame(disease, location = r$location[1],
+        geo_value = r$geo_value[1], location_name, season,
+        half = if (half) half_season_of(window$target_end_date[best],
+          settings$season_start_month) else "season",
+        period = periods(season), peak_date = window$target_end_date[best],
+        peak_value = window$value[best], boundary_peak = best %in% c(1L, nrow(window)),
+        tied_peak_n = length(tied), last_tied_date = max(window$target_end_date[tied]),
+        window_start = min(window$target_end_date), window_end = max(window$target_end_date),
+        n_window_weeks = nrow(window))
+    }
+    location_peaks <- do.call(rbind, location_peaks)
+    if (is.null(location_peaks)) {
+      warning("No forecast peak for ", key, ": no before/after windows.", call. = FALSE)
+    } else {
+      location_peaks <- location_peaks[order(location_peaks$peak_date), , drop = FALSE]
+      rownames(location_peaks) <- NULL
+      peaks[[key]] <- location_peaks
+    }
 
     # One raw report lookup table is shared by this location's horizons.
     # The median identifies the issue/target rows; all quantiles enter base below.
     medians <- f[is.finite(f$truth_finalized) & f$quantile_level == .5, , drop = FALSE]
     issue_dates <- sort(unique(medians$reference_date))
+    issue_as_of <- round_as_of(disease, issue_dates)
     target_dates <- sort(unique(medians$target_end_date))
     available <- matrix(NA_real_, length(issue_dates), length(target_dates))
     report_targets <- split(seq_len(nrow(r)), as.character(r$target_end_date))
     for (j in seq_along(target_dates)) {
       rows <- report_targets[[as.character(target_dates[j])]]
       if (!length(rows)) next
-      # version <= issue - 1 is exactly the original scripts' availability rule.
-      latest_index <- findInterval(as.numeric(issue_dates) - 1, as.numeric(r$version[rows]))
+      # The latest report with version <= the round's as-of date.
+      latest_index <- findInterval(as.numeric(issue_as_of), as.numeric(r$version[rows]))
       found <- latest_index > 0L
       available[found, j] <- r$value[rows[latest_index[found]]]
     }
@@ -334,6 +400,12 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
             by_week = lapply(seq_len(nrow(z)), function(i) which(!is.na(used_at) & used_at == i)))
         })
 
+      season <- season_of(target_date, settings$season_start_month)
+      nearest <- if (is.null(location_peaks)) rep(NA_integer_, length(target_date)) else
+        apply(abs(outer(as.numeric(target_date), as.numeric(location_peaks$peak_date), "-")),
+          1, which.min)
+      relative_week <- as.numeric(target_date - location_peaks$peak_date[nearest]) / 7
+
       # Save the exact pre-first-forecast history, before filtering finalized
       # truth. Scripts 02/03 can use its median, maximum, or no scaling.
       scale_as_of <- min(fh$reference_date) - 1
@@ -352,21 +424,35 @@ prepare_peak_aligned_data <- function(forecasts, vintages, settings) {
         truth_latest = latest$value[match(target_date, latest$target_end_date)],
         # Online feedback per delay; get_case() in R/03_functions.R selects one.
         feedback_by_delay = feedback_by_delay,
-        peak_date = peak_date, relative_week = as.numeric(target_date - peak_date) / 7,
-        within_peak_window = target_date >= peak_start & target_date <= peak_end,
-        peak_start = peak_start, peak_end = peak_end,
-        peak_boundary = locations[[key]]$boundary_peak, tied_peak_n = length(tied),
+        # The base, and the reports' as-of date of each round (also for the feedback).
+        base_name = settings$base[[disease]], as_of = issue_as_of[issues],
+        # Season of the target week and its period: "tuning", "evaluation" or "other".
+        season = season, period = periods(season),
+        # This location's peaks, and per week the nearest one (hindsight labels only).
+        peaks = location_peaks, peak_index = nearest,
+        peak_date = location_peaks$peak_date[nearest], relative_week = relative_week,
         scale_history = history$value, scale_as_of = scale_as_of,
         scale_reference_start = if (nrow(history)) min(history$target_end_date) else as.Date(NA),
         scale_reference_end = if (nrow(history)) max(history$target_end_date) else as.Date(NA))
     }
   }
-  locations <- do.call(rbind, locations)
-  rownames(locations) <- NULL
-  list(settings = settings, locations = locations, cases = cases)
+  peaks <- do.call(rbind, peaks)
+  rownames(peaks) <- NULL
+  list(settings = settings, peaks = peaks, cases = cases)
 }
 
-peak_aligned <- prepare_peak_aligned_data(forecasts, vintages, peak_settings)
+# Base forecasts per disease (prepare_settings$base); windowed_seasonal_forecasts.parquet
+# is written by R/00_base_forecasts.R. Both tables have the same columns.
+base_forecasts <- bind_rows(lapply(names(prepare_settings$base), function(disease) {
+  name <- prepare_settings$base[[disease]]
+  table <- if (name == "cmu_hub") forecasts else
+    nanoparquet::read_parquet("windowed_seasonal_forecasts.parquet")
+  table <- table[table$disease == disease, ]
+  if (!nrow(table)) stop("No ", name, " forecasts for ", disease, ". See R/00_base_forecasts.R.")
+  if (!"generation_date" %in% names(table)) table$generation_date <- as.Date(NA)
+  table
+}))
+peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
 dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
 saveRDS(peak_aligned, "output/data/peak_aligned.rds")
 
