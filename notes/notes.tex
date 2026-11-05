@@ -3,7 +3,7 @@
 % Basic formatting and mathematics.
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage{lmodern}
+\usepackage{lmodern,microtype}
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{graphicx,booktabs,tabularx,enumitem}
@@ -35,9 +35,23 @@
 \maketitle
 
 \section{Studentized score}
-Writing the score as a signed residual gives the usual additive MultiQT correction. Studentizing that residual lead to multiplicatively scaled offsets in a MulitQT update or offsets in a scaled coordinate system. With changing scale, the accumulated correction as well as the new offset are scaled. Thus, a positive offset that was built up in a underprediction/ upswing phase can easily be removed after the peak (so the idea). With quantile specific scales the ordering constraint lead to the feasible set being a diagonally transformed shifted isotonic cone. This is still an isotnic cone and a closed convex polyhedron with a unique Euclidean projection (weighted isotonic regression). The gradient steps now optimize weighted quantile loss. The coverage criterion and calibration target are unchanged (strictly increasing invertible transformation). 
+Writing the score as a signed residual gives the usual additive MultiQT
+correction. Studentizing that residual gives multiplicatively scaled offsets,
+or, equivalently, offsets tracked in scaled coordinates. A changing scale
+rescales the accumulated correction as well as each new increment. If the
+scale decreases after a peak, it can shrink the outcome-scale contribution
+of a positive correction accumulated during an upswing. This is the
+motivation; the hidden accumulated state is not erased.
 
-For the standard MulitQT, \cite{multiqt}, et $\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$ and let
+With quantile-specific scales, the ordering constraint defines a diagonally
+transformed, shifted isotonic cone. This is generally not a cone itself, but
+it remains a nonempty closed convex polyhedron with a unique Euclidean
+projection, computable through weighted isotonic regression in forecast
+coordinates. The gradient steps use a weighted quantile loss. The coverage criterion and calibration target are unchanged (strictly increasing invertible transformation); calibration is not guaranteed.
+
+\subsection{Standard MultiQT}
+For standard MultiQT~\cite{multiqt}, let
+$\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$ and let
 $b_t=(b_t^\alpha)_{\alpha\in\A}$ be the base quantile forecasts available
 before observing $y_t$. Define
 \[
@@ -58,7 +72,10 @@ The original MultiQT procedure is
 Here $\tilde\theta_t$ is the hidden offset and $\theta_t$ is the played
 (projected) offset. Both have outcome units. 
 
-We can rewrite this update procedure in the score-threshold update by \cite{pid} with the resiudal as score:
+\subsection{Score-threshold tracking}
+To make the connection explicit, first consider the scalar score-threshold
+update of Angelopoulos et al.~\cite{pid}. We then recover the MultiQT
+update using the signed residual as the score.
 
 A score function $S_t(y)$ maps a candidate outcome to a real number.
 Let $r_t=S_t(y_t)$ be the observed score and $c_t$ its issued threshold.
@@ -67,8 +84,8 @@ The corresponding prediction set is
  \mathcal P_t=\{y:S_t(y)\le c_t\},
  \qquad \mathrm{err}_t=\ind\{r_t>c_t\}.
  \label{eq:score-set}
-\end{equation}.
-Then update according to
+\end{equation}
+For target miscoverage $\delta$, update according to
 \begin{align}
  c_{t+1}
  &=c_t+\eta(\mathrm{err}_t-\delta)\notag\\
@@ -76,17 +93,18 @@ Then update according to
  \label{eq:pid-update}
 \end{align}
 The second line follows from
-$\mathrm{err}_t=1-\ind\{r_t\le c_t\}$ and setting $\delta=1-\alpha$. The threshold $c_t$ is measured in score units and determines a prediction set through score inversion.
+$\mathrm{err}_t=1-\ind\{r_t\le c_t\}$ and setting $\delta=1-\alpha$.
+The threshold $c_t$ is measured in score units and determines a prediction
+set through score inversion.
 For the signed affine scores below, that set's endpoint is the outcome
 quantile forecast.
 
-With quantile loss and holding the observed score fixed: 
-
+Define the quantile loss by
 \begin{equation}
  \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
  \label{eq:pinball}
 \end{equation}
-
+Holding the observed score $r$ fixed, its subdifferential in the threshold is
 \begin{equation}
  \partial_z\rho_\alpha(z,r)=
  \begin{cases}
@@ -106,7 +124,8 @@ Thus $c_{t+1}=c_t-\eta g_\alpha(c_t;r_t)$ is
 \eqref{eq:pid-update}. The score's distance from the threshold affects the
 loss; the side of the threshold determines the update direction and size.
 
-For each level define the score and its observed value by
+\subsection{MultiQT in residual coordinates}
+For each level, define the score and its observed value by
 \begin{equation}
  S_t^{\std,\alpha}(y)=y-b_t^\alpha,
  \qquad r_t^{\std,\alpha}=y_t-b_t^\alpha.
@@ -126,7 +145,7 @@ Consequently,
  =\ind\{r_t^{\std,\alpha}\le\theta_t^\alpha\}.
  \label{eq:standard-coverage}
 \end{equation}
-and substitution into \eqref{eq:standard-update} gives
+Substitution into \eqref{eq:standard-update} gives
 \begin{equation}
  \boxed{
  \tilde\theta_{t+1}^\alpha
@@ -150,9 +169,10 @@ For a single level the constraint is all of $\R$, so the hidden and played
 states coincide and \eqref{eq:residual-update} is exactly scalar quantile
 tracking. For multiple levels, MultiQT uses a joint projection: evaluate
 $g_\alpha$ at the played $\theta_t^\alpha$, but apply the increment to the
-hidden $\tilde\theta_t^\alpha$. 
+hidden $\tilde\theta_t^\alpha$.
 
-Now replace the residual as score by the studentized residual:
+\subsection{Studentized residuals and their update}
+Now replace the residual score by the studentized residual.
 
 Choose finite scales $\sigma_t^\alpha>0$ from information available at
 issuance. They are fixed when the threshold is optimized. Define
@@ -173,13 +193,11 @@ units. Inverting the score gives
  \label{eq:student-inversion}
 \end{align}
 
-
 Standard MultiQT tracks the outcome-unit residual threshold
 $\theta_t^\alpha$ and issues $b_t^\alpha+\theta_t^\alpha$.
 Studentization tracks $u_t^\alpha$ and issues
 $b_t^\alpha+\sigma_t^\alpha u_t^\alpha$.
 The factor $\sigma_t^\alpha$ enters through the inverse score map.
-
 
 Apply the same quantile-loss construction to the studentized scores:
 \begin{align}
@@ -223,7 +241,7 @@ Retaining MultiQT's lazy update therefore gives
 \end{equation}
 Initialize $\tilde u_1=0$. The score is compared with the \emph{played}
 threshold; the increment is applied to the \emph{hidden} threshold.
-The next section specifies the projection that produces $u_t$.
+The next subsection specifies the projection that produces $u_t$.
 
 \begin{center}
 \renewcommand{\arraystretch}{1.25}
@@ -248,8 +266,7 @@ issued forecasts change. An unnormalized outcome-unit loss would instead
 have gradient $\sigma_t^\alpha(\cov_t^{\stu,\alpha}-\alpha)$ with respect
 to $u^\alpha$, and would define a different update.
 
-Now derive the monotone constraints or feasible space for projection:
-
+\subsection{Ordering constraints and projection}
 The constraint always concerns the outcome forecasts:
 $q_t^{\alpha_1}\le\cdots\le q_t^{\alpha_m}$.
 For the ordinary residual score, this requires
@@ -275,9 +292,12 @@ Then
  \label{eq:student-constraint}
 \end{equation}
 
-This is a closed convex set given by linear inequalities. It contains zero
-when $b_t\in\K$. In general $A_t^{-1}\K\ne\K$, so it cannot be simplified
-to $\K-A_t^{-1}b_t$ for unequal scales. Compared to original MultiQT with residual constraint $\theta+b_t\in\K$, we now have $A_tu+b_t\in\K$. But Euclidean projection is feasible.
+This is a closed convex polyhedron given by linear inequalities. It contains
+zero when $b_t\in\K$. The shift means that, like $\K-b_t$, it is generally
+not a cone. For unequal scales, $A_t^{-1}\K\ne\K$ in general, so the set
+cannot be simplified to $\K-A_t^{-1}b_t$. The standard constraint
+$b_t+\theta\in\K$ is replaced by $b_t+A_tu\in\K$, and the Euclidean
+projection is well defined:
 
 \begin{equation}
  u_t=\Pi_{C_t^\stu}(\tilde u_t),
@@ -310,6 +330,7 @@ The ordinary residual case has forecast-space metric $I$;
 the studentized case has metric $A_t^{-2}$. These weights follow from the
 chosen Euclidean geometry of the tracked score coordinates.
 
+\subsection{Common and constant scales}
 For $S_t^\alpha(y)=(y-b_t^\alpha)/\sigma_t$, we have $A_t=\sigma_t I$.
 Positive scalar multiplication preserves $\K$:
 \begin{equation}
@@ -329,14 +350,23 @@ is also equivalent after converting the state and learning rate:
  \label{eq:constant-common-scale}
 \end{equation}
 
-
-
-
-
-\section{question and ideas}
+\section{Questions and ideas}
 \begin{itemize}
   \item What other scores would be reasonable to consider, i.e. what property of the base forecast do I need to recalibrate? Instead of asking for 1d PIT calibration, could I ask for 1d hdr-calibration? With studentized scores, or in general strictly increasing and invertible scores, the coverage indicator and calibration target do not change
+
 \end{itemize}
 
+\begin{thebibliography}{2}
+\bibitem{multiqt}
+Tiffany Ding, Isaac Gibbs, and Ryan J. Tibshirani.
+\emph{Calibrated Multi-Level Quantile Forecasting}.
+arXiv:2512.23671v1, 2025.
+\href{https://arxiv.org/abs/2512.23671v1}{MultiQT paper}.
 
+\bibitem{pid}
+Anastasios N. Angelopoulos, Emmanuel J. Cand\`es, and Ryan J. Tibshirani.
+\emph{Conformal PID Control for Time Series Prediction}.
+Advances in Neural Information Processing Systems 36, 2023.
+\href{https://proceedings.neurips.cc/paper_files/paper/2023/file/47f2fad8c1111d07f83c91be7870f8db-Paper-Conference.pdf}{NeurIPS paper}.
+\end{thebibliography}
 \end{document}

@@ -23,3 +23,6 @@ slides/multivariate_calibration_files/
 
 # Local rendering checks
 tmp/
+
+# Delphi code, pinned packages and caches downloaded by R/00_base_forecasts.R.
+/external/
