@@ -297,6 +297,17 @@ summarize_scores <- function(scores, alpha, weeks) {
     quantile_loss = mean(loss), n_weeks = length(weeks))
 }
 
+# Plots: an NA row after every gap of more than max_days between consecutive dates, so
+# lines and polygons break there (e.g. May to November 2024, between the seasons).
+# Returns the dates and each further vector or matrix with the same rows.
+break_gaps <- function(dates, ..., max_days = 28) {
+  gap <- which(diff(as.numeric(dates)) > max_days)
+  index <- sort(c(seq_along(dates), gap + .5))
+  rows <- ifelse(index %% 1 == 0, index, NA)
+  c(list(dates = dates[rows]), lapply(list(...), function(x)
+    if (is.matrix(x)) x[rows, , drop = FALSE] else x[rows]))
+}
+
 # 4. MULTIQT: STANDARD AND STUDENTIZED -----------------------------------
 # Weighted isotonic regression (pool adjacent violators): the increasing q that
 # minimizes sum(w * (q - v)^2). Equal weights give isoreg().

@@ -133,10 +133,11 @@ settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
   settings$warmup_rounds, if (settings$replay_warmup) "released rows (warmup replayed)" else
   "released rows", "| Feedback delay", settings$feedback_delay, "week(s) | Scored against",
   score_truth_label(settings$score_target, settings$feedback_delay), "in",
-  score_units, "per location")
+  score_units)
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
-  overall = "Overall (full history)")
+  overall = paste0("Overall (seasons ", paste(prepared$settings$evaluation_seasons,
+    collapse = " and "), ")"))
 phase_colours <- c(before = "#D55E00", after = "#0072B2", overall = "gray25")
 phase_pch <- c(before = 17, after = 16, overall = 15)   # m = 0: open version of the symbol.
 phase_open_pch <- c(before = 2, after = 1, overall = 0)
@@ -319,15 +320,26 @@ colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(disp
   diff(range(log10(display_multipliers[-1]))))
 multiplier_colours <- c("orange", hcl.colors(320, "Viridis")[colour_index])
 # Both weekly diagnostics use the same quantile styles and peak marker.
-plot_season_diagnostic <- function(dates, values, limits, y_label, title, ticks,
-                                   peak_date, show_time = FALSE, zero_line = FALSE) {
+# Background of the time plots: the tuning season shaded, dotted lines at the peaks.
+mark_time <- function(case) {
+  tuning <- case$target_date[case$period == "tuning"]
+  usr <- par("usr")
+  if (length(tuning)) rect(min(tuning) - 3.5, usr[3], max(tuning) + 3.5, usr[4], col = "gray93",
+    border = NA)
+  abline(v = as.numeric(case$peaks$peak_date), col = "gray40", lty = 3)
+}
+plot_season_diagnostic <- function(case, values, limits, y_label, title, ticks,
+                                   show_time = FALSE, zero_line = FALSE) {
   par(mar = c(if (show_time) 3.5 else 1, 4.5, 2.5, 1))
-  matplot(dates, values, type = "b", col = alpha_colours, lty = 1, pch = c(1, 16, 17),
-    cex = 0.5, ylim = limits, xlim = range(dates), xaxt = "n", xaxs = "i",
-    xlab = if (show_time) "Target date" else "", ylab = y_label, main = title)
+  broken <- break_gaps(case$target_date, values)   # Lines break at the summer 2024 gap.
+  matplot(broken$dates, broken[[2]], type = "n", ylim = limits, xlim = range(case$target_date),
+    xaxt = "n", xaxs = "i", xlab = if (show_time) "Target date" else "", ylab = y_label,
+    main = title)
+  mark_time(case)
+  matplot(broken$dates, broken[[2]], type = "b", col = alpha_colours, lty = 1, pch = c(1, 16, 17),
+    cex = 0.5, add = TRUE)
   if (zero_line) abline(h = 0, col = "gray65", lty = 2)
   if (show_time) axis.Date(1, at = ticks, format = "%b\n%Y", cex.axis = 0.8)
-  abline(v = as.numeric(peak_date), col = "gray40", lty = 3)
 }
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
@@ -339,7 +351,7 @@ for (location in settings$location_ids) {
   case <- run$case
   columns <- match(plot_alpha, case$alpha)
   dates <- case$target_date
-  ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "3 months")
+  ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "6 months")
   observed <- score_truth(case, settings$score_target, settings$score_filled) / run$scaling$scale
   base <- case$base[, columns] / run$scaling$scale
   forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
@@ -353,28 +365,34 @@ for (location in settings$location_ids) {
     plot(dates, observed, type = "n", ylim = plot_limits, xlim = range(dates), xaxt = "n",
       xaxs = "i", xlab = "", ylab = paste0("Hospitalizations (", score_units, ")"),
       main = paste("Rate multiplier m =", key))
-    polygon(c(dates, rev(dates)), c(q[, 1], rev(q[, 3])),
-      col = adjustcolor(multiplier_colours[i], alpha.f = 0.2), border = NA)
-    # Thick median lines; shading spans the selected lower/upper quantiles.
-    matlines(dates, base, col = "gray50", lty = 2, lwd = c(1, 2, 1))
-    matlines(dates, q, col = multiplier_colours[i], lty = 1, lwd = c(1, 2, 1))
-    lines(dates, observed, type = "o", pch = 16, cex = 0.5)
-    abline(v = as.numeric(case$peak_date), lty = 3, col = "gray40")
-    legend("topright", c(truth_legend, "Original", "Fixed MultiQT", "Peak (retrospective)"),
+    mark_time(case)
+    # Thick median lines; shading spans the selected lower/upper quantiles. The polygon
+    # and lines break at the summer 2024 gap.
+    broken <- break_gaps(dates, q, base, observed)
+    for (part in split(seq_along(broken$dates), cumsum(is.na(broken$dates)))) {
+      part <- part[!is.na(broken$dates[part])]
+      polygon(c(broken$dates[part], rev(broken$dates[part])),
+        c(broken[[2]][part, 1], rev(broken[[2]][part, 3])),
+        col = adjustcolor(multiplier_colours[i], alpha.f = 0.2), border = NA)
+    }
+    matlines(broken$dates, broken[[3]], col = "gray50", lty = 2, lwd = c(1, 2, 1))
+    matlines(broken$dates, broken[[2]], col = multiplier_colours[i], lty = 1, lwd = c(1, 2, 1))
+    lines(broken$dates, broken[[4]], type = "o", pch = 16, cex = 0.5)
+    legend("topright", c(truth_legend, "Original", "Fixed MultiQT", "Peaks (retrospective)"),
       col = c("black", "gray50", multiplier_colours[i], "gray40"),
       lty = c(1, 2, 1, 3), pch = c(16, NA, NA, NA), cex = 0.7, bty = "n")
     residual <- sweep(run$weekly[[key]]$covered[, columns], 2, plot_alpha, "-")
-    plot_season_diagnostic(dates, residual, c(-1, 1), "Coverage - alpha",
-      "Weekly coverage residual", ticks, case$peak_date, zero_line = TRUE)
-    plot_season_diagnostic(dates, run$weekly[[key]]$loss[, columns], loss_limits,
-      "Quantile loss", "Weekly quantile loss", ticks, case$peak_date, show_time = TRUE)
+    plot_season_diagnostic(case, residual, c(-1, 1), "Coverage - alpha",
+      "Weekly coverage residual", ticks, zero_line = TRUE)
+    plot_season_diagnostic(case, run$weekly[[key]]$loss[, columns], loss_limits,
+      "Quantile loss", "Weekly quantile loss", ticks, show_time = TRUE)
   }
   mtext(paste(season_disease, "|", case$location_name, paste0("(", location, ")"),
     "| horizon", season_horizon, "|", min(dates), "to", max(dates)),
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
-    " | Scores/plots: counts / historical ", run$scaling$used, " (",
-    format(run$scaling$scale, trim = TRUE), ") | Vertical line: largest count in the peak window."),
+    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: largest count of ",
+    "each (half) season | Gray: tuning season (not scored)"),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
