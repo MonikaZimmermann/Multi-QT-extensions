@@ -15,7 +15,7 @@ multiqt_settings <- function() list(
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
-  feedback_delay = 2L,              # Weeks after the first report before MultiQT learns from a forecast.
+  feedback_delay = 0L,              # Weeks after the first report before MultiQT learns from a forecast.
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
   scale_floor = 1e-6,               # Guard on S0, sigma_t and the level scales, not each rate.
