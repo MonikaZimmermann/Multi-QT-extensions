@@ -1,26 +1,25 @@
 # Functions for scripts 02 and 04. Sourcing this file only defines functions:
 #   source("R/03_functions.R")
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
-# Forecasts are tracked in tracker units (log1p(counts) or counts); predictions,
-# scores and expert weights use counts / count_scale.
+# Forecasts are tracked in tracker units (log1p(counts) or counts); predictions
+# and scores use counts / count_scale (per 100k residents by default); the expert
+# weights learn from losses relative to the base's (weighting_loss_scale()).
 
 # 1. SHARED SETTINGS -----------------------------------------------------
 # Scripts 02 and 04 read these settings, so a change here applies to both.
 multiqt_settings <- function() list(
   location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
   horizons = -1:3,
-  transform = "identity",              # MultiQT tracks log1p(counts); "identity": raw counts.
-  scale_method = "max",             # Scores/plots/weighting losses: "max", "median" or "none".
+  transform = "log1p",              # MultiQT tracks log1p(counts); "identity": raw counts.
+  scale_method = "population",      # Scores/plots: per 100k residents ("population"), or "max", "median" or "none".
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
   feedback_delay = 2L,              # Weeks after the first report before MultiQT learns from a forecast.
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
-  scale_floor = 1e-6,               # Guard on the error scale, not each rate.
-  reference_multiplier = .05,       # Fixed MultiQT: eta = .05 * S0.
-  H = 8L,                           # Lookback for learned lambda; sharing uses 1/(2H).
-  lambda_start = 2.72,
+  scale_floor = 1e-6,               # Guard on S0, sigma_t and the level scales, not each rate.
+  # The methods' own settings (rates, H, lambda) are in method_parameters() (section 7).
   # Window lengths in weeks. No forecasts were issued 2025-10-25 to 2025-11-15, so
   # COVID after-peak windows of September 2025 peaks miss some weeks.
   weeks_before_peak = 8L,           # before = weeks -7..0: 8 weeks, including the peak week.
@@ -53,9 +52,17 @@ from_tracker <- function(x, transform) {
   if (transform == "log1p") expm1(x) else x
 }
 
-# Count scale for scores, plots and weighting losses; MultiQT never tracks it.
-# It uses only reports published before the location's first forecast.
-choose_count_scale <- function(case, method = "max") {
+# Count scale for scores and plots; MultiQT never tracks it, and the expert weights
+# divide it out (weighting_loss_scale()). "population": counts per 100k residents
+# (2019 census, stored by R/01_data_overview.R). "max" and "median": of the reports
+# published before the location's first forecast. "none": counts.
+choose_count_scale <- function(case, method = "population") {
+  if (method == "population") {
+    if (is.null(case$population)) stop("No population in the prepared data. ",
+      "Rerun Rscript R/01_data_overview.R.")
+    return(list(scale = case$population / 1e5, used = method, method = method,
+      reference_weeks = NA_integer_))
+  }
   history <- case$scale_history[is.finite(case$scale_history)]
   scale <- 1
   used <- method
@@ -72,6 +79,10 @@ choose_count_scale <- function(case, method = "max") {
   }
   list(scale = scale, used = used, method = method, reference_weeks = length(history))
 }
+count_scale_label <- function(method) switch(method,
+  population = "counts per 100k residents",
+  none = "counts",
+  paste0("counts / historical ", method))
 
 # Frozen error scale S0: Q90 of the absolute base errors in tracker units, pooled
 # over all quantile levels of the first `rounds` released rows. eta = m * S0.
@@ -102,35 +113,134 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
     raw_scale = raw_scale, scale = scale, rounds = rounds, floor = floor)
 }
 
-# Peak-relative windows, as a logical vector over the case's weeks. The peak is
-# the largest latest-reported count in the disease's peak window (hindsight label only).
-# before and after are window lengths: before = weeks -(before - 1)..0, including the
-# peak week, and after = weeks 1..after, inside the peak window; overall = all weeks.
-phase_weeks <- function(case, phase, before = 8L, after = 8L) {
+# Reference loss that makes the expert weights unit-free: the base's mean pinball loss
+# over the S0 rows (error_scale()), against the reports learned from, in counts /
+# count_scale like the weighting losses. exp_weights() divides its losses by it, so
+# lambda_start and fixed lambdas act alike under every count scale and location.
+# Like S0, it uses the S0 rows in hindsight when the warmup is replayed. 1 without S0
+# (then every week is warmup and the weights never update).
+weighting_loss_scale <- function(case, scale, count_scale = 1, floor = 1e-6) {
+  if (!scale$initialized) return(1)
+  rows <- scale$rows
+  error <- (case$feedback_observed[rows] - case$base[rows, , drop = FALSE]) / count_scale
+  loss <- pmax(error, 0) * rep(case$alpha, each = length(rows)) +
+    pmax(-error, 0) * rep(1 - case$alpha, each = length(rows))
+  max(floor, mean(loss))
+}
+
+# Scale sigma_t of the median residuals y - b (tracker units) for the studentized
+# median MultiQT: one estimate of their standard deviation per issue week.
+#   "residuals" root mean square of the last `window` median residuals released by
+#               issue week t (only released reports, no hindsight). NA until min_rows
+#               are released. A small window adapts quickly but is noisier. Reports
+#               arrive weeks after issue, so this scale still reacts to a wave late.
+#   "base"      the sd implied by the issued base: the width between its quantile `levels`
+#               divided by that of a standard normal, e.g. (q.9 - q.1) / 2.563 for the 80%
+#               interval. No feedback lag; a point-mass base gives the floor.
+# warmup_weeks: the weeks before the first sigma_t; the method issues the original base there.
+median_sigma <- function(case, method = "residuals", window = 5L, min_rows = 5L,
+                         floor = 1e-6, transform = "log1p", levels = c(.1, .9)) {
+  stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
+  base_level <- function(alpha) to_tracker(case$base[, match(alpha, case$alpha)], transform)
+  scale <- switch(method,
+    residuals = {
+      released <- unlist(case$feedback_by_week)              # Rows in release order.
+      residual <- to_tracker(case$feedback_observed[released], transform) -
+        base_level(.5)[released]
+      n_released <- cumsum(lengths(case$feedback_by_week))   # By each issue week.
+      vapply(n_released, function(k) if (k < min_rows) NA_real_ else
+        max(floor, sqrt(mean(residual[max(1L, k - window + 1L):k]^2))), numeric(1))
+    },
+    base = {
+      stopifnot(length(levels) == 2L, levels[1] < levels[2], all(levels %in% case$alpha))
+      pmax(floor, (base_level(levels[2]) - base_level(levels[1])) / diff(qnorm(levels)))
+    },
+    stop("Unknown median sigma ", method))
+  first <- match(TRUE, is.finite(scale))
+  list(scale = scale, warmup_weeks = if (is.na(first)) length(scale) else first - 1L,
+    method = method, window = window, min_rows = min_rows, floor = floor)
+}
+
+# Quantile-specific scales sigma_t^alpha (tracker units) for the studentized MultiQT on the
+# full base: the normal sd implied by the base's central interval between levels alpha and
+# 1 - alpha (at the median, the nearest pair). Symmetric in alpha and wider in heavier
+# tails. Returns a matrix [week x level]. Needs levels symmetric about .5.
+# Level scales often violate the research note's (sufficient) inward-flow condition, so
+# MultiQT's long-run calibration guarantee covers a common scale, not these scales.
+level_sigma <- function(case, floor = 1e-6, transform = "log1p") {
+  q <- to_tracker(case$base, transform)
+  m <- ncol(q)
+  stopifnot(isTRUE(all.equal(case$alpha, 1 - rev(case$alpha))))
+  lower <- pmin(seq_len(m), m + 1L - seq_len(m))     # Mirror pairs by index, not 1 - alpha.
+  lower[lower == m + 1L - lower] <- lower[lower == m + 1L - lower] - 1L
+  upper <- m + 1L - lower
+  z <- qnorm(case$alpha)
+  scale <- pmax((q[, upper, drop = FALSE] - q[, lower, drop = FALSE]) /
+    rep(z[upper] - z[lower], each = nrow(q)), floor)
+  dimnames(scale) <- dimnames(q)
+  scale
+}
+
+# Quantile-specific scales sigma_t^alpha from recent residuals (tracker units): for every
+# level, the RMS of y_s - b_s^alpha over the last `window` rows s released by issue week t
+# (no hindsight). Rows are NA until min_rows are released, like median_sigma("residuals").
+# Returns a matrix [week x level]. Like level_sigma(), no calibration guarantee.
+level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
+                                 transform = "log1p") {
+  stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
+  released <- unlist(case$feedback_by_week)                # Rows in release order.
+  residual <- to_tracker(case$feedback_observed[released], transform) -
+    to_tracker(case$base[released, , drop = FALSE], transform)
+  n_released <- cumsum(lengths(case$feedback_by_week))     # By each issue week.
+  scale <- t(vapply(n_released, function(k) if (k < min_rows) rep(NA_real_, ncol(residual)) else
+    pmax(sqrt(colMeans(residual[max(1L, k - window + 1L):k, , drop = FALSE]^2)), floor),
+    numeric(ncol(residual))))
+  dimnames(scale) <- dimnames(case$base)
+  scale
+}
+
+# Peak-relative windows, as a logical vector over the case's weeks, within the given
+# period(s) of the target week: "evaluation" (2024/25 and 2025/26 by default),
+# "tuning" (2023/24) or "other". A peak is the largest latest-reported count of a
+# season or, for covid, a half season (R/01_data_overview.R; hindsight label only);
+# each week counts from its nearest peak. before and after are window lengths:
+# before = weeks -(before - 1)..0, including the peak week, and after = weeks
+# 1..after; overall = all weeks of the period(s).
+phase_weeks <- function(case, phase, before = 8L, after = 8L, period = "evaluation") {
   week <- case$relative_week
+  in_period <- case$period %in% period
   switch(phase,
-    before = case$within_peak_window & week > -before & week <= 0,
-    after = case$within_peak_window & week >= 1 & week <= after,
-    overall = rep(TRUE, length(week)),
+    before = in_period & week > -before & week <= 0,
+    after = in_period & week >= 1 & week <= after,
+    overall = in_period,
     stop("Unknown phase ", phase))
 }
 
-# A maximum on the window edge may be the tail of an earlier wave, and missing
-# weeks shorten the before/after windows. Report both, but keep the location.
-check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest) {
+# A maximum on the edge of its (half) season may be the tail of another wave, and
+# missing weeks shorten the before/after windows. Report both, but keep the peak.
+check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest,
+                              period = "evaluation") {
   label <- paste0(case$disease, " | ", case$location_name, " (", case$location,
     ") | horizon ", case$horizon)
-  if (case$peak_boundary)
-    warning(label, ": maximum on the edge of the peak window (",
-      case$peak_date, "); location kept.", call. = FALSE, immediate. = TRUE)
   weeks <- seq.int(1L - before, after)
-  i <- match(weeks, case$relative_week)
-  ok <- !is.na(i)
-  ok[ok] <- case$within_peak_window[i[ok]] & is.finite(truth[i[ok]])
-  if (!all(ok))
-    warning(label, ": no scored target in peak-relative week(s) ",
-      paste(weeks[!ok], collapse = ","), "; location kept.", call. = FALSE, immediate. = TRUE)
-  invisible(all(ok) && !case$peak_boundary)
+  ok_all <- TRUE
+  for (k in which(case$peaks$period %in% period)) {
+    peak <- case$peaks[k, ]
+    peak_label <- paste0(label, " | ", peak$season,
+      if (peak$half != "season") paste0(" ", peak$half), " peak ", peak$peak_date)
+    if (peak$boundary_peak)
+      warning(peak_label, ": maximum on the edge of its (half) season; peak kept.",
+        call. = FALSE, immediate. = TRUE)
+    rows <- which(case$peak_index == k)
+    i <- rows[match(weeks, case$relative_week[rows])]
+    ok <- !is.na(i)
+    ok[ok] <- case$period[i[ok]] %in% period & is.finite(truth[i[ok]])
+    if (!all(ok))
+      warning(peak_label, ": no scored target in peak-relative week(s) ",
+        paste(weeks[!ok], collapse = ","), "; peak kept.", call. = FALSE, immediate. = TRUE)
+    ok_all <- ok_all && all(ok) && !peak$boundary_peak
+  }
+  invisible(ok_all)
 }
 
 # 3. SCORING --------------------------------------------------------------
@@ -155,9 +265,17 @@ score_truth_label <- function(target, delay = 0L) switch(target,
 # truth per week. Pass counts with their count_scale to compare coverage on the
 # count scale (exact integer ties stay ties); the loss is in counts / count_scale.
 # The pinball loss penalizes underprediction by alpha, overprediction by 1 - alpha.
-score_quantiles <- function(q, truth, alpha, count_scale = 1) {
+# score_scale "log": the loss of log(counts + 1) instead (q and truth in counts;
+# count_scale unused), which scores relative errors and growth rates (Bosse et al.
+# 2023, PLOS Comput Biol 19(8): e1011393). Negative quantiles count as 0 there.
+# Quantiles commute with the monotone log, so the score stays proper; coverage is
+# the same on both scales.
+score_quantiles <- function(q, truth, alpha, count_scale = 1, score_scale = "natural") {
   stopifnot(ncol(q) == length(alpha), length(truth) == nrow(q))
-  error <- truth / count_scale - q / count_scale
+  error <- switch(score_scale,
+    natural = truth / count_scale - q / count_scale,
+    log = log1p(truth) - log1p(pmax(q, 0)),
+    stop("Unknown score scale ", score_scale))
   list(covered = truth <= q,
     loss = pmax(error, 0) * rep(alpha, each = nrow(q)) +
       pmax(-error, 0) * rep(1 - alpha, each = nrow(q)))
@@ -179,7 +297,37 @@ summarize_scores <- function(scores, alpha, weeks) {
     quantile_loss = mean(loss), n_weeks = length(weeks))
 }
 
-# 4. STANDARD MULTIQT -----------------------------------------------------
+# Plots: an NA row after every gap of more than max_days between consecutive dates, so
+# lines and polygons break there (e.g. May to November 2024, between the seasons).
+# Returns the dates and each further vector or matrix with the same rows.
+break_gaps <- function(dates, ..., max_days = 28) {
+  gap <- which(diff(as.numeric(dates)) > max_days)
+  index <- sort(c(seq_along(dates), gap + .5))
+  rows <- ifelse(index %% 1 == 0, index, NA)
+  c(list(dates = dates[rows]), lapply(list(...), function(x)
+    if (is.matrix(x)) x[rows, , drop = FALSE] else x[rows]))
+}
+
+# 4. MULTIQT: STANDARD AND STUDENTIZED -----------------------------------
+# Weighted isotonic regression (pool adjacent violators): the increasing q that
+# minimizes sum(w * (q - v)^2). Equal weights give isoreg().
+weighted_isoreg <- function(v, w) {
+  value <- weight <- numeric(length(v))
+  size <- integer(length(v))
+  k <- 0L
+  for (i in seq_along(v)) {
+    k <- k + 1L
+    value[k] <- v[i]; weight[k] <- w[i]; size[k] <- 1L
+    while (k > 1L && value[k - 1L] > value[k]) {         # Pool the violating neighbours.
+      total <- weight[k - 1L] + weight[k]
+      value[k - 1L] <- (weight[k - 1L] * value[k - 1L] + weight[k] * value[k]) / total
+      weight[k - 1L] <- total; size[k - 1L] <- size[k - 1L] + size[k]
+      k <- k - 1L
+    }
+  }
+  rep(value[seq_len(k)], size[seq_len(k)])
+}
+
 # base: issued quantiles [week x level] in counts; feedback: reported counts at
 # the case's feedback delay; feedback_by_week[[w]]: the earlier rows whose feedback
 # is released at issue week w. eta: one rate, or one per week, in tracker units. The first
@@ -187,21 +335,37 @@ summarize_scores <- function(scores, alpha, weeks) {
 # Optional leaky shift of all levels (leak = 0: standard MultiQT): each report adds
 # leak * mean(alpha - covered); the shift is multiplied by decay (one value, or one
 # per week) at every issue week and capped at +-leak_bound.
+# Optional studentized offsets (sigma = 1, start = 0: standard MultiQT): week w issues
+# base + sigma[w] * offsets. sigma: one value, or one per week, in tracker units; then
+# offsets and eta are in units of sigma, and a change of sigma rescales the whole
+# accumulated offset (the leaky shift stays in tracker units). A matrix sigma
+# [week x level] gives each level its own scale; the projection is then weighted
+# isotonic regression with weights 1 / sigma^2 (Euclidean in units of sigma).
+# start: the offsets before the first update, one value or one per level.
 # Returns the adjusted forecasts in counts.
 multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
                     warmup_weeks = 0L, transform = "log1p",
-                    leak = 0, decay = .5, leak_bound = .2) {
+                    leak = 0, decay = .5, leak_bound = .2, sigma = 1, start = 0) {
   n <- nrow(base)
-  # Nothing to learn (eta = 0, or S0 never initialized): keep the exact base.
-  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0)) return(base)
+  # Only warmup weeks (e.g. S0 never initialized), or nothing to learn and start = 0:
+  # keep the exact base.
+  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0 && isTRUE(all(start == 0))))
+    return(base)
   if (length(eta) == 1L) eta <- rep(eta, n)
   if (length(decay) == 1L) decay <- rep(decay, n)
+  if (length(sigma) == 1L) sigma <- rep(sigma, n)
+  by_level <- is.matrix(sigma)              # One scale per level: weighted projection.
   base_tracker <- to_tracker(base, transform)
   feedback_tracker <- to_tracker(feedback, transform)
+  warmup <- seq_len(n) <= warmup_weeks      # sigma may be missing in warmup weeks.
+  issued_sigma <- if (by_level) sigma[!warmup, , drop = FALSE] else sigma[!warmup]
   stopifnot(ncol(base) == length(alpha), length(feedback) == n,
     length(feedback_by_week) == n, length(eta) == n, all(is.finite(eta)), all(eta >= 0),
+    NROW(sigma) == n, !by_level || ncol(sigma) == length(alpha),
+    all(is.finite(issued_sigma) & issued_sigma > 0),
+    length(start) %in% c(1L, length(alpha)), all(is.finite(start)),
     all(is.finite(base_tracker)), all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
-  offsets <- numeric(length(alpha))
+  offsets <- rep_len(start, length(alpha))
   shift <- 0
   q_tracker <- base_tracker
   for (week in seq_len(n)) {
@@ -217,7 +381,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     shift <- min(leak_bound, max(-leak_bound, shift))
     # Project only the issued forecasts, NOT the offsets ("lazy" MultiQT).
     # isoreg restores quantile order: e.g., (12,10) becomes (11,11).
-    q_tracker[week, ] <- isoreg(base_tracker[week, ] + offsets + shift)$yf
+    # Weights (min sigma / sigma)^2: the same projection as 1 / sigma^2, without overflow.
+    q_tracker[week, ] <- if (by_level) weighted_isoreg(base_tracker[week, ] +
+      sigma[week, ] * offsets + shift, (min(sigma[week, ]) / sigma[week, ])^2) else
+      isoreg(base_tracker[week, ] + sigma[week] * offsets + shift)$yf
   }
   # Do not clip negative predictions: that would change the issued coverage indicators.
   q <- from_tracker(q_tracker, transform)
@@ -225,6 +392,24 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
   unchanged <- q_tracker == base_tracker
   q[unchanged] <- base[unchanged]
   q
+}
+
+# Studentized median MultiQT: the base is reduced to its median b_t, and week t issues
+# b_t + sigma_t * offsets at every level (tracker units; isoreg restores the order).
+# Coverage and update are those of multiqt(): 1{y_s <= q_s} = 1{(y_s - b_s) / sigma_s <=
+# issued offset_s}, so offsets and eta are in units of sigma. sigma: one value, or
+# sigma_t per week (median_sigma()). start: the offsets before the first update, e.g.
+# qnorm(alpha), a normal forecast with sd sigma_t, or qt(alpha, window) for sigma_t from
+# the RMS of `window` residuals. The first warmup_weeks forecasts keep the original base,
+# like every method; reports on them released later are compared with it.
+# Returns the adjusted forecasts in counts.
+median_multiqt <- function(case, eta, sigma, start, warmup_weeks = 0L, transform = "log1p") {
+  median_base <- case$base
+  median_base[] <- case$base[, match(.5, case$alpha)]   # Every level: the base median.
+  warmup <- seq_len(nrow(median_base)) <= warmup_weeks
+  median_base[warmup, ] <- case$base[warmup, ]
+  multiqt(median_base, case$feedback_observed, case$feedback_by_week, case$alpha, eta,
+    warmup_weeks, transform, sigma = sigma, start = start)
 }
 
 # 5. EXPERT CREATORS ------------------------------------------------------
@@ -338,7 +523,9 @@ select_experts <- function(experts, keep) list(
 # https://github.com/isgibbs/DtACI/blob/main/DtACI.R
 # experts: object from make_rate_experts() or make_restart_experts().
 # base, feedback: counts / count_scale; the weights learn from pinball losses in
-#   these units, released by feedback_by_week like the MultiQT updates.
+#   these units divided by loss_scale (weighting_loss_scale(): the base's mean loss
+#   over the S0 rows), released by feedback_by_week like the MultiQT updates. The
+#   division makes lambda unit-free: the count scale does not change the weights.
 # lambda: "learned" starts at lambda_start and, after H updates, uses
 #   sqrt((log(2 K H) + 1) / sum of the previous H second moments); a number fixes
 #   lambda; 0 gives the uniform average of the active experts.
@@ -354,7 +541,8 @@ select_experts <- function(experts, keep) list(
 # [week x expert x level, or x 1 if common] and the lambda used at each issue week.
 exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
                         lambda = "learned", sharing = TRUE, H = 8L, share = 1 / (2 * H),
-                        per_quantile = TRUE, lambda_start = 2.72, warmup_weeks = 0L) {
+                        per_quantile = TRUE, lambda_start = 2.72, warmup_weeks = 0L,
+                        loss_scale = 1) {
   forecasts <- experts$forecasts
   birth <- experts$birth_week
   n <- nrow(base); k <- length(birth); a <- length(alpha)
@@ -362,7 +550,8 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   stopifnot(identical(dim(forecasts), c(n, k, a)), length(feedback) == n,
     length(feedback_by_week) == n, learned || (is.numeric(lambda) &&
       length(lambda) == 1L && is.finite(lambda) && lambda >= 0),
-    !sharing || (is.finite(share) && share > 0 && share <= 1))
+    !sharing || (is.finite(share) && share > 0 && share <= 1),
+    length(loss_scale) == 1L, is.finite(loss_scale), loss_scale > 0)
   learn <- learned || lambda > 0
   columns <- if (per_quantile) a else 1L     # One weight vector per level, or one for all.
   learning_rate <- rep(if (learned) lambda_start else lambda, columns)
@@ -394,8 +583,8 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
         # If recent losses are all zero, keep the previous finite learning rate.
       }
       error <- feedback[past] - matrix(forecasts[past, eligible, ], length(eligible), a)
-      loss <- pmax(error, 0) * rep(alpha, each = length(eligible)) +
-        pmax(-error, 0) * rep(1 - alpha, each = length(eligible))
+      loss <- (pmax(error, 0) * rep(alpha, each = length(eligible)) +
+        pmax(-error, 0) * rep(1 - alpha, each = length(eligible))) / loss_scale
       if (!per_quantile) loss <- matrix(rowMeans(loss), ncol = 1L)
       stopifnot(all(is.finite(loss)))
       # Experts without a forecast for this row sleep and keep their mass.
@@ -449,4 +638,229 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
     lambda_used[week, ] <- learning_rate
   }
   list(q = q, weights = weights, lambda = lambda_used)
+}
+
+# 7. THE RECALIBRATION METHODS OF SCRIPTS 04 AND 05 ----------------------------
+# Settings of the methods. Rates are multiples m of S0 (eta = m * S0, so they act alike
+# for both trackers and every location), except median_rate (in units of sigma_t) and
+# the diverse leak and damping (tracker units, sized for log1p). by_method overrides a
+# setting for one method, e.g. list(shared = list(H = 4L)); R/05_tuning.R tunes one
+# setting per method (tuned_setting) on the tuning season.
+method_parameters <- function() list(
+  fixed_multiplier = .05,                # Fixed MultiQT: eta = m * S0.
+  # Slope rate: eta_t = min(cap * S0, min * S0 + |weekly slope of the base median|).
+  slope_min_multiplier = .004, slope_cap_multiplier = .08,
+  H = 8L, lambda_start = 2.72,           # Learned lambda (exp_weights()); sharing uses 1/(2H).
+  outer_multiplier = .004,               # Outer MultiQT on a mixture's own forecasts.
+  # Weekly restarts: a fresh copy per multiplier at every issue week, fixed meta-rate.
+  restart_multiplier = .05, restart_multipliers = c(.01, .05, .2), restart_lambda = 2.72,
+  # Diverse experts: slow MultiQT (eta = m * S0) on differently corrected starting forecasts.
+  diverse_slow_multiplier = .008, diverse_leak = .2, diverse_damping = c(-.5, .5, 1),
+  diverse_widths = c(.75, 1.5),
+  # Studentized MultiQT: sigma_t from the RMS of the last median_window released
+  # residuals (the base until median_min_rows exist) or from the base width between
+  # median_base_levels; median_start: "normal" or "t" start of the residual median methods.
+  median_window = 5L, median_min_rows = 5L, median_base_levels = c(.1, .9),
+  median_rate = .1, median_start = "normal",
+  by_method = list())
+method_parameter <- function(params, method, name) {
+  value <- params$by_method[[method]][[name]]
+  if (is.null(value)) params[[name]] else value
+}
+# The values R/05_tuning.R chose for one disease and tracker transform, as by_method
+# overrides of params; the defaults where none were tuned (with a message).
+tuned_parameters <- function(disease, transform, params = method_parameters(),
+                             path = "output/results/tuning/tuned_settings.csv") {
+  tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
+    transform = character())
+  tuned <- tuned[tuned$disease == disease & tuned$transform == transform, , drop = FALSE]
+  if (!nrow(tuned)) message("No tuned settings for ", disease, " (", transform, ") in ", path,
+    ": the defaults of method_parameters(). Run Rscript R/05_tuning.R.")
+  for (i in seq_len(nrow(tuned)))
+    params$by_method[[tuned$method[i]]][[tuned$setting[i]]] <- tuned$value[i]
+  params
+}
+# The setting R/05_tuning.R tunes for each method; the other methods have none.
+tuned_setting <- c(fixed = "fixed_multiplier", absolute_slope = "slope_min_multiplier",
+  weighted = "H", weighted_common = "H", shared = "H", shared_common = "H",
+  restart_weighted = "restart_lambda", restart_grid = "restart_lambda",
+  diverse_uniform = "diverse_slow_multiplier", diverse_shared = "diverse_slow_multiplier",
+  diverse_shared_common = "diverse_slow_multiplier",
+  studentized = "median_rate", studentized_base = "median_rate", median_constant = "median_rate",
+  studentized_full = "median_rate", studentized_levels = "median_rate",
+  studentized_level_rms = "median_rate",
+  shared_outer = "outer_multiplier", shared_common_outer = "outer_multiplier",
+  restart_uniform_outer = "outer_multiplier", restart_weighted_outer = "outer_multiplier",
+  restart_grid_outer = "outer_multiplier")
+method_names <- c("original", "fixed", "absolute_slope", "studentized", "studentized_base",
+  "median_constant", "studentized_full", "studentized_levels", "studentized_level_rms",
+  "oracle_target", "uniform", "weighted", "weighted_common", "shared", "shared_common",
+  "restart_uniform", "restart_weighted", "restart_grid", "diverse_uniform", "diverse_shared",
+  "diverse_shared_common", "restart_persistent", "shared_outer", "shared_common_outer",
+  "restart_uniform_outer", "restart_weighted_outer", "restart_grid_outer")
+# The mixture each outer MultiQT corrects.
+outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
+  restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted",
+  restart_grid_outer = "restart_grid")
+
+# Issue the forecasts of the given methods for one case, with every location fitted
+# independently: offsets, expert weights, lambda and loss history start fresh. Returns
+# the predictions in counts / count_scale (original first) and what 04 plots and saves.
+apply_methods <- function(case, settings, params = method_parameters(), methods = method_names) {
+  par <- function(method, name) method_parameter(params, method, name)
+  methods <- union(methods, outer_inner[intersect(names(outer_inner), methods)])
+  want <- function(...) any(c(...) %in% methods)
+  transform <- settings$transform
+  scaling <- choose_count_scale(case, settings$scale_method)
+  count_scale <- scaling$scale
+  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, transform,
+    settings$replay_warmup)
+  # Keep stored predictions and the scoring/weighting inputs in counts / count_scale.
+  base <- case$base / count_scale
+  feedback <- case$feedback_observed / count_scale
+  adjust <- function(counts, eta, warmup_weeks) multiqt(counts, case$feedback_observed,
+    case$feedback_by_week, case$alpha, eta, warmup_weeks, transform) / count_scale
+
+  # One tracker: fixed rate, slope rate or studentized.
+  # Fixed MultiQT: eta = m * S0, using the same frozen scale as the experts.
+  predictions <- list(original = base)
+  if (want("fixed", "oracle_target"))
+    predictions$fixed <- adjust(case$base, par("fixed", "fixed_multiplier") * s0$scale,
+      s0$warmup_weeks)
+  # Slope rate: only the current base forecast's weekly slope in tracker units, never
+  # future counts, with a floor and a cap relative to S0.
+  if (want("absolute_slope")) {
+    median_tracker <- to_tracker(case$base[, match(.5, case$alpha)], transform)
+    slope <- c(0, diff(median_tracker) / (as.numeric(diff(case$reference_date)) / 7))
+    predictions$absolute_slope <- adjust(case$base,
+      pmin(par("absolute_slope", "slope_cap_multiplier") * s0$scale,
+        par("absolute_slope", "slope_min_multiplier") * s0$scale + abs(slope)), s0$warmup_weeks)
+  }
+  # Studentized median MultiQT (median_multiqt()): Fixed MultiQT's coverage indicator
+  # and update on the base median b_t, issued as b_t + sigma_t * offsets.
+  sigma <- median_sigma(case, "residuals", params$median_window, params$median_min_rows,
+    settings$scale_floor, transform)
+  base_sigma <- median_sigma(case, "base", floor = settings$scale_floor, transform = transform,
+    levels = params$median_base_levels)
+  # The original base is issued until sigma_t exists (and during the S0 warmup without replay).
+  median_warmup_weeks <- max(s0$warmup_weeks, sigma$warmup_weeks)
+  # Offsets before the first update: normal quantiles, or t quantiles of a residual divided
+  # by the RMS of median_window other normal residuals (wider tails for small windows).
+  start <- switch(params$median_start, normal = qnorm(case$alpha),
+    t = qt(case$alpha, params$median_window), stop("Unknown median start ", params$median_start))
+  if (want("studentized"))
+    predictions$studentized <- median_multiqt(case, par("studentized", "median_rate"),
+      sigma$scale, start, median_warmup_weeks, transform) / count_scale
+  # sigma_t from the width of the base: no feedback lag, so no warmup beyond S0's. This
+  # sigma_t is a normal sd, so it starts from normal quantiles: the base's own interval.
+  if (want("studentized_base"))
+    predictions$studentized_base <- median_multiqt(case, par("studentized_base", "median_rate"),
+      base_sigma$scale, qnorm(case$alpha), max(s0$warmup_weeks, base_sigma$warmup_weeks),
+      transform) / count_scale
+  # Residual sigma frozen at its first issued value: additive MultiQT on the median.
+  # It separates reducing the base to its median from studentizing.
+  constant_sigma <- sigma$scale[median_warmup_weeks + 1L]
+  if (want("median_constant"))
+    predictions$median_constant <- median_multiqt(case, par("median_constant", "median_rate"),
+      constant_sigma, start, median_warmup_weeks, transform) / count_scale
+  # Studentized MultiQT on the full base: offsets start at 0 (the base) and are issued as
+  # b_t^alpha + sigma_t * offsets, with one scale per week (the base width; isoreg) or one
+  # per level (weighted isoreg): the normal sd of the base's central interval at that
+  # level, or the RMS of that level's recent residuals y - b^alpha.
+  full <- function(method, scales, warmup_weeks = s0$warmup_weeks) multiqt(case$base,
+    case$feedback_observed, case$feedback_by_week, case$alpha, par(method, "median_rate"),
+    warmup_weeks, transform, sigma = scales) / count_scale
+  if (want("studentized_full"))
+    predictions$studentized_full <- full("studentized_full", base_sigma$scale)
+  level_scales <- if (want("studentized_levels")) level_sigma(case, settings$scale_floor, transform)
+  if (want("studentized_levels"))
+    predictions$studentized_levels <- full("studentized_levels", level_scales)
+  # The residual scales exist once median_min_rows residuals are released, as for the median.
+  if (want("studentized_level_rms"))
+    predictions$studentized_level_rms <- full("studentized_level_rms",
+      level_residual_sigma(case, params$median_window, params$median_min_rows,
+        settings$scale_floor, transform), median_warmup_weeks)
+
+  # What if we knew the true peak? Hindsight benchmark: bypass correction for postpeak
+  # targets, even if issued prepeak (each week's nearest peak). Setting eta=0 instead
+  # would only freeze the accumulated offset.
+  if (want("oracle_target")) {
+    predictions$oracle_target <- predictions$fixed
+    after_peak <- which(case$target_date > case$peak_date)
+    predictions$oracle_target[after_peak, ] <- base[after_peak, ]
+  }
+
+  # Several trackers: weight their forecasts. Rate grid: one persistent expert per
+  # multiplier. Restarts: a fresh copy per multiplier at every issue week after warmup;
+  # no permanent base expert. Diverse experts: the base plus slow MultiQT on differently
+  # corrected bases. Each weighting learns from released pinball losses of issued
+  # forecasts, divided by the base's mean loss over the S0 rows, so the count scale does
+  # not change the weights. Their deterministic average still uses LEARNED weights;
+  # equal averaging is a control.
+  loss_scale <- weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
+  weigh <- function(method, experts, ...) exp_weights(experts, base, feedback,
+    case$feedback_by_week, case$alpha, H = par(method, "H"),
+    lambda_start = par(method, "lambda_start"), warmup_weeks = s0$warmup_weeks,
+    loss_scale = loss_scale, ...)
+  mixtures <- list()
+  rate_experts <- restart_experts <- fixed_restarts <- NULL
+  if (want("uniform", "weighted", "weighted_common", "shared", "shared_common")) {
+    rate_experts <- make_rate_experts(case, settings$expert_multipliers, s0, count_scale, transform)
+    if (want("uniform")) mixtures$uniform <- weigh("uniform", rate_experts, lambda = 0)
+    if (want("weighted")) mixtures$weighted <- weigh("weighted", rate_experts, sharing = FALSE)
+    if (want("weighted_common")) mixtures$weighted_common <- weigh("weighted_common",
+      rate_experts, sharing = FALSE, per_quantile = FALSE)
+    if (want("shared")) mixtures$shared <- weigh("shared", rate_experts)
+    if (want("shared_common")) mixtures$shared_common <- weigh("shared_common", rate_experts,
+      per_quantile = FALSE)
+  }
+  if (want("restart_uniform", "restart_weighted", "restart_grid", "restart_persistent")) {
+    restart_experts <- make_restart_experts(case, params$restart_multipliers, s0, count_scale,
+      transform)
+    fixed_restarts <- select_experts(restart_experts,
+      restart_experts$experts$multiplier == params$restart_multiplier)
+    if (want("restart_uniform"))
+      mixtures$restart_uniform <- weigh("restart_uniform", fixed_restarts, lambda = 0)
+    if (want("restart_weighted")) mixtures$restart_weighted <- weigh("restart_weighted",
+      fixed_restarts, lambda = par("restart_weighted", "restart_lambda"))
+    if (want("restart_grid")) mixtures$restart_grid <- weigh("restart_grid", restart_experts,
+      lambda = par("restart_grid", "restart_lambda"))
+  }
+  # One diverse bank per slow rate, shared by the methods that use it.
+  diverse_banks <- list()
+  diverse <- function(method) {
+    m <- par(method, "diverse_slow_multiplier")
+    key <- format(m, digits = 15)
+    if (is.null(diverse_banks[[key]])) diverse_banks[[key]] <<- make_diverse_experts(case, s0,
+      count_scale, transform, m * s0$scale, params$diverse_leak, params$diverse_damping,
+      params$diverse_widths)
+    diverse_banks[[key]]
+  }
+  if (want("diverse_uniform"))
+    mixtures$diverse_uniform <- weigh("diverse_uniform", diverse("diverse_uniform"), lambda = 0)
+  if (want("diverse_shared"))
+    mixtures$diverse_shared <- weigh("diverse_shared", diverse("diverse_shared"))
+  if (want("diverse_shared_common")) mixtures$diverse_shared_common <-
+    weigh("diverse_shared_common", diverse("diverse_shared_common"), per_quantile = FALSE)
+  for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
+  # The first-start control has exactly the same birth rule as the restart copies.
+  if (want("restart_persistent")) {
+    predictions$restart_persistent <- base
+    if (length(fixed_restarts$birth_week)) {
+      issued <- seq.int(fixed_restarts$birth_week[1], nrow(base))
+      predictions$restart_persistent[issued, ] <- fixed_restarts$forecasts[issued, 1, ]
+    }
+  }
+  # Each outer tracker has its own offsets and learns from its OWN final forecasts.
+  # Its state stays continuous when new restart copies join the underlying mixture.
+  for (method in intersect(names(outer_inner), methods))
+    predictions[[method]] <- adjust(predictions[[outer_inner[[method]]]] * count_scale,
+      par(method, "outer_multiplier") * s0$scale, s0$warmup_weeks)
+  predictions <- predictions[intersect(method_names, names(predictions))]
+  list(case = case, scaling = scaling, s0 = s0, sigma = sigma, base_sigma = base_sigma,
+    level_scales = level_scales, median_warmup_weeks = median_warmup_weeks,
+    constant_sigma = constant_sigma, predictions = predictions,
+    weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
+    rate_experts = rate_experts, restart_experts = restart_experts,
+    diverse_experts = if (length(diverse_banks)) diverse_banks[[1]])
 }
