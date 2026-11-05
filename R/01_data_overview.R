@@ -191,6 +191,10 @@ print(available_then)
 #   ending by this date get a first report with their latest value on the Wednesday
 #   after the week (target_end_date + 4), so in 2023/24 MultiQT learns from final
 #   counts, as the windowed_seasonal forecasts were made from final counts.
+# incomplete_weeks: mandatory hospital reporting paused from 2024-05-01 to 2024-10-31,
+#   so the counts of these target weeks are incomplete (Texas covid: 643, 274, 8, 2 in
+#   the weeks ending 2024-04-27 to 2024-05-18). Forecasts of them are dropped: never
+#   learned from, never scored.
 # feedback_delays: the delays (weeks after the first report) prepared for the
 #   online feedback; feedback_delay in R/03_functions.R chooses one of them.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
@@ -200,7 +204,8 @@ prepare_settings <- list(base = c(covid = "windowed_seasonal", flu = "cmu_hub"),
                          tuning_seasons = "2023/24",
                          evaluation_seasons = c("2024/25", "2025/26"),
                          half_season_peaks = c(covid = TRUE, flu = FALSE),
-                         final_data_through = as.Date("2024-06-01"),
+                         final_data_through = as.Date("2024-04-27"),
+                         incomplete_weeks = as.Date(c("2024-05-04", "2024-11-02")),
                          horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
 # Season of a date (October to September, e.g. "2024/25") and its half season.
@@ -250,7 +255,18 @@ prepare_data <- function(forecasts, vintages, settings) {
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
     forecasts$reference_date >= settings$start_date, forecast_columns])
+  # Invalid submissions: a round and horizon whose forecasts are 0 at every quantile
+  # and location are dropped and filled like a missing round. CMU's flu submission of
+  # 2025-11-22 has such zeros at horizon -1 (its horizons 0-3 are fine).
+  block <- paste(selected$disease, selected$reference_date, selected$horizon)
+  all_zero <- tapply(selected$value == 0, block, all)
+  invalid <- names(all_zero)[all_zero]
+  if (length(invalid)) message("All-zero forecasts dropped and filled (disease, round, ",
+    "horizon): ", paste(invalid, collapse = "; "))
+  selected <- selected[!block %in% invalid, , drop = FALSE]
   selected <- fill_missing_rounds(selected, settings$fill_gaps_up_to)
+  selected <- selected[selected$target_end_date < settings$incomplete_weeks[1] |
+    selected$target_end_date > settings$incomplete_weeks[2], , drop = FALSE]
   # Reports as of each round: the base's generation date, or the day before the
   # reference date. Filled rounds: the Wednesday before the reference date.
   generation <- unique(as.data.frame(forecasts[!is.na(forecasts$generation_date),

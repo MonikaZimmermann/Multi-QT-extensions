@@ -280,8 +280,8 @@ dev.off()
 # One page: one row per location, one column per window, every method in each panel.
 # A method is coloured by the first group that lists it: one colour family per group,
 # one shade per method; common-weight and outer variants share their method's shade.
-# CE = mean over levels of |coverage - alpha| over the window's weeks. Axes are
-# shared by the three windows of a location; up to peak includes the peak week.
+# CE = mean over levels of |coverage - alpha| over the window's weeks. Every panel has
+# its own axis ranges (panel_limits()); up to peak includes the peak week.
 # Every method group needs a palette: methods of a group without one are not drawn.
 group_palettes <- c("Single trackers" = "Blues 3", "Rate-grid experts" = "Oranges",
   "Weekly starts: immediate admission" = "Greens 3", "Diverse experts" = "Purples 3",
@@ -331,36 +331,48 @@ legend_method <- legend_entries %in% tradeoff_methods
 legend_header <- legend_entries %in% names(legend_groups)
 
 tradeoff_rows <- length(runs) + 1L          # First row: all prepared locations.
-# One page per loss: per 100k residents (natural scale) and of log(counts + 1).
+# Axis range of one panel: the values, with the loss axis capped at `cap` times the
+# original's loss (reference), so one diverging method does not squeeze the others.
+panel_limits <- function(x, reference = NA, cap = 4) {
+  x <- x[is.finite(x)]
+  if (!length(x)) return(c(0, 1))
+  upper <- if (is.finite(reference) && reference > 0) min(max(x), cap * reference) else max(x)
+  extendrange(c(min(x), upper))
+}
+# One page per loss: per 100k residents (natural scale) and of log(counts + 1). Every
+# panel has its own axis ranges; a loss beyond the axis is drawn at its edge as ">".
 draw_tradeoff_page <- function(loss, loss_label) {
   layout(rbind(matrix(seq_len(3 * tradeoff_rows), tradeoff_rows, 3, byrow = TRUE),
     3 * tradeoff_rows + 1L), heights = c(rep(1, tradeoff_rows), .9))
   par(oma = c(7.6, 0, 3, 0), mgp = c(2.4, .7, 0))
   # First row: every prepared location as a small, light symbol per method (legend shapes),
-  # and the mean over locations as the usual symbol. The axes end at the 99th percentile of
-  # the single locations.
+  # and the mean over locations as the usual symbol. The axes span the 1st to 99th
+  # percentile of the single locations and the means.
   cloud <- all_scores[all_scores$season == "all" &
     all_scores$method %in% setdiff(tradeoff_methods, hidden_everywhere), ]
   cloud <- cloud[order(cloud$method == "original"), ]
-  xlim <- c(0, 1.05 * max(1e-8, quantile(cloud[[loss]], .99, na.rm = TRUE)))
-  ylim <- c(0, 1.05 * max(.01, quantile(cloud$coverage_error, .99, na.rm = TRUE)))
   for (phase in phases) {
     rows <- cloud[cloud$phase == phase, ]
     means <- aggregate(rows[c(loss, "coverage_error")], rows["method"], mean, na.rm = TRUE)
     means <- means[order(means$method == "original"), ]
+    xlim <- panel_limits(c(quantile(rows[[loss]], c(.01, .99), na.rm = TRUE), means[[loss]]),
+      means[[loss]][means$method == "original"])
+    ylim <- panel_limits(c(quantile(rows$coverage_error, c(.01, .99), na.rm = TRUE),
+      means$coverage_error))
     par(mar = c(3.8, 4, 3.4, 1))
     plot(NA, xlim = xlim, ylim = ylim, xlab = loss_label, ylab = "Calibration error",
       main = "")
     mtext(paste("All", length(all_locations), "locations |", window_titles[phase]), side = 3,
       line = 1.6, font = 2, cex = .85)
-    mtext("Small: single locations; large: means; axes to the 99th percentile", side = 3,
+    mtext("Small: single locations; large: means; axes: 1st to 99th percentile", side = 3,
       line = .3, cex = .75)
     grid(col = "gray90")
     points(rows[[loss]], rows$coverage_error, pch = tradeoff_shapes[rows$method],
       cex = .5 * tradeoff_sizes[rows$method],
       col = adjustcolor(tradeoff_colours[rows$method], alpha.f = .35))
-    points(means[[loss]], means$coverage_error, col = tradeoff_colours[means$method],
-      pch = tradeoff_shapes[means$method], cex = tradeoff_sizes[means$method],
+    beyond <- means[[loss]] > xlim[2]
+    points(pmin(means[[loss]], xlim[2]), means$coverage_error, col = tradeoff_colours[means$method],
+      pch = ifelse(beyond, 62, tradeoff_shapes[means$method]), cex = tradeoff_sizes[means$method],
       lwd = ifelse(means$method == "original", 2, 1))
   }
   for (run in runs) {
@@ -368,19 +380,21 @@ draw_tradeoff_page <- function(loss, loss_label) {
       run$scores$method %in% shown_methods(run, tradeoff_methods), ]
     # Original last, so it stays visible on top of the other methods.
     scores <- scores[order(scores$method == "original"), ]
-    xlim <- c(0, 1.1 * max(1e-8, scores[[loss]], na.rm = TRUE))
-    ylim <- c(0, 1.1 * max(.01, scores$coverage_error, na.rm = TRUE))
     for (phase in phases) {
       rows <- scores[scores$phase == phase, ]
+      xlim <- panel_limits(rows[[loss]], rows[[loss]][rows$method == "original"])
+      ylim <- panel_limits(rows$coverage_error)
+      beyond <- is.finite(rows[[loss]]) & rows[[loss]] > xlim[2]
       par(mar = c(3.8, 4, 3.4, 1))
       plot(NA, xlim = xlim, ylim = ylim, xlab = loss_label, ylab = "Calibration error",
         main = "")
       mtext(paste(run$case$location_name, "|", window_titles[phase]), side = 3, line = 1.6,
         font = 2, cex = .85)
-      mtext(paste(rows$n_weeks[1], "weeks"), side = 3, line = .3, cex = .75)
+      mtext(paste0(rows$n_weeks[1], " weeks", if (any(beyond))
+        "; >: loss beyond 4x the original's"), side = 3, line = .3, cex = .75)
       grid(col = "gray90")
-      points(rows[[loss]], rows$coverage_error, col = tradeoff_colours[rows$method],
-        pch = tradeoff_shapes[rows$method], cex = tradeoff_sizes[rows$method],
+      points(pmin(rows[[loss]], xlim[2]), rows$coverage_error, col = tradeoff_colours[rows$method],
+        pch = ifelse(beyond, 62, tradeoff_shapes[rows$method]), cex = tradeoff_sizes[rows$method],
         lwd = ifelse(rows$method == "original", 2, 1))
       if (!any(is.finite(rows$coverage_error)))
         text(mean(xlim), mean(ylim), "No observations inside the peak window", cex = .8)
