@@ -1,7 +1,7 @@
 # Purpose: download the hub forecasts and NHSN reports, and make our own base
 # forecasts with Delphi's windowed_seasonal forecaster (their code, unchanged).
 # Run from the project root: Rscript R/00_base_forecasts.R
-# Order of the workflow: 00 -> 01 -> 02 / 04. About 25 minutes per disease the
+# Order of the workflow: 00 -> 01 -> 05 -> 02 / 04. About 25 minutes per disease the
 # first time; later runs read the cached forecasts (delete the parquet file below to
 # rebuild it from the cache).
 # Writes to the project root:

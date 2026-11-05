@@ -9,8 +9,9 @@ disease_name <- "covid"                    # "covid" or "flu"
 horizon_id <- 2                            # -1, 0, 1, 2 or 3
 settings <- multiqt_settings()             # Locations, tracker, experts and windows (R/03_functions.R).
 transform <- settings$transform
-# The methods' settings: method_parameters() in R/03_functions.R.
-params <- method_parameters()
+# The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
+# on the tuning season by R/05_tuning.R for this disease and tracker (tuned_parameters()).
+params <- tuned_parameters(disease_name, transform)
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")

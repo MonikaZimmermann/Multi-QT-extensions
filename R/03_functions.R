@@ -10,7 +10,7 @@
 multiqt_settings <- function() list(
   location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
   horizons = -1:3,
-  transform = "identity",              # MultiQT tracks log1p(counts); "identity": raw counts.
+  transform = "log1p",              # MultiQT tracks log1p(counts); "identity": raw counts.
   scale_method = "population",      # Scores/plots: per 100k residents ("population"), or "max", "median" or "none".
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
@@ -655,6 +655,19 @@ method_parameters <- function() list(
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
   if (is.null(value)) params[[name]] else value
+}
+# The values R/05_tuning.R chose for one disease and tracker transform, as by_method
+# overrides of params; the defaults where none were tuned (with a message).
+tuned_parameters <- function(disease, transform, params = method_parameters(),
+                             path = "output/results/tuning/tuned_settings.csv") {
+  tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
+    transform = character())
+  tuned <- tuned[tuned$disease == disease & tuned$transform == transform, , drop = FALSE]
+  if (!nrow(tuned)) message("No tuned settings for ", disease, " (", transform, ") in ", path,
+    ": the defaults of method_parameters(). Run Rscript R/05_tuning.R.")
+  for (i in seq_len(nrow(tuned)))
+    params$by_method[[tuned$method[i]]][[tuned$setting[i]]] <- tuned$value[i]
+  params
 }
 # The setting R/05_tuning.R tunes for each method; the other methods have none.
 tuned_setting <- c(fixed = "fixed_multiplier", absolute_slope = "slope_min_multiplier",
