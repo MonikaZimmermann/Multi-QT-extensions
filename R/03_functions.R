@@ -128,6 +128,13 @@ weighting_loss_scale <- function(case, scale, count_scale = 1, floor = 1e-6) {
   max(floor, mean(loss))
 }
 
+# Scale of recent residuals r: their root mean square, or the median absolute residual
+# divided by 0.6745 (a normal sd that one outlier cannot inflate).
+residual_scale <- function(r, estimator = "rms") switch(estimator,
+  rms = sqrt(mean(r^2)),
+  median = median(abs(r)) / qnorm(.75),
+  stop("Unknown residual scale estimator ", estimator))
+
 # Scale sigma_t of the median residuals y - b (tracker units) for the studentized
 # median MultiQT: one estimate of their standard deviation per issue week.
 #   "residuals" root mean square of the last `window` median residuals released by
@@ -138,8 +145,11 @@ weighting_loss_scale <- function(case, scale, count_scale = 1, floor = 1e-6) {
 #               divided by that of a standard normal, e.g. (q.9 - q.1) / 2.563 for the 80%
 #               interval. No feedback lag; a point-mass base gives the floor.
 # warmup_weeks: the weeks before the first sigma_t; the method issues the original base there.
+# estimator (residuals): "rms", or "median": median |residual| / 0.6745 (the normal sd), which
+# one outlying residual (e.g. from a broken base forecast) cannot inflate.
 median_sigma <- function(case, method = "residuals", window = 5L, min_rows = 5L,
-                         floor = 1e-6, transform = "log1p", levels = c(.1, .9)) {
+                         floor = 1e-6, transform = "log1p", levels = c(.1, .9),
+                         estimator = "rms") {
   stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
   base_level <- function(alpha) to_tracker(case$base[, match(alpha, case$alpha)], transform)
   scale <- switch(method,
@@ -149,7 +159,7 @@ median_sigma <- function(case, method = "residuals", window = 5L, min_rows = 5L,
         base_level(.5)[released]
       n_released <- cumsum(lengths(case$feedback_by_week))   # By each issue week.
       vapply(n_released, function(k) if (k < min_rows) NA_real_ else
-        max(floor, sqrt(mean(residual[max(1L, k - window + 1L):k]^2))), numeric(1))
+        max(floor, residual_scale(residual[max(1L, k - window + 1L):k], estimator)), numeric(1))
     },
     base = {
       stopifnot(length(levels) == 2L, levels[1] < levels[2], all(levels %in% case$alpha))
@@ -182,18 +192,20 @@ level_sigma <- function(case, floor = 1e-6, transform = "log1p") {
 }
 
 # Quantile-specific scales sigma_t^alpha from recent residuals (tracker units): for every
-# level, the RMS of y_s - b_s^alpha over the last `window` rows s released by issue week t
-# (no hindsight). Rows are NA until min_rows are released, like median_sigma("residuals").
+# level, the RMS (or robust scale, estimator as in median_sigma()) of y_s - b_s^alpha over
+# the last `window` rows s released by issue week t (no hindsight). Rows are NA until
+# min_rows are released, like median_sigma("residuals").
 # Returns a matrix [week x level]. Like level_sigma(), no calibration guarantee.
 level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
-                                 transform = "log1p") {
+                                 transform = "log1p", estimator = "rms") {
   stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
   released <- unlist(case$feedback_by_week)                # Rows in release order.
   residual <- to_tracker(case$feedback_observed[released], transform) -
     to_tracker(case$base[released, , drop = FALSE], transform)
   n_released <- cumsum(lengths(case$feedback_by_week))     # By each issue week.
   scale <- t(vapply(n_released, function(k) if (k < min_rows) rep(NA_real_, ncol(residual)) else
-    pmax(sqrt(colMeans(residual[max(1L, k - window + 1L):k, , drop = FALSE]^2)), floor),
+    pmax(apply(residual[max(1L, k - window + 1L):k, , drop = FALSE], 2, residual_scale,
+      estimator), floor),
     numeric(ncol(residual))))
   dimnames(scale) <- dimnames(case$base)
   scale
@@ -662,6 +674,9 @@ method_parameters <- function() list(
   # median_base_levels; median_start: "normal" or "t" start of the residual median methods.
   median_window = 5L, median_min_rows = 5L, median_base_levels = c(.1, .9),
   median_rate = .1, median_start = "normal",
+  # Residual scales (studentized median, constant sigma, level RMS): "rms" or "median"
+  # (robust to one outlying residual; see residual_scale()).
+  residual_estimator = "rms",
   by_method = list())
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
@@ -739,7 +754,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # Studentized median MultiQT (median_multiqt()): Fixed MultiQT's coverage indicator
   # and update on the base median b_t, issued as b_t + sigma_t * offsets.
   sigma <- median_sigma(case, "residuals", params$median_window, params$median_min_rows,
-    settings$scale_floor, transform)
+    settings$scale_floor, transform, estimator = params$residual_estimator)
   base_sigma <- median_sigma(case, "base", floor = settings$scale_floor, transform = transform,
     levels = params$median_base_levels)
   # The original base is issued until sigma_t exists (and during the S0 warmup without replay).
@@ -779,7 +794,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   if (want("studentized_level_rms"))
     predictions$studentized_level_rms <- full("studentized_level_rms",
       level_residual_sigma(case, params$median_window, params$median_min_rows,
-        settings$scale_floor, transform), median_warmup_weeks)
+        settings$scale_floor, transform, params$residual_estimator), median_warmup_weeks)
 
   # What if we knew the true peak? Hindsight benchmark: bypass correction for postpeak
   # targets, even if issued prepeak (each week's nearest peak). Setting eta=0 instead
