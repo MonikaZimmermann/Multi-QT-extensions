@@ -1,12 +1,17 @@
 # First exploratory analysis of the fixed-rate MultiQT rate grid.
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
 # Run from the project root: Rscript R/02_multiqt_ties.R
+.libPaths(c("agent/tmp/multiqt-lib", .libPaths()))  # nanoparquet, as in script 01.
 source("R/03_functions.R")
 
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
 season_disease <- "covid"                 # Season forecast plot only: "covid" or "flu".
 season_horizon <- 2                       # Season forecast plot only: -1, 0, 1, 2 or 3.
+# Descriptive CMU path page only: each location's peak in the selected season/half.
+path_season <- c(covid = "2024/25", flu = "2024/25")
+path_half <- c(covid = "summer", flu = "season")
+path_weeks <- -5:5                        # Reference weeks relative to that location's peak.
 diseases <- c("covid", "flu")
 expert_multipliers <- settings$expert_multipliers
 multiplier_min <- min(expert_multipliers[expert_multipliers > 0])
@@ -154,7 +159,90 @@ multiplier_ticks <- multiplier_ticks[multiplier_ticks >= min(rate_multipliers[po
   multiplier_ticks <= max(rate_multipliers[positive])]
 multiplier_tick_labels <- trimws(formatC(multiplier_ticks, format = "fg", digits = 4))
 
-# 4. CALIBRATION ERROR VS MEAN QUANTILE LOSS ON THE MULTIPLIER GRID ----------
+# 4. CMU FORECAST PATHS AROUND THE SELECTED PEAK ----------------------------
+# One page: locations by row, diseases by column. Each curve joins the five median
+# forecasts submitted in one reference week, at their different target dates.
+# Use the raw CMU table: the prepared COVID base may be our own windowed_seasonal.
+# Missing submissions stay missing; they are not replaced by carried-forward paths.
+path_forecasts <- as.data.frame(nanoparquet::read_parquet("cmu_timeseries_hub_forecasts.parquet"))
+path_forecasts <- path_forecasts[path_forecasts$quantile_level == .5 &
+  path_forecasts$horizon %in% -1:3 & path_forecasts$location %in% settings$location_ids &
+  path_forecasts$disease %in% diseases, ]
+stopifnot(!anyDuplicated(path_forecasts[c("disease", "location", "reference_date", "horizon")]),
+  all(path_forecasts$target_end_date == path_forecasts$reference_date + 7 * path_forecasts$horizon))
+path_colours <- colorRampPalette(c("#ABD1E5", "#4393C3", "#1764A0", "#082C59"))(length(path_weeks))
+plot_forecast_path_panel <- function(disease, location) {
+  case <- get_case(prepared, disease, location, 0, settings$feedback_delay)
+  peak <- case$peaks[case$peaks$season == path_season[disease] &
+    case$peaks$half == path_half[disease], ]
+  if (nrow(peak) != 1L) {
+    plot.new()
+    title(main = paste(case$location_name, "|", toupper(disease)))
+    text(.5, .5, paste("No unique peak for", path_season[disease], path_half[disease]))
+    return(invisible())
+  }
+  reference_dates <- peak$peak_date + 7 * path_weeks
+  dates <- seq(min(reference_dates) - 7, max(reference_dates) + 21, by = "week")
+  forecasts <- path_forecasts[path_forecasts$disease == disease &
+    path_forecasts$location == location & path_forecasts$reference_date %in% reference_dates, ]
+  scale <- choose_count_scale(case, settings$scale_method)$scale
+  # Latest-vintage outcomes already stored by 01; NA dates break the observed line.
+  observed <- case$truth_latest[match(dates, case$target_date)] / scale
+  limits <- range(0, observed, forecasts$value / scale, na.rm = TRUE)
+  if (diff(limits) == 0) limits <- c(0, 1)
+  plot(dates, observed, type = "n", ylim = limits, xaxt = "n", xaxs = "i",
+    xlab = "", ylab = "Hospitalizations", bty = "n",
+    main = paste(case$location_name, "|", toupper(disease)))
+  abline(h = axTicks(2), col = "gray93")
+  abline(v = as.numeric(peak$peak_date), col = "gray65", lty = 3)
+  ticks <- dates[seq(1, length(dates), by = 3)]
+  axis.Date(1, at = ticks, format = "%d %b", cex.axis = .85)
+  for (i in seq_along(reference_dates)) {
+    z <- forecasts[forecasts$reference_date == reference_dates[i], ]
+    # Matching all five horizons leaves NA at a missing horizon and breaks its line.
+    medians <- z$value[match(-1:3, z$horizon)] / scale
+    # Open circle for the previous-week nowcast; filled points for horizons 0 to 3.
+    lines(reference_dates[i] + 7 * (-1:3), medians, type = "o",
+      pch = c(21, rep(16, 4)), bg = "white", cex = c(.75, rep(.45, 4)),
+      lwd = 1.5, col = path_colours[i])
+  }
+  lines(dates, observed, col = "gray20", lwd = 1.8, lty = 2)
+  mtext(paste0("Peak: ", format(peak$peak_date, "%d %b %Y"),
+    if (peak$boundary_peak) " (window boundary)" else "", " | ",
+    length(unique(forecasts$reference_date)), " submitted reference weeks"),
+    side = 3, line = .15, cex = .67)
+}
+cairo_pdf(file.path(figure_dir, "multiqt_base_forecast_paths.pdf"), width = 15, height = 19,
+  family = "DejaVu Sans")
+path_panels <- length(settings$location_ids) * length(diseases)
+layout(rbind(matrix(seq_len(path_panels), ncol = length(diseases), byrow = TRUE),
+  rep(path_panels + 1L, length(diseases))), heights = c(rep(1, length(settings$location_ids)), .5))
+par(mar = c(2.6, 4.4, 3.1, 1), oma = c(3.6, 0, 4.5, 0), mgp = c(2.7, .7, 0), cex = .9)
+for (location in settings$location_ids) for (disease in diseases)
+  plot_forecast_path_panel(disease, location)
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend("center", c(paste0("Week ", ifelse(path_weeks > 0, "+", ""), path_weeks),
+    "Latest reported counts", "Peak (retrospective)", "h = -1 (nowcast)", "h = 0 to 3"),
+  col = c(path_colours, "gray20", "gray65", "gray30", "gray30"),
+  lty = c(rep(1, length(path_weeks)), 2, 3, 0, 0),
+  lwd = 1.8, pch = c(rep(16, length(path_weeks)), NA, NA, 21, 16),
+  pt.bg = "white", pt.cex = c(rep(.6, length(path_weeks) + 2L), .85, .6),
+  ncol = 5, bty = "n", cex = .9)
+mtext("CMU base forecasts: five-horizon median curves around the selected peaks",
+  side = 3, outer = TRUE, line = 2.7, font = 2, cex = 1.25)
+mtext(paste(paste(toupper(diseases), path_season[diseases], path_half[diseases],
+    collapse = " | "), "|", score_units),
+  side = 3, outer = TRUE, line = 1.3, cex = .9)
+mtext("Each curve: one reference week, horizons -1 to 3. Darker = later reference week relative to the local peak.",
+  side = 3, outer = TRUE, line = 0, cex = .85)
+mtext("Horizontal axis: target week ending. Target date = reference date + 7h days. Raw CMU submissions; missing rounds stay missing.",
+  side = 1, outer = TRUE, line = .5, cex = .85)
+mtext("Observed counts and peak dates use the latest stored reports and are retrospective. Reference dates label weeks, not exact submission times.",
+  side = 1, outer = TRUE, line = 1.7, cex = .8)
+dev.off()
+
+# 5. CALIBRATION ERROR VS MEAN QUANTILE LOSS ON THE MULTIPLIER GRID ----------
 # Each panel is one location and horizon. Dots mark the script 04 expert multipliers
 # and grow with m; the axes span only the plotted points.
 # This is exploratory, not held-out rate selection. Short-window calibration is descriptive.
@@ -266,7 +354,7 @@ for (disease in diseases) for (level in sort(unique(scores_by_level$alpha))) {
 }
 dev.off()
 
-# 5. LOSS AND CALIBRATION ALONG THE GRID: ONE PAGE PER LOCATION ----------
+# 6. LOSS AND CALIBRATION ALONG THE GRID: ONE PAGE PER LOCATION ----------
 # Loss compares each phase with its own m=0 baseline. Calibration is the mean
 # absolute coverage gap over levels; dashed lines show its m=0 value.
 cairo_pdf(file.path(figure_dir, "multiqt_phase_rate_tradeoffs.pdf"), width = 20.3125, height = 15.5, family = "DejaVu Sans")
@@ -313,7 +401,7 @@ for (location in settings$location_ids) {
 }
 dev.off()
 
-# 6. INSPECT THE TIME SERIES AROUND THE PEAK -------------------------
+# 7. INSPECT THE TIME SERIES AROUND THE PEAK -------------------------
 plot_alpha <- c(0.15, 0.5, 0.75)
 alpha_colours <- c("#0072B2", "#009E73", "#D55E00")
 colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(display_multipliers[-1]))) /
