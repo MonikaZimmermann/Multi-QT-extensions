@@ -58,10 +58,14 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L) 
 # have been available by that issue's as-of cutoff. Missing signals are neutral.
 # The gate describes current issue context, not a peak probability or the target
 # horizon's future state. In particular, h=-1 is available at reference t, not t-1.
-transition_gate <- function(case, strength = 1, width = .05, threshold = .05) {
+# weights: of the path, nowcast and revision scores in the gate (equal: their mean;
+# all 0: a neutral gate).
+transition_gate <- function(case, strength = 1, width = .05, threshold = .05,
+                            weights = c(1, 1, 1)) {
   stopifnot(length(strength) == 1L, is.finite(strength), strength >= 0, strength <= 1,
     length(width) == 1L, is.finite(width), width > 0,
-    length(threshold) == 1L, is.finite(threshold), threshold >= 0)
+    length(threshold) == 1L, is.finite(threshold), threshold >= 0,
+    length(weights) == 3L, all(is.finite(weights)), all(weights >= 0))
   dates <- case$reference_date
   signals <- matrix(NA_real_, length(dates), 3L,
     dimnames = list(NULL, c("path", "nowcast", "revision")))
@@ -106,7 +110,10 @@ transition_gate <- function(case, strength = 1, width = .05, threshold = .05) {
   }
   scores <- plogis((signals - log1p(threshold)) / log1p(width))
   scores[!is.finite(scores)] <- .5         # Unknown evidence pulls towards neutral.
-  gate <- pmin(.95, pmax(.05, .5 + strength * (rowMeans(scores) - .5)))
+  mixed <- if (sum(weights) == 0) rep(.5, nrow(scores)) else
+    if (length(unique(weights)) == 1L) rowMeans(scores) else
+      drop(scores %*% weights) / sum(weights)
+  gate <- pmin(.95, pmax(.05, .5 + strength * (mixed - .5)))
   data.frame(reference_date = dates, signals, path_score = scores[, "path"],
     nowcast_score = scores[, "nowcast"], revision_score = scores[, "revision"],
     gate, n_available = rowSums(is.finite(signals)))
@@ -780,6 +787,8 @@ method_parameters <- function() list(
   # Soft switch: sigmoid scale/centre on log1p(counts), independent of tracker units.
   # strength=0 is the ordinary diverse common-weight mixture; 1 uses all the signal.
   switch_strength = 1, switch_width = .05, switch_threshold = .05,
+  # Weights of the gate's path, nowcast and revision signals (1, 1, 1: their mean).
+  switch_weight_path = 1, switch_weight_nowcast = 1, switch_weight_revision = 1,
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
   # residuals (the base until median_min_rows exist) or from the base width between
   # median_base_levels; median_start: "normal" or "t" start of the residual median methods.
@@ -842,15 +851,25 @@ outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
 # Issue the forecasts of the given methods for one case, with every location fitted
 # independently: offsets, expert weights, lambda and loss history start fresh. Returns
 # the predictions in counts / count_scale (original first) and what 04 plots and saves.
-apply_methods <- function(case, settings, params = method_parameters(), methods = method_names) {
+# cache (R/05_tuning.R): an environment for one case and fixed settings apart from the
+# transform. Scales, expert banks and mixtures computed for one grid value are reused for
+# the next; each key holds every setting the stored object depends on. NULL: no reuse.
+apply_methods <- function(case, settings, params = method_parameters(), methods = method_names,
+                          cache = NULL) {
   par <- function(method, name) method_parameter(params, method, name)
   methods <- union(methods, outer_inner[intersect(names(outer_inner), methods)])
   want <- function(...) any(c(...) %in% methods)
   transform <- settings$transform
+  memo <- function(key, value) {
+    if (is.null(cache)) return(value)
+    key <- paste(transform, key)
+    if (is.null(cache[[key]])) cache[[key]] <- value
+    cache[[key]]
+  }
   scaling <- choose_count_scale(case, settings$scale_method)
   count_scale <- scaling$scale
-  s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, transform,
-    settings$replay_warmup)
+  s0 <- memo("s0", error_scale(case, settings$warmup_rounds, settings$scale_floor, transform,
+    settings$replay_warmup))
   # Keep stored predictions and the scoring/weighting inputs in counts / count_scale.
   base <- case$base / count_scale
   feedback <- case$feedback_observed / count_scale
@@ -877,12 +896,21 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # Studentized scales stay within sigma_bounds * S0 (missing scales stay missing).
   bound <- function(scale) if (!s0$initialized) scale else
     pmin(pmax(scale, params$sigma_bounds[1] * s0$scale), params$sigma_bounds[2] * s0$scale)
-  sigma <- median_sigma(case, "residuals", params$median_window, params$median_min_rows,
-    settings$scale_floor, transform, estimator = params$residual_estimator)
-  sigma$scale <- bound(sigma$scale)
-  base_sigma <- median_sigma(case, "base", floor = settings$scale_floor, transform = transform,
-    levels = params$median_base_levels)
-  base_sigma$scale <- bound(base_sigma$scale)
+  bounds_key <- paste(params$sigma_bounds, collapse = ",")
+  sigma <- memo(paste("sigma", params$median_window, params$median_min_rows,
+    params$residual_estimator, bounds_key), {
+    sigma <- median_sigma(case, "residuals", params$median_window, params$median_min_rows,
+      settings$scale_floor, transform, estimator = params$residual_estimator)
+    sigma$scale <- bound(sigma$scale)
+    sigma
+  })
+  base_sigma <- memo(paste("base_sigma", paste(params$median_base_levels, collapse = ","),
+    bounds_key), {
+    base_sigma <- median_sigma(case, "base", floor = settings$scale_floor,
+      transform = transform, levels = params$median_base_levels)
+    base_sigma$scale <- bound(base_sigma$scale)
+    base_sigma
+  })
   # The original base is issued until sigma_t exists (and during the S0 warmup without replay).
   median_warmup_weeks <- max(s0$warmup_weeks, sigma$warmup_weeks)
   # Offsets before the first update: normal quantiles, or t quantiles of a residual divided
@@ -913,15 +941,17 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     warmup_weeks, transform, sigma = scales) / count_scale
   if (want("studentized_full"))
     predictions$studentized_full <- full("studentized_full", base_sigma$scale)
-  level_scales <- if (want("studentized_levels")) bound(level_sigma(case, settings$scale_floor,
-    transform))
+  level_scales <- if (want("studentized_levels")) memo(paste("level_scales", bounds_key),
+    bound(level_sigma(case, settings$scale_floor, transform)))
   if (want("studentized_levels"))
     predictions$studentized_levels <- full("studentized_levels", level_scales)
   # The residual scales exist once median_min_rows residuals are released, as for the median.
   if (want("studentized_level_rms"))
     predictions$studentized_level_rms <- full("studentized_level_rms",
-      bound(level_residual_sigma(case, params$median_window, params$median_min_rows,
-        settings$scale_floor, transform, params$residual_estimator)), median_warmup_weeks)
+      memo(paste("level_rms", params$median_window, params$median_min_rows,
+        params$residual_estimator, bounds_key),
+        bound(level_residual_sigma(case, params$median_window, params$median_min_rows,
+          settings$scale_floor, transform, params$residual_estimator))), median_warmup_weeks)
 
   # What if we knew the true peak? Hindsight benchmark: bypass correction for postpeak
   # targets, even if issued prepeak (each week's nearest peak). Setting eta=0 instead
@@ -944,55 +974,77 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     case$feedback_by_week, case$alpha, H = par(method, "H"),
     lambda_start = par(method, "lambda_start"), warmup_weeks = s0$warmup_weeks,
     loss_scale = loss_scale, ...)
+  # Key of a mixture: the method and every setting a mixture can depend on.
+  mixture_key <- function(method) paste("mixture", method, paste(vapply(c("H", "lambda_start",
+    "restart_lambda", "diverse_slow_multiplier", "switch_strength", "switch_width",
+    "switch_threshold", "switch_weight_path", "switch_weight_nowcast",
+    "switch_weight_revision"), function(name) format(par(method, name), digits = 15), ""),
+    collapse = ","), paste(params$restart_multipliers, collapse = ","), params$restart_multiplier,
+    params$diverse_leak, paste(params$diverse_damping, collapse = ","),
+    paste(params$diverse_widths, collapse = ","))
+  mix <- function(method, value) memo(mixture_key(method), value)
   mixtures <- list()
   rate_experts <- restart_experts <- fixed_restarts <- NULL
   if (want("uniform", "weighted", "weighted_common", "shared", "shared_common")) {
-    rate_experts <- make_rate_experts(case, settings$expert_multipliers, s0, count_scale, transform)
-    if (want("uniform")) mixtures$uniform <- weigh("uniform", rate_experts, lambda = 0)
-    if (want("weighted")) mixtures$weighted <- weigh("weighted", rate_experts, sharing = FALSE)
-    if (want("weighted_common")) mixtures$weighted_common <- weigh("weighted_common",
-      rate_experts, sharing = FALSE, per_quantile = FALSE)
-    if (want("shared")) mixtures$shared <- weigh("shared", rate_experts)
-    if (want("shared_common")) mixtures$shared_common <- weigh("shared_common", rate_experts,
-      per_quantile = FALSE)
+    rate_experts <- memo("rate_experts", make_rate_experts(case, settings$expert_multipliers,
+      s0, count_scale, transform))
+    if (want("uniform")) mixtures$uniform <- mix("uniform", weigh("uniform", rate_experts,
+      lambda = 0))
+    if (want("weighted")) mixtures$weighted <- mix("weighted", weigh("weighted", rate_experts,
+      sharing = FALSE))
+    if (want("weighted_common")) mixtures$weighted_common <- mix("weighted_common",
+      weigh("weighted_common", rate_experts, sharing = FALSE, per_quantile = FALSE))
+    if (want("shared")) mixtures$shared <- mix("shared", weigh("shared", rate_experts))
+    if (want("shared_common")) mixtures$shared_common <- mix("shared_common",
+      weigh("shared_common", rate_experts, per_quantile = FALSE))
   }
   if (want("restart_uniform", "restart_weighted", "restart_grid", "restart_persistent")) {
-    restart_experts <- make_restart_experts(case, params$restart_multipliers, s0, count_scale,
-      transform)
+    restart_experts <- memo(paste("restart_experts", paste(params$restart_multipliers,
+      collapse = ",")), make_restart_experts(case, params$restart_multipliers, s0, count_scale,
+      transform))
     fixed_restarts <- select_experts(restart_experts,
       restart_experts$experts$multiplier == params$restart_multiplier)
-    if (want("restart_uniform"))
-      mixtures$restart_uniform <- weigh("restart_uniform", fixed_restarts, lambda = 0)
-    if (want("restart_weighted")) mixtures$restart_weighted <- weigh("restart_weighted",
-      fixed_restarts, lambda = par("restart_weighted", "restart_lambda"))
-    if (want("restart_grid")) mixtures$restart_grid <- weigh("restart_grid", restart_experts,
-      lambda = par("restart_grid", "restart_lambda"))
+    if (want("restart_uniform")) mixtures$restart_uniform <- mix("restart_uniform",
+      weigh("restart_uniform", fixed_restarts, lambda = 0))
+    if (want("restart_weighted")) mixtures$restart_weighted <- mix("restart_weighted",
+      weigh("restart_weighted", fixed_restarts, lambda = par("restart_weighted", "restart_lambda")))
+    if (want("restart_grid")) mixtures$restart_grid <- mix("restart_grid",
+      weigh("restart_grid", restart_experts, lambda = par("restart_grid", "restart_lambda")))
   }
   # One diverse bank per slow rate, shared by the methods that use it.
   diverse_banks <- list()
   diverse <- function(method) {
     m <- par(method, "diverse_slow_multiplier")
     key <- format(m, digits = 15)
-    if (is.null(diverse_banks[[key]])) diverse_banks[[key]] <<- make_diverse_experts(case, s0,
+    if (is.null(diverse_banks[[key]])) diverse_banks[[key]] <<- memo(paste("diverse", key,
+      params$diverse_leak, paste(params$diverse_damping, collapse = ","),
+      paste(params$diverse_widths, collapse = ",")), make_diverse_experts(case, s0,
       count_scale, transform, m * s0$scale, params$diverse_leak, params$diverse_damping,
-      params$diverse_widths)
+      params$diverse_widths))
     diverse_banks[[key]]
   }
-  if (want("diverse_uniform"))
-    mixtures$diverse_uniform <- weigh("diverse_uniform", diverse("diverse_uniform"), lambda = 0)
-  if (want("diverse_shared"))
-    mixtures$diverse_shared <- weigh("diverse_shared", diverse("diverse_shared"))
+  if (want("diverse_uniform")) mixtures$diverse_uniform <- mix("diverse_uniform",
+    weigh("diverse_uniform", diverse("diverse_uniform"), lambda = 0))
+  if (want("diverse_shared")) mixtures$diverse_shared <- mix("diverse_shared",
+    weigh("diverse_shared", diverse("diverse_shared")))
   if (want("diverse_shared_common")) mixtures$diverse_shared_common <-
-    weigh("diverse_shared_common", diverse("diverse_shared_common"), per_quantile = FALSE)
+    mix("diverse_shared_common", weigh("diverse_shared_common", diverse("diverse_shared_common"),
+      per_quantile = FALSE))
   soft_switch <- NULL
   if (want("diverse_soft_switch")) {
-    gate <- transition_gate(case, par("diverse_soft_switch", "switch_strength"),
-      par("diverse_soft_switch", "switch_width"), par("diverse_soft_switch", "switch_threshold"))
-    soft_switch <- soft_switch_weights(diverse("diverse_soft_switch"), base, feedback,
-      case$feedback_by_week, case$alpha, gate$gate, H = par("diverse_soft_switch", "H"),
-      lambda_start = par("diverse_soft_switch", "lambda_start"),
-      warmup_weeks = s0$warmup_weeks, loss_scale = loss_scale)
-    soft_switch$gate <- gate
+    soft_switch <- mix("diverse_soft_switch", {
+      gate <- transition_gate(case, par("diverse_soft_switch", "switch_strength"),
+        par("diverse_soft_switch", "switch_width"), par("diverse_soft_switch", "switch_threshold"),
+        c(par("diverse_soft_switch", "switch_weight_path"),
+          par("diverse_soft_switch", "switch_weight_nowcast"),
+          par("diverse_soft_switch", "switch_weight_revision")))
+      switched <- soft_switch_weights(diverse("diverse_soft_switch"), base, feedback,
+        case$feedback_by_week, case$alpha, gate$gate, H = par("diverse_soft_switch", "H"),
+        lambda_start = par("diverse_soft_switch", "lambda_start"),
+        warmup_weeks = s0$warmup_weeks, loss_scale = loss_scale)
+      switched$gate <- gate
+      switched
+    })
     mixtures$diverse_soft_switch <- soft_switch
   }
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
