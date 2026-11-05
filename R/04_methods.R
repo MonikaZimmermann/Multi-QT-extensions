@@ -10,7 +10,7 @@ horizon_id <- 2                            # -1, 0, 1, 2 or 3
 settings <- multiqt_settings()             # Locations, tracker, experts, H and windows (R/03_functions.R).
 transform <- settings$transform
 H <- settings$H
-# Other rates and caps below are in tracker units (log1p counts or raw counts).
+# Other rates and caps below are in tracker units (log1p counts or raw counts), except median_rate.
 outer_rate <- .005
 slope_rate_min <- .005
 slope_rate_max <- .1                       # Tracker-unit cap; independent of the multiplier grid.
@@ -23,6 +23,15 @@ diverse_slow_rate <- .01                   # Tracker units, the same for every e
 diverse_leak <- .2                         # Leaky shift per report; halves every week, cap +-.2.
 diverse_damping <- c(-.5, .5, 1)           # Start from the base minus k * implied growth.
 diverse_widths <- c(.75, 1.5)              # Start from the base intervals scaled by w.
+# Studentized MultiQT: offsets in units of sigma_t. On the base median, sigma_t from released
+# median residuals (standard) or from the width of the base; on the full base, the width of
+# the base or quantile-specific scales from the base (level_sigma()) or from recent
+# residuals of each level (level_residual_sigma(), same window and warmup as the median).
+median_window <- 5L                        # Residuals: RMS of this many latest released median residuals.
+median_min_rows <- 5L                      # Residuals: the original base until this many are released.
+median_base_levels <- c(.1, .9)            # Base width: the 80% interval / 2.563, a normal sd.
+median_rate <- .1                          # eta in units of sigma_t: every studentized method and location.
+median_start <- "normal"                   # Residual sigma_t: "normal" or "t" start (df = median_window).
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")
@@ -49,7 +58,7 @@ run_methods <- function(case) {
   adjust <- function(counts, eta, warmup_weeks) multiqt(counts, case$feedback_observed,
     case$feedback_by_week, case$alpha, eta, warmup_weeks, transform) / count_scale
 
-  # 3. ONE TRACKER: FIXED RATE OR A RATE BASED ON ABSOLUTE SLOPE --------
+  # 3. ONE TRACKER: FIXED RATE, SLOPE RATE OR STUDENTIZED MEDIAN --------
   # Baseline eta = reference_multiplier * S0, using the same frozen scale as the experts.
   predictions <- list(original = base)
   predictions$fixed <- adjust(case$base, settings$reference_multiplier * s0$scale, s0$warmup_weeks)
@@ -60,6 +69,44 @@ run_methods <- function(case) {
   slope_rates <- pmin(slope_rate_max, slope_rate_min + abs(slope))
   predictions$absolute_slope <- adjust(case$base, slope_rates, 0L)
   # Larger rates can unwind offsets faster, but can also amplify stale feedback.
+
+  # Studentized median MultiQT (median_multiqt()): Fixed MultiQT's coverage indicator
+  # and update on the base median b_t, issued as b_t + sigma_t * offsets.
+  sigma <- median_sigma(case, "residuals", median_window, median_min_rows,
+    settings$scale_floor, transform)
+  base_sigma <- median_sigma(case, "base", floor = settings$scale_floor, transform = transform,
+    levels = median_base_levels)
+  # The original base is issued until sigma_t exists (and during the S0 warmup without replay).
+  median_warmup_weeks <- max(s0$warmup_weeks, sigma$warmup_weeks)
+  # Offsets before the first update: normal quantiles, or t quantiles of a residual divided
+  # by the RMS of median_window other normal residuals (wider tails for small windows).
+  start <- switch(median_start, normal = qnorm(case$alpha), t = qt(case$alpha, median_window),
+    stop("Unknown median start ", median_start))
+  predictions$studentized <- median_multiqt(case, median_rate, sigma$scale, start,
+    median_warmup_weeks, transform) / count_scale
+  # sigma_t from the width of the base: no feedback lag, so no warmup beyond S0's. This
+  # sigma_t is a normal sd, so it starts from normal quantiles: the base's own interval.
+  predictions$studentized_base <- median_multiqt(case, median_rate, base_sigma$scale,
+    qnorm(case$alpha), max(s0$warmup_weeks, base_sigma$warmup_weeks), transform) / count_scale
+  # Residual sigma frozen at its first issued value: additive MultiQT on the median.
+  # It separates reducing the base to its median from studentizing.
+  constant_sigma <- sigma$scale[median_warmup_weeks + 1L]
+  predictions$median_constant <- median_multiqt(case, median_rate, constant_sigma, start,
+    median_warmup_weeks, transform) / count_scale
+  # Studentized MultiQT on the full base: offsets start at 0 (the base) and are issued as
+  # b_t^alpha + sigma_t * offsets, with one scale per week (the base width; isoreg) or one
+  # per level (weighted isoreg): the normal sd of the base's central interval at that
+  # level, or the RMS of that level's recent residuals y - b^alpha.
+  level_scales <- level_sigma(case, settings$scale_floor, transform)
+  level_residual_scales <- level_residual_sigma(case, median_window, median_min_rows,
+    settings$scale_floor, transform)
+  full <- function(scales, warmup_weeks = s0$warmup_weeks) multiqt(case$base,
+    case$feedback_observed, case$feedback_by_week, case$alpha, median_rate, warmup_weeks,
+    transform, sigma = scales) / count_scale
+  predictions$studentized_full <- full(base_sigma$scale)
+  predictions$studentized_levels <- full(level_scales)
+  # The residual scales exist once median_min_rows residuals are released, as for the median.
+  predictions$studentized_level_rms <- full(level_residual_scales, median_warmup_weeks)
 
   # 4. WHAT IF WE KNEW THE TRUE PEAK? ----------------------------------
   # Hindsight benchmark: bypass correction for postpeak targets, even if issued prepeak.
@@ -126,7 +173,10 @@ run_methods <- function(case) {
   }
   id <- data.frame(disease = case$disease, location = case$location,
     location_name = case$location_name, horizon = case$horizon)
-  list(case = case, scaling = scaling, s0 = s0, truth = truth, predictions = predictions,
+  list(case = case, scaling = scaling, s0 = s0, sigma = sigma, base_sigma = base_sigma,
+    level_scales = level_scales,
+    median_warmup_weeks = median_warmup_weeks, constant_sigma = constant_sigma,
+    truth = truth, predictions = predictions,
     weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
     rate_experts = rate_experts, restart_experts = restart_experts,
     diverse_experts = diverse_experts, weekly = weekly,
@@ -157,12 +207,26 @@ saveRDS(runs, file.path(result_dir, "issued_forecasts.rds"))
 summary_scores <- do.call(rbind, lapply(runs, `[[`, "scores"))
 rownames(summary_scores) <- NULL
 write_result(summary_scores, "summary_scores.csv")
+# Scores of every prepared location of the disease and horizon, for the first row of the
+# trade-off page; only the scores are kept for locations without their own plots.
+all_locations <- unique(unlist(lapply(prepared$cases, function(case)
+  if (case$disease == disease_name && case$horizon == horizon_id) case$location)))
+all_scores <- do.call(rbind, lapply(all_locations, function(location) {
+  if (location %in% names(runs)) return(runs[[location]]$scores)
+  message("Scores: ", disease_name, " | ", location, " | horizon ", horizon_id)
+  run_methods(get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay))$scores
+}))
+rownames(all_scores) <- NULL
+write_result(all_scores, "summary_scores_all_locations.csv")
 write_result(do.call(rbind, lapply(runs, `[[`, "scores_by_level")), "summary_scores_by_level.csv")
 write_result(do.call(rbind, lapply(runs, function(run) data.frame(location = run$case$location,
   scale_method = run$scaling$method, scale_used = run$scaling$used, count_scale = run$scaling$scale,
   transform, scale_as_of = run$case$scale_as_of, reference_weeks = run$scaling$reference_weeks,
   initialization_date = run$s0$date, warmup_weeks = run$s0$warmup_weeks,
-  raw_error_scale = run$s0$raw_scale, error_scale = run$s0$scale))), "scales.csv")
+  raw_error_scale = run$s0$raw_scale, error_scale = run$s0$scale,
+  sigma_window = run$sigma$window, sigma_warmup_weeks = run$median_warmup_weeks,
+  constant_sigma = run$constant_sigma, base_sigma_levels = paste(median_base_levels, collapse = "-"),
+  median_start, median_rate))), "scales.csv")
 write_result(do.call(rbind, lapply(runs, function(run)
   data.frame(location = run$case$location, run$rate_experts$experts))), "expert_grid.csv")
 write_result(do.call(rbind, lapply(runs, function(run)
@@ -171,6 +235,8 @@ write_result(do.call(rbind, lapply(runs, function(run)
   "restart_experts.csv")
 
 # 7. PLOT SETTINGS ---------------------------------------------------
+residual_label <- paste("RMS of", median_window)
+base_width <- paste0(round(100 * diff(median_base_levels)), "%")
 labels <- c(original = "Original",
   fixed = paste0("Fixed MultiQT (eta=", settings$reference_multiplier, "*S0)"),
   absolute_slope = if (transform == "log1p") "Log-slope rate" else "Count-slope rate",
@@ -191,7 +257,18 @@ labels <- c(original = "Original",
   restart_grid_outer = "Starts x rate grid + outer",
   diverse_uniform = "Diverse experts: equal",
   diverse_shared = paste0("Diverse experts: learned + sharing (H=", H, ")"),
-  diverse_shared_common = "Diverse experts: learned + sharing, common weights")
+  diverse_shared_common = "Diverse experts: learned + sharing, common weights",
+  studentized = paste0("Studentized median (", residual_label, ", ", median_start, " start, eta=",
+    median_rate, ")"),
+  studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, eta=",
+    median_rate, ")"),
+  studentized_full = paste0("Studentized full base (base ", base_width, " width, eta=",
+    median_rate, ")"),
+  studentized_levels = paste0("Studentized full base (level scales, eta=", median_rate, ")"),
+  studentized_level_rms = paste0("Studentized full base (level RMS of ", median_window, ", eta=",
+    median_rate, ")"),
+  median_constant = paste0("Median, constant sigma (", residual_label, ", ", median_start,
+    " start, eta=", median_rate, ")"))
 colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
   oracle_target = "#CC79A7", uniform = "#E69F00", weighted = "#56B4E9",
   weighted_common = "#56B4E9", shared = "#882255", shared_common = "#882255",
@@ -199,7 +276,9 @@ colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
   restart_persistent = "#0072B2", restart_uniform = "#E69F00", restart_weighted = "#009E73",
   restart_grid = "#882255", restart_uniform_outer = "#56B4E9",
   restart_weighted_outer = "#D55E00", restart_grid_outer = "#CC79A7",
-  diverse_uniform = "#E69F00", diverse_shared = "#009E73", diverse_shared_common = "#009E73")
+  diverse_uniform = "#E69F00", diverse_shared = "#009E73", diverse_shared_common = "#009E73",
+  studentized = "#D55E00", studentized_base = "#009E73", median_constant = "#CC79A7",
+  studentized_full = "#D55E00", studentized_levels = "#009E73", studentized_level_rms = "#CC79A7")
 # Common weights across quantile levels: dashed lines and triangles.
 common <- setNames(grepl("_common", names(labels)), names(labels))
 line_types <- ifelse(common, 2, 1)
@@ -212,7 +291,11 @@ method_groups <- list(
     "restart_weighted", "restart_grid", "restart_uniform_outer", "restart_weighted_outer",
     "restart_grid_outer"),
   "Diverse experts" = c("original", "shared", "shared_common", "diverse_uniform",
-    "diverse_shared", "diverse_shared_common"))
+    "diverse_shared", "diverse_shared_common"),
+  "Studentized median" = c("original", "fixed", "studentized", "studentized_base",
+    "median_constant"),
+  "Studentized full base" = c("original", "fixed", "studentized_full", "studentized_levels",
+    "studentized_level_rms"))
 score_units <- if (settings$scale_method == "none") "counts" else
   paste0("counts / ", settings$scale_method)
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
@@ -272,9 +355,10 @@ for (run in runs) for (group_name in names(method_groups)) {
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  legend("center", c(truth_legend, labels[method_names]),
+  # Column-wise widths, so long labels fit; trailing spaces keep a gap between columns.
+  legend("center", paste0(c(truth_legend, labels[method_names]), "    "),
     col = c("black", colours[method_names]), lty = c(NA, line_types[method_names]),
-    pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n")
+    pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n", text.width = NA)
   mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 2, font = 2, cex = 1.15)
   mtext(paste("Issued alpha-quantile forecasts and their weekly pinball loss in", score_units,
     "against the", truth_label, "| Dotted line: peak"), side = 3, outer = TRUE, line = .5)
@@ -287,8 +371,10 @@ dev.off()
 # one shade per method; common-weight and outer variants share their method's shade.
 # CE = mean over levels of |coverage - alpha| over the window's weeks. Axes are
 # shared by the three windows of a location; up to peak includes the peak week.
+# Every method group needs a palette: methods of a group without one are not drawn.
 group_palettes <- c("Single trackers" = "Blues 3", "Rate-grid experts" = "Oranges",
-  "Weekly starts: immediate admission" = "Greens 3", "Diverse experts" = "Purples 3")
+  "Weekly starts: immediate admission" = "Greens 3", "Diverse experts" = "Purples 3",
+  "Studentized median" = "Burg", "Studentized full base" = "BluGrn")
 home_group <- character()
 for (group_name in names(method_groups)) for (method in method_groups[[group_name]])
   if (!method %in% c("original", names(home_group))) home_group[method] <- group_name
@@ -318,22 +404,53 @@ hidden_pairs <- unique(unlist(lapply(runs, function(run) {
   hidden <- setdiff(tradeoff_methods, shown_methods(run, tradeoff_methods))
   if (length(hidden)) paste(labels[hidden], "=", labels[run$duplicate_of[hidden]])
 })))
-# Legend: one column per group, headed by the group name.
+# Legend: one column per group, headed by the group name; the two studentized groups
+# share a column, so the legend fits the page width.
 legend_groups <- lapply(setNames(names(method_groups), names(method_groups)), function(group_name)
   setdiff(c(if (group_name == names(method_groups)[1]) "original",
     names(home_group)[home_group == group_name]), hidden_everywhere))
-legend_rows <- 1L + max(lengths(legend_groups))
-legend_entries <- unlist(lapply(names(legend_groups), function(group_name) c(group_name,
-  legend_groups[[group_name]], rep("", legend_rows - 1L - length(legend_groups[[group_name]])))))
+legend_columns <- c(as.list(setdiff(names(legend_groups), c("Studentized median",
+  "Studentized full base"))), list(c("Studentized median", "Studentized full base")))
+legend_columns <- lapply(legend_columns, function(groups)
+  unlist(lapply(groups, function(group_name) c(group_name, legend_groups[[group_name]]))))
+legend_rows <- max(lengths(legend_columns))
+legend_entries <- unlist(lapply(legend_columns, function(column)
+  c(column, rep("", legend_rows - length(column)))))
 legend_method <- legend_entries %in% tradeoff_methods
 legend_header <- legend_entries %in% names(legend_groups)
 
-n_locations <- length(runs)
+tradeoff_rows <- length(runs) + 1L          # First row: all prepared locations.
 cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 15,
-  height = 3.3 * n_locations + 3, family = "DejaVu Sans")
-layout(rbind(matrix(seq_len(3 * n_locations), n_locations, 3, byrow = TRUE), 3 * n_locations + 1L),
-  heights = c(rep(1, n_locations), .9))
-par(oma = c(4, 0, 3, 0), mgp = c(2.4, .7, 0))
+  height = 3.3 * tradeoff_rows + 3, family = "DejaVu Sans")
+layout(rbind(matrix(seq_len(3 * tradeoff_rows), tradeoff_rows, 3, byrow = TRUE),
+  3 * tradeoff_rows + 1L), heights = c(rep(1, tradeoff_rows), .9))
+par(oma = c(7.6, 0, 3, 0), mgp = c(2.4, .7, 0))
+# First row: every prepared location as a small, light symbol per method (legend shapes),
+# and the mean over locations as the usual symbol. The axes end at the 99th percentile of
+# the single locations.
+cloud <- all_scores[all_scores$method %in% setdiff(tradeoff_methods, hidden_everywhere), ]
+cloud <- cloud[order(cloud$method == "original"), ]
+xlim <- c(0, 1.05 * max(1e-8, quantile(cloud$quantile_loss, .99, na.rm = TRUE)))
+ylim <- c(0, 1.05 * max(.01, quantile(cloud$coverage_error, .99, na.rm = TRUE)))
+for (phase in phases) {
+  rows <- cloud[cloud$phase == phase, ]
+  means <- aggregate(cbind(quantile_loss, coverage_error) ~ method, rows, mean)
+  means <- means[order(means$method == "original"), ]
+  par(mar = c(3.8, 4, 3.4, 1))
+  plot(NA, xlim = xlim, ylim = ylim, xlab = mean_loss_axis_label, ylab = "Calibration error",
+    main = "")
+  mtext(paste("All", length(all_locations), "locations |", window_titles[phase]), side = 3,
+    line = 1.6, font = 2, cex = .85)
+  mtext("Small: single locations; large: means; axes to the 99th percentile", side = 3,
+    line = .3, cex = .75)
+  grid(col = "gray90")
+  points(rows$quantile_loss, rows$coverage_error, pch = tradeoff_shapes[rows$method],
+    cex = .5 * tradeoff_sizes[rows$method],
+    col = adjustcolor(tradeoff_colours[rows$method], alpha.f = .35))
+  points(means$quantile_loss, means$coverage_error, col = tradeoff_colours[means$method],
+    pch = tradeoff_shapes[means$method], cex = tradeoff_sizes[means$method],
+    lwd = ifelse(means$method == "original", 2, 1))
+}
 for (run in runs) {
   scores <- run$scores[run$scores$method %in% shown_methods(run, tradeoff_methods), ]
   # Original last, so it stays visible on top of the other methods.
@@ -363,7 +480,8 @@ legend("center", ifelse(legend_method, labels[legend_entries], legend_entries),
   pch = ifelse(legend_method, tradeoff_shapes[legend_entries], NA),
   pt.cex = ifelse(legend_method, tradeoff_sizes[legend_entries], 1),
   pt.lwd = ifelse(legend_entries == "original", 2, 1),
-  text.font = ifelse(legend_header, 2, 1), ncol = length(legend_groups), bty = "n", cex = 1.05)
+  text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = 1.05,
+  text.width = NA)                         # Column-wise widths, so every group column fits.
 mtext(plot_title(), side = 3, outer = TRUE, line = 1, font = 2, cex = 1.05)
 mtext("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
   side = 1, outer = TRUE, line = .5, cex = .8)
@@ -372,6 +490,20 @@ mtext(paste("Open circle: original forecasts. Filled circle: weights per quantil
   side = 1, outer = TRUE, line = 1.7, cex = .8)
 if (length(hidden_pairs)) mtext(paste("Not drawn (identical forecasts):",
   paste(hidden_pairs, collapse = "; ")), side = 1, outer = TRUE, line = 2.9, cex = .8)
+# Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
+# which are the original base (e.g. most of the flu up-to-peak window).
+mtext(paste0("Studentized median methods: sigma_t = RMS of the last ", median_window,
+  " released median residuals, or the base's ", base_width, " interval width / ",
+  round(diff(qnorm(median_base_levels)), 3), " (a normal sd)."), side = 1, outer = TRUE,
+  line = 4.1, cex = .8)
+median_warmup <- range(sapply(runs, function(run) run$sigma$warmup_weeks))
+if (median_warmup[2] > 0) mtext(paste0("With residuals, the original base is issued in the first ",
+  paste(unique(median_warmup), collapse = "-"), " weeks, until sigma_t exists; these weeks are ",
+  "scored as the base."), side = 1, outer = TRUE, line = 5.3, cex = .8)
+mtext(paste0("Studentized full base: offsets start at the base; level scales = normal sd of the ",
+  "base's central interval at each level, or the RMS of each level's last ", median_window,
+  " released residuals (weighted isotonic projection)."), side = 1, outer = TRUE, line = 6.5,
+  cex = .8)
 dev.off()
 
 # 10. ISSUED WEIGHTS OVER TIME ---------------------------------------

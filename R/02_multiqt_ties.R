@@ -34,13 +34,14 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
 # (historical maximum by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
-run_rate_grid <- function(case, keep_weekly = FALSE) {
+# multipliers: the grid to run (default: the dense plot grid; it must contain 0).
+run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipliers) {
   scaling <- choose_count_scale(case, settings$scale_method)
   s0 <- error_scale(case, settings$warmup_rounds, settings$scale_floor, settings$transform,
     settings$replay_warmup)
   # If fewer than 20 reports arrive, every multiplier keeps the base.
-  eta <- rate_multipliers * s0$scale
-  eta[rate_multipliers == 0] <- 0
+  eta <- multipliers * s0$scale
+  eta[multipliers == 0] <- 0
   # Score every issued week, including the S0 warmup, where every m issues the base
   # unless the warmup is replayed.
   truth <- score_truth(case, settings$score_target, settings$score_filled)
@@ -48,7 +49,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
   phase_rows <- lapply(setNames(phases, phases), function(phase) which(scored &
     phase_weeks(case, phase, weeks_before_peak, weeks_after_peak)))
   scores <- scores_by_level <- weekly <- list()
-  for (i in seq_along(rate_multipliers)) {
+  for (i in seq_along(multipliers)) {
     q <- multiqt(case$base, case$feedback_observed, case$feedback_by_week, case$alpha,
       eta[i], s0$warmup_weeks, settings$transform)
     # Coverage compares counts, so exact ties with integer reports stay ties.
@@ -57,13 +58,13 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
     for (phase in phases) {
       s <- summarize_scores(week_scores, case$alpha, phase_rows[[phase]])
       key <- paste(i, phase)
-      scores[[key]] <- data.frame(phase, multiplier = rate_multipliers[i], eta = eta[i],
+      scores[[key]] <- data.frame(phase, multiplier = multipliers[i], eta = eta[i],
         n_weeks = s$n_weeks, quantile_loss = s$quantile_loss, coverage_error = s$coverage_error)
-      scores_by_level[[key]] <- data.frame(phase, multiplier = rate_multipliers[i],
+      scores_by_level[[key]] <- data.frame(phase, multiplier = multipliers[i],
         eta = eta[i], n_weeks = s$n_weeks, s$by_level)
     }
-    if (keep_weekly && rate_multipliers[i] %in% display_multipliers) {
-      weekly[[as.character(rate_multipliers[i])]] <- list(q = q / scaling$scale,
+    if (keep_weekly && multipliers[i] %in% display_multipliers) {
+      weekly[[as.character(multipliers[i])]] <- list(q = q / scaling$scale,
         covered = week_scores$covered, loss = week_scores$loss)
     }
   }
@@ -80,8 +81,8 @@ run_rate_grid <- function(case, keep_weekly = FALSE) {
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL),
     rate_grid = data.frame(id, transform = settings$transform,
       feedback_delay = case$feedback_delay, score_target = settings$score_target,
-      multiplier = rate_multipliers,
-      eta, ensemble_expert = rate_multipliers %in% expert_multipliers,
+      multiplier = multipliers,
+      eta, ensemble_expert = multipliers %in% expert_multipliers,
       initialized = s0$initialized, initialization_date = s0$date,
       warmup_weeks = s0$warmup_weeks, initialization_rounds = length(s0$rows),
       consumed_rounds = length(s0$consumed_rows), raw_error_scale = s0$raw_scale,
@@ -106,6 +107,21 @@ write.csv(do.call(rbind, lapply(runs, `[[`, "rate_grid")),
 write.csv(scores, file.path(result_dir, "multiqt_phase_rate_tradeoffs.csv"), row.names = FALSE)
 # About 300,000 rows (cases x multipliers x phases x levels): stored as RDS.
 saveRDS(scores_by_level, file.path(result_dir, "multiqt_scores_by_level.rds"))
+# Every prepared location (not only location_ids), on the multipliers drawn as dots, for
+# the first row of multiqt_error_tradeoff.pdf. Only the scores are kept.
+all_scores <- list()
+for (prepared_case in prepared$cases) {
+  key <- with(prepared_case, paste(disease, location, horizon, sep = "_"))
+  if (!prepared_case$disease %in% diseases || !prepared_case$horizon %in% settings$horizons) next
+  all_scores[[key]] <- if (key %in% names(runs))
+    runs[[key]]$scores[runs[[key]]$scores$multiplier %in% expert_multipliers, ] else
+    run_rate_grid(get_case(prepared, prepared_case$disease, prepared_case$location,
+      prepared_case$horizon, settings$feedback_delay), multipliers = expert_multipliers)$scores
+}
+all_scores <- do.call(rbind, all_scores)
+rownames(all_scores) <- NULL
+write.csv(all_scores, file.path(result_dir, "multiqt_phase_rate_tradeoffs_all_locations.csv"),
+  row.names = FALSE)
 print(scores[scores$disease == season_disease & scores$horizon == season_horizon &
   scores$phase == "overall" & scores$multiplier %in% display_multipliers,
   c("location", "multiplier", "n_weeks", "quantile_loss", "coverage_error")], row.names = FALSE)
@@ -154,30 +170,70 @@ plot_tradeoff_panel <- function(rows, title) {
   plot(NA, xlim = extendrange(rows$quantile_loss[finite]),
     ylim = extendrange(rows$coverage_error[finite]),
     xlab = "Mean quantile loss", ylab = "Calibration error", main = title)
-  support <- character()
-  for (phase in phases) {
-    z <- rows[rows$phase == phase, ]
-    support <- c(support, z$n_weeks[1])
-    if (!any(is.finite(z$quantile_loss))) next
-    dots <- z[z$multiplier %in% dot_multipliers, ]
-    points(dots$quantile_loss, dots$coverage_error, pch = phase_pch[phase],
-      col = phase_colours[phase], cex = dot_size(dots$multiplier))
-    zero <- z[z$multiplier == 0, ]
-    points(zero$quantile_loss, zero$coverage_error, pch = phase_open_pch[phase],
-      col = phase_colours[phase], cex = 2, lwd = 2)
-  }
+  support <- vapply(phases, function(phase) as.character(rows$n_weeks[rows$phase == phase][1]), "")
+  draw_tradeoff_points(rows)
   mtext(paste("Weeks before / after / overall:", paste(support, collapse = " / ")),
     side = 3, line = .1, cex = .6)
+}
+# Shades of a phase colour from light (smallest m) to dark (largest m), on the log scale.
+m_shade <- function(colour, m) {
+  ramp <- colorRampPalette(c(colorRampPalette(c("white", colour))(5)[2], colour,
+    colorRampPalette(c(colour, "black"))(5)[3]))(100)
+  ramp[1 + round(99 * (log10(m) - log10(multiplier_min)) /
+    (log10(multiplier_max) - log10(multiplier_min)))]
+}
+# The symbols of a panel: dots for the expert multipliers, growing with m, and the open
+# m = 0 symbol, in each phase's colour; alpha and size shrink them for single locations.
+# shade = TRUE darkens the dots with m (m = 0 in the lightest shade, thin); halo = TRUE
+# draws a white rim around every symbol so it stands out from a cloud.
+draw_tradeoff_points <- function(rows, alpha = 1, size = 1, shade = FALSE, halo = FALSE) {
+  for (phase in phases) {
+    z <- rows[rows$phase == phase & is.finite(rows$quantile_loss), ]
+    colour <- adjustcolor(if (shade) m_shade(phase_colours[phase], multiplier_min) else
+      phase_colours[phase], alpha.f = alpha)
+    dots <- z[z$multiplier %in% dot_multipliers, ]
+    dot_colour <- if (shade) adjustcolor(m_shade(phase_colours[phase], dots$multiplier),
+      alpha.f = alpha) else colour
+    zero <- z[z$multiplier == 0, ]
+    if (halo) {
+      points(dots$quantile_loss, dots$coverage_error, pch = phase_pch[phase], col = "white",
+        cex = 1.4 * size * dot_size(dots$multiplier))
+      points(zero$quantile_loss, zero$coverage_error, pch = phase_open_pch[phase],
+        col = "white", cex = 2 * size, lwd = 5 * size)
+    }
+    points(dots$quantile_loss, dots$coverage_error, pch = phase_pch[phase], col = dot_colour,
+      cex = size * dot_size(dots$multiplier))
+    points(zero$quantile_loss, zero$coverage_error, pch = phase_open_pch[phase],
+      col = colour, cex = 2 * size, lwd = if (shade) size else 2 * size)
+  }
+}
+# All prepared locations in one panel: small, light symbols for single locations and the
+# usual symbols for the unweighted means over locations. Axes: 1st to 99th percentile.
+plot_all_locations_panel <- function(rows, title) {
+  rows <- rows[rows$multiplier %in% c(0, dot_multipliers) & is.finite(rows$quantile_loss) &
+    is.finite(rows$coverage_error), ]
+  means <- aggregate(cbind(quantile_loss, coverage_error) ~ phase + multiplier, rows, mean)
+  plot(NA, xlim = extendrange(c(quantile(rows$quantile_loss, c(.01, .99)), means$quantile_loss)),
+    ylim = extendrange(c(quantile(rows$coverage_error, c(.01, .99)), means$coverage_error)),
+    xlab = "Mean quantile loss", ylab = "Calibration error", main = title)
+  draw_tradeoff_points(rows, alpha = .5, size = .7, shade = TRUE)
+  draw_tradeoff_points(means, halo = TRUE)
+  mtext("Small: locations, darker = larger m; large: means", side = 3, line = .1, cex = .6)
 }
 # One row per location and one column per horizon, legend below.
 n_rows <- length(settings$location_ids)
 n_columns <- length(settings$horizons)
 page_height <- 3.1 * n_rows + 1.5   # 17 inches for 5 locations.
-plot_tradeoff_page <- function(rows, disease, title) {
-  panels <- n_rows * n_columns
-  layout(rbind(matrix(seq_len(panels), n_rows, n_columns, byrow = TRUE), panels + 1L),
-    heights = c(rep(1, n_rows), .4))
+# all_rows: scores of every prepared location; if given, they fill a first row.
+plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
+  page_rows <- n_rows + !is.null(all_rows)
+  panels <- page_rows * n_columns
+  layout(rbind(matrix(seq_len(panels), page_rows, n_columns, byrow = TRUE), panels + 1L),
+    heights = c(rep(1, page_rows), .4))
   par(oma = c(1, 0, 4, 0), mar = c(3.6, 3.6, 2.6, .8), mgp = c(2.2, .6, 0), cex = .8)
+  if (!is.null(all_rows)) for (horizon in settings$horizons)
+    plot_all_locations_panel(all_rows[all_rows$horizon == horizon, ],
+      paste("All", length(unique(all_rows$location)), "locations | horizon", horizon))
   for (location in settings$location_ids) for (horizon in settings$horizons)
     plot_tradeoff_panel(rows[rows$location == location & rows$horizon == horizon, ],
       paste(location_names[location], "| horizon", horizon))
@@ -192,10 +248,12 @@ plot_tradeoff_page <- function(rows, disease, title) {
   mtext(paste(settings_label, "| Lower left is better."), side = 3, outer = TRUE, line = .7, cex = .85)
 }
 # Calibration error = mean over levels of |coverage - alpha|; loss = mean over levels.
-cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = page_height, family = "DejaVu Sans")
+# First row: every prepared location (all_scores).
+cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = page_height + 3.1, family = "DejaVu Sans")
 for (disease in diseases)
   plot_tradeoff_page(scores[scores$disease == disease, ], disease,
-    "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels")
+    "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels",
+    all_scores[all_scores$disease == disease, ])
 dev.off()
 
 # The same comparison for each quantile level: one page per disease and level.

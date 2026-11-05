@@ -17,7 +17,7 @@ multiqt_settings <- function() list(
   feedback_delay = 2L,              # Weeks after the first report before MultiQT learns from a forecast.
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
-  scale_floor = 1e-6,               # Guard on the error scale, not each rate.
+  scale_floor = 1e-6,               # Guard on S0, sigma_t and the level scales, not each rate.
   reference_multiplier = .05,       # Fixed MultiQT: eta = .05 * S0.
   H = 8L,                           # Lookback for learned lambda; sharing uses 1/(2H).
   lambda_start = 2.72,
@@ -102,6 +102,77 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
     raw_scale = raw_scale, scale = scale, rounds = rounds, floor = floor)
 }
 
+# Scale sigma_t of the median residuals y - b (tracker units) for the studentized
+# median MultiQT: one estimate of their standard deviation per issue week.
+#   "residuals" root mean square of the last `window` median residuals released by
+#               issue week t (only released reports, no hindsight). NA until min_rows
+#               are released. A small window adapts quickly but is noisier. Reports
+#               arrive weeks after issue, so this scale still reacts to a wave late.
+#   "base"      the sd implied by the issued base: the width between its quantile `levels`
+#               divided by that of a standard normal, e.g. (q.9 - q.1) / 2.563 for the 80%
+#               interval. No feedback lag; a point-mass base gives the floor.
+# warmup_weeks: the weeks before the first sigma_t; the method issues the original base there.
+median_sigma <- function(case, method = "residuals", window = 5L, min_rows = 5L,
+                         floor = 1e-6, transform = "log1p", levels = c(.1, .9)) {
+  stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
+  base_level <- function(alpha) to_tracker(case$base[, match(alpha, case$alpha)], transform)
+  scale <- switch(method,
+    residuals = {
+      released <- unlist(case$feedback_by_week)              # Rows in release order.
+      residual <- to_tracker(case$feedback_observed[released], transform) -
+        base_level(.5)[released]
+      n_released <- cumsum(lengths(case$feedback_by_week))   # By each issue week.
+      vapply(n_released, function(k) if (k < min_rows) NA_real_ else
+        max(floor, sqrt(mean(residual[max(1L, k - window + 1L):k]^2))), numeric(1))
+    },
+    base = {
+      stopifnot(length(levels) == 2L, levels[1] < levels[2], all(levels %in% case$alpha))
+      pmax(floor, (base_level(levels[2]) - base_level(levels[1])) / diff(qnorm(levels)))
+    },
+    stop("Unknown median sigma ", method))
+  first <- match(TRUE, is.finite(scale))
+  list(scale = scale, warmup_weeks = if (is.na(first)) length(scale) else first - 1L,
+    method = method, window = window, min_rows = min_rows, floor = floor)
+}
+
+# Quantile-specific scales sigma_t^alpha (tracker units) for the studentized MultiQT on the
+# full base: the normal sd implied by the base's central interval between levels alpha and
+# 1 - alpha (at the median, the nearest pair). Symmetric in alpha and wider in heavier
+# tails. Returns a matrix [week x level]. Needs levels symmetric about .5.
+# Level scales often violate the research note's (sufficient) inward-flow condition, so
+# MultiQT's long-run calibration guarantee covers a common scale, not these scales.
+level_sigma <- function(case, floor = 1e-6, transform = "log1p") {
+  q <- to_tracker(case$base, transform)
+  m <- ncol(q)
+  stopifnot(isTRUE(all.equal(case$alpha, 1 - rev(case$alpha))))
+  lower <- pmin(seq_len(m), m + 1L - seq_len(m))     # Mirror pairs by index, not 1 - alpha.
+  lower[lower == m + 1L - lower] <- lower[lower == m + 1L - lower] - 1L
+  upper <- m + 1L - lower
+  z <- qnorm(case$alpha)
+  scale <- pmax((q[, upper, drop = FALSE] - q[, lower, drop = FALSE]) /
+    rep(z[upper] - z[lower], each = nrow(q)), floor)
+  dimnames(scale) <- dimnames(q)
+  scale
+}
+
+# Quantile-specific scales sigma_t^alpha from recent residuals (tracker units): for every
+# level, the RMS of y_s - b_s^alpha over the last `window` rows s released by issue week t
+# (no hindsight). Rows are NA until min_rows are released, like median_sigma("residuals").
+# Returns a matrix [week x level]. Like level_sigma(), no calibration guarantee.
+level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
+                                 transform = "log1p") {
+  stopifnot(window >= 1L, min_rows >= 1L)   # Otherwise a later report enters sigma_t.
+  released <- unlist(case$feedback_by_week)                # Rows in release order.
+  residual <- to_tracker(case$feedback_observed[released], transform) -
+    to_tracker(case$base[released, , drop = FALSE], transform)
+  n_released <- cumsum(lengths(case$feedback_by_week))     # By each issue week.
+  scale <- t(vapply(n_released, function(k) if (k < min_rows) rep(NA_real_, ncol(residual)) else
+    pmax(sqrt(colMeans(residual[max(1L, k - window + 1L):k, , drop = FALSE]^2)), floor),
+    numeric(ncol(residual))))
+  dimnames(scale) <- dimnames(case$base)
+  scale
+}
+
 # Peak-relative windows, as a logical vector over the case's weeks. The peak is
 # the largest latest-reported count in the disease's peak window (hindsight label only).
 # before and after are window lengths: before = weeks -(before - 1)..0, including the
@@ -179,7 +250,26 @@ summarize_scores <- function(scores, alpha, weeks) {
     quantile_loss = mean(loss), n_weeks = length(weeks))
 }
 
-# 4. STANDARD MULTIQT -----------------------------------------------------
+# 4. MULTIQT: STANDARD AND STUDENTIZED -----------------------------------
+# Weighted isotonic regression (pool adjacent violators): the increasing q that
+# minimizes sum(w * (q - v)^2). Equal weights give isoreg().
+weighted_isoreg <- function(v, w) {
+  value <- weight <- numeric(length(v))
+  size <- integer(length(v))
+  k <- 0L
+  for (i in seq_along(v)) {
+    k <- k + 1L
+    value[k] <- v[i]; weight[k] <- w[i]; size[k] <- 1L
+    while (k > 1L && value[k - 1L] > value[k]) {         # Pool the violating neighbours.
+      total <- weight[k - 1L] + weight[k]
+      value[k - 1L] <- (weight[k - 1L] * value[k - 1L] + weight[k] * value[k]) / total
+      weight[k - 1L] <- total; size[k - 1L] <- size[k - 1L] + size[k]
+      k <- k - 1L
+    }
+  }
+  rep(value[seq_len(k)], size[seq_len(k)])
+}
+
 # base: issued quantiles [week x level] in counts; feedback: reported counts at
 # the case's feedback delay; feedback_by_week[[w]]: the earlier rows whose feedback
 # is released at issue week w. eta: one rate, or one per week, in tracker units. The first
@@ -187,21 +277,37 @@ summarize_scores <- function(scores, alpha, weeks) {
 # Optional leaky shift of all levels (leak = 0: standard MultiQT): each report adds
 # leak * mean(alpha - covered); the shift is multiplied by decay (one value, or one
 # per week) at every issue week and capped at +-leak_bound.
+# Optional studentized offsets (sigma = 1, start = 0: standard MultiQT): week w issues
+# base + sigma[w] * offsets. sigma: one value, or one per week, in tracker units; then
+# offsets and eta are in units of sigma, and a change of sigma rescales the whole
+# accumulated offset (the leaky shift stays in tracker units). A matrix sigma
+# [week x level] gives each level its own scale; the projection is then weighted
+# isotonic regression with weights 1 / sigma^2 (Euclidean in units of sigma).
+# start: the offsets before the first update, one value or one per level.
 # Returns the adjusted forecasts in counts.
 multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
                     warmup_weeks = 0L, transform = "log1p",
-                    leak = 0, decay = .5, leak_bound = .2) {
+                    leak = 0, decay = .5, leak_bound = .2, sigma = 1, start = 0) {
   n <- nrow(base)
-  # Nothing to learn (eta = 0, or S0 never initialized): keep the exact base.
-  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0)) return(base)
+  # Only warmup weeks (e.g. S0 never initialized), or nothing to learn and start = 0:
+  # keep the exact base.
+  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0 && isTRUE(all(start == 0))))
+    return(base)
   if (length(eta) == 1L) eta <- rep(eta, n)
   if (length(decay) == 1L) decay <- rep(decay, n)
+  if (length(sigma) == 1L) sigma <- rep(sigma, n)
+  by_level <- is.matrix(sigma)              # One scale per level: weighted projection.
   base_tracker <- to_tracker(base, transform)
   feedback_tracker <- to_tracker(feedback, transform)
+  warmup <- seq_len(n) <= warmup_weeks      # sigma may be missing in warmup weeks.
+  issued_sigma <- if (by_level) sigma[!warmup, , drop = FALSE] else sigma[!warmup]
   stopifnot(ncol(base) == length(alpha), length(feedback) == n,
     length(feedback_by_week) == n, length(eta) == n, all(is.finite(eta)), all(eta >= 0),
+    NROW(sigma) == n, !by_level || ncol(sigma) == length(alpha),
+    all(is.finite(issued_sigma) & issued_sigma > 0),
+    length(start) %in% c(1L, length(alpha)), all(is.finite(start)),
     all(is.finite(base_tracker)), all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
-  offsets <- numeric(length(alpha))
+  offsets <- rep_len(start, length(alpha))
   shift <- 0
   q_tracker <- base_tracker
   for (week in seq_len(n)) {
@@ -217,7 +323,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     shift <- min(leak_bound, max(-leak_bound, shift))
     # Project only the issued forecasts, NOT the offsets ("lazy" MultiQT).
     # isoreg restores quantile order: e.g., (12,10) becomes (11,11).
-    q_tracker[week, ] <- isoreg(base_tracker[week, ] + offsets + shift)$yf
+    # Weights (min sigma / sigma)^2: the same projection as 1 / sigma^2, without overflow.
+    q_tracker[week, ] <- if (by_level) weighted_isoreg(base_tracker[week, ] +
+      sigma[week, ] * offsets + shift, (min(sigma[week, ]) / sigma[week, ])^2) else
+      isoreg(base_tracker[week, ] + sigma[week] * offsets + shift)$yf
   }
   # Do not clip negative predictions: that would change the issued coverage indicators.
   q <- from_tracker(q_tracker, transform)
@@ -225,6 +334,24 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
   unchanged <- q_tracker == base_tracker
   q[unchanged] <- base[unchanged]
   q
+}
+
+# Studentized median MultiQT: the base is reduced to its median b_t, and week t issues
+# b_t + sigma_t * offsets at every level (tracker units; isoreg restores the order).
+# Coverage and update are those of multiqt(): 1{y_s <= q_s} = 1{(y_s - b_s) / sigma_s <=
+# issued offset_s}, so offsets and eta are in units of sigma. sigma: one value, or
+# sigma_t per week (median_sigma()). start: the offsets before the first update, e.g.
+# qnorm(alpha), a normal forecast with sd sigma_t, or qt(alpha, window) for sigma_t from
+# the RMS of `window` residuals. The first warmup_weeks forecasts keep the original base,
+# like every method; reports on them released later are compared with it.
+# Returns the adjusted forecasts in counts.
+median_multiqt <- function(case, eta, sigma, start, warmup_weeks = 0L, transform = "log1p") {
+  median_base <- case$base
+  median_base[] <- case$base[, match(.5, case$alpha)]   # Every level: the base median.
+  warmup <- seq_len(nrow(median_base)) <= warmup_weeks
+  median_base[warmup, ] <- case$base[warmup, ]
+  multiqt(median_base, case$feedback_observed, case$feedback_by_week, case$alpha, eta,
+    warmup_weeks, transform, sigma = sigma, start = start)
 }
 
 # 5. EXPERT CREATORS ------------------------------------------------------
