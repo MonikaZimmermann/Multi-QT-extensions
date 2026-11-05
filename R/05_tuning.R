@@ -1,17 +1,20 @@
-# Purpose: tune one setting per recalibration method on the tuning season (2023/24)
-# and save the choice for R/04_methods.R.
+# Purpose: tune one setting per recalibration method on the tuning period of the
+# design prepared by R/01_data_overview.R and save the choice for R/04_methods.R.
 # Run from the project root after R/01_data_overview.R: Rscript R/05_tuning.R
 # (about 45 minutes on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04.
 # Every method runs online from the first round on, exactly as in 04; only the rows of
-# the tuning season are scored (2023/24: phase_weeks(..., period = "tuning")).
+# the tuning period are scored (phase_weeks(..., period = "tuning")).
 source("R/03_functions.R")
 
 # 1. SETTINGS -----------------------------------------------------------------
 settings <- multiqt_settings()
+prepared <- readRDS("output/data/peak_aligned.rds")
+design <- prepared$settings$design
 diseases <- c("covid", "flu")
-# Pooled over locations and these horizons. Horizon -1 uses the values tuned here: the
-# windowed_seasonal base has zero width there, and its 2023/24 forecasts used final counts.
-tuning_horizons <- 0:3
+# Pooled over locations and these horizons. "seasons" design: horizon -1 uses the values
+# tuned on 0-3 (the windowed_seasonal base has zero width there, and its 2023/24 forecasts
+# used final counts); "hub_first_months": CMU's horizon -1 nowcasts are tuned as well.
+tuning_horizons <- if (design == "seasons") 0:3 else settings$horizons
 # Criterion: the mean pinball loss of log(counts + 1) ("log", Bosse et al. 2023:
 # relative errors, comparable across locations and seasons) or of counts per 100k
 # residents ("natural"). Both are saved, with the calibration error.
@@ -29,7 +32,6 @@ grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4)
               outer_multiplier = c(.001, .002, .004, .01, .02, .05, .1, .2))
 # A value chosen on the edge of its grid is flagged in tuned_settings.csv (on_grid_edge).
 cores <- max(1L, parallel::detectCores() - 2L)
-prepared <- readRDS("output/data/peak_aligned.rds")
 result_dir <- "output/results/tuning"
 figure_dir <- "output/pdf"
 dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
@@ -111,7 +113,8 @@ for (disease in diseases) for (transform in transforms) {
 }
 all_scores <- do.call(rbind, all_scores)
 rownames(all_scores) <- NULL
-write.csv(all_scores, file.path(result_dir, "tuning_scores.csv"), row.names = FALSE)
+write.csv(all_scores, file.path(result_dir, paste0("tuning_scores_", design, ".csv")),
+  row.names = FALSE)
 
 # 3. CHOOSE AND SAVE ----------------------------------------------------------
 # Cases without tuning rows (NA) drop out of the means; a disease without any keeps
@@ -129,7 +132,8 @@ tuned$on_grid_edge <- mapply(function(setting, value) value %in% range(grids[[se
   tuned$setting, tuned$value)
 tuned <- tuned[order(tuned$disease, tuned$transform, match(tuned$method, method_names)), ]
 rownames(tuned) <- NULL
-write.csv(tuned, file.path(result_dir, "tuned_settings.csv"), row.names = FALSE)
+write.csv(tuned, file.path(result_dir, paste0("tuned_settings_", design, ".csv")),
+  row.names = FALSE)
 print(tuned[c("disease", "transform", "method", "setting", "value", "on_grid_edge",
   "log_loss_change_percent", "coverage_error", "original_coverage_error")], digits = 3,
   row.names = FALSE)
@@ -172,7 +176,7 @@ for (disease in intersect(diseases, means$disease)) {
   plot.new()
   legend("center", c("log1p tracker", "identity tracker", "chosen value"), lty = c(1, 2, NA),
     pch = c(NA, NA, 1), bty = "n")
-  mtext(paste(disease, "| tuning season", paste(prepared$settings$tuning_seasons, collapse = ", "),
+  mtext(paste(disease, "| design", design, "| tuning period", prepared$settings$tuning_label,
     "| horizons", paste(range(tuning_horizons), collapse = " to "), "| all locations"),
     side = 3, outer = TRUE, line = 1.2, font = 2)
   mtext(paste("Mean pinball loss of", criterion_label, "relative to the original forecasts",

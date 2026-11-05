@@ -164,8 +164,17 @@ print(available_then)
 
 # 5. PREPARE THE DATA FOR SCRIPTS 02 AND 04 ------------------------------------
 # Keep every location's full forecast chronology in raw count units, from the first
-# 2023/24 round on. Seasons run from October to September and are set by the target
-# week: 2023/24 tunes the methods' settings, 2024/25 and 2025/26 evaluate them.
+# round of the design on. Seasons run from October to September and are set by the
+# target week. Each row belongs to a period by its target week: "tuning" (R/05 chooses
+# the methods' settings there, and every method warms up there), "evaluation" (scored
+# by 02 and 04) or "other". Two designs:
+#   "hub_first_months": the CMU hub forecasts of both diseases from 2024-11-23 (real
+#     horizon -1 nowcasts, report versions throughout); tuning on the target weeks
+#     through hub_tuning_through (the first six months), evaluation on the later
+#     weeks of the evaluation seasons (June 2025 to September 2026).
+#   "seasons": the base per disease (`base`) from 2023-10-14; tuning on the 2023/24
+#     season, evaluation on the 2024/25 and 2025/26 seasons. Nothing is forecast from
+#     May to November 2024, so the methods carry their 2023/24 state across that gap.
 # Peaks only label weeks in hindsight; they do not affect online feedback. A peak is
 # the largest latest-reported weekly count of a season (flu) or a half season (covid:
 # October to March and April to September, one for the winter and one for the summer
@@ -199,9 +208,15 @@ print(available_then)
 #   online feedback; feedback_delay in R/03_functions.R chooses one of them.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
 #   see fill_missing_rounds() below; the gap from May to November 2024 stays.
-prepare_settings <- list(base = c(covid = "windowed_seasonal", flu = "cmu_hub"),
-                         start_date = as.Date("2023-10-14"), season_start_month = 10L,
-                         tuning_seasons = "2023/24",
+design <- "hub_first_months"                  # "hub_first_months" or "seasons".
+prepare_settings <- list(design = design,
+                         base = if (design == "seasons")
+                           c(covid = "windowed_seasonal", flu = "cmu_hub") else
+                           c(covid = "cmu_hub", flu = "cmu_hub"),
+                         start_date = as.Date(if (design == "seasons") "2023-10-14" else
+                           "2024-11-23"), season_start_month = 10L,
+                         tuning_seasons = "2023/24",                         # "seasons"
+                         hub_tuning_through = as.Date("2025-05-31"),         # "hub_first_months"
                          evaluation_seasons = c("2024/25", "2025/26"),
                          half_season_peaks = c(covid = TRUE, flu = FALSE),
                          final_data_through = as.Date("2024-04-27"),
@@ -292,8 +307,13 @@ prepare_data <- function(forecasts, vintages, settings) {
   group_key <- function(x) paste(x$disease, x$location, sep = "_")
   forecast_groups <- split(seq_len(nrow(selected)), group_key(selected))
   report_groups <- split(seq_len(nrow(reports)), group_key(reports))
-  periods <- function(season) ifelse(season %in% settings$tuning_seasons, "tuning",
-    ifelse(season %in% settings$evaluation_seasons, "evaluation", "other"))
+  # Period of a target week (see the designs above).
+  period_of <- function(date) {
+    season <- season_of(date, settings$season_start_month)
+    tuning <- if (settings$design == "seasons") season %in% settings$tuning_seasons else
+      date <= settings$hub_tuning_through
+    ifelse(tuning, "tuning", ifelse(season %in% settings$evaluation_seasons, "evaluation", "other"))
+  }
   cases <- peaks <- list()
   for (key in names(forecast_groups)) {
     f <- selected[forecast_groups[[key]], , drop = FALSE]
@@ -328,16 +348,18 @@ prepare_data <- function(forecasts, vintages, settings) {
     location_peaks <- list()
     for (part in unique(part_of(f$target_end_date))) {
       window <- latest[latest_part == part & is.finite(latest$value), , drop = FALSE]
+      if (!nrow(window)) next
       season <- season_of(window$target_end_date[1], settings$season_start_month)
-      if (!nrow(window) || periods(season) == "other") next
       best <- which.max(window$value)
-      if (!window$target_end_date[best] %in% f$target_end_date) next
+      # The peak's period is that of its week.
+      if (period_of(window$target_end_date[best]) == "other" ||
+          !window$target_end_date[best] %in% f$target_end_date) next
       tied <- which(window$value == window$value[best])
       location_peaks[[part]] <- data.frame(disease, location = r$location[1],
         geo_value = r$geo_value[1], location_name, season,
         half = if (half) half_season_of(window$target_end_date[best],
           settings$season_start_month) else "season",
-        period = periods(season), peak_date = window$target_end_date[best],
+        period = period_of(window$target_end_date[best]), peak_date = window$target_end_date[best],
         peak_value = window$value[best], boundary_peak = best %in% c(1L, nrow(window)),
         tied_peak_n = length(tied), last_tied_date = max(window$target_end_date[tied]),
         window_start = min(window$target_end_date), window_end = max(window$target_end_date),
@@ -443,7 +465,7 @@ prepare_data <- function(forecasts, vintages, settings) {
         # The base, and the reports' as-of date of each round (also for the feedback).
         base_name = settings$base[[disease]], as_of = issue_as_of[issues],
         # Season of the target week and its period: "tuning", "evaluation" or "other".
-        season = season, period = periods(season),
+        season = season, period = period_of(target_date),
         # This location's peaks, and per week the nearest one (hindsight labels only).
         peaks = location_peaks, peak_index = nearest,
         peak_date = location_peaks$peak_date[nearest], relative_week = relative_week,
@@ -468,6 +490,15 @@ base_forecasts <- bind_rows(lapply(names(prepare_settings$base), function(diseas
   if (!"generation_date" %in% names(table)) table$generation_date <- as.Date(NA)
   table
 }))
+# Labels of the periods for the plots of 02, 04 and 05.
+prepare_settings$tuning_label <- if (design == "seasons")
+  paste("season", paste(prepare_settings$tuning_seasons, collapse = " and ")) else
+  paste(format(prepare_settings$start_date, "%b %Y"), "to",
+    format(prepare_settings$hub_tuning_through, "%b %Y"))
+prepare_settings$evaluation_label <- if (design == "seasons")
+  paste("seasons", paste(prepare_settings$evaluation_seasons, collapse = " and ")) else
+  paste(format(prepare_settings$hub_tuning_through + 1, "%b %Y"), "to the end of season",
+    tail(prepare_settings$evaluation_seasons, 1))
 peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
 dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
 saveRDS(peak_aligned, "output/data/peak_aligned.rds")

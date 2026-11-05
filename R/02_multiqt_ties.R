@@ -141,8 +141,7 @@ settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
   score_units)
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
-  overall = paste0("Overall (seasons ", paste(prepared$settings$evaluation_seasons,
-    collapse = " and "), ")"))
+  overall = paste0("Overall (", prepared$settings$evaluation_label, ")"))
 phase_colours <- c(before = "#D55E00", after = "#0072B2", overall = "gray25")
 phase_pch <- c(before = 17, after = 16, overall = 15)   # m = 0: open version of the symbol.
 phase_open_pch <- c(before = 2, after = 1, overall = 0)
@@ -408,7 +407,7 @@ colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(disp
   diff(range(log10(display_multipliers[-1]))))
 multiplier_colours <- c("orange", hcl.colors(320, "Viridis")[colour_index])
 # Both weekly diagnostics use the same quantile styles and peak marker.
-# Background of the time plots: the tuning season shaded, dotted lines at the peaks.
+# Background of the time plots: the tuning period shaded, dotted lines at the peaks.
 mark_time <- function(case) {
   tuning <- case$target_date[case$period == "tuning"]
   usr <- par("usr")
@@ -480,7 +479,7 @@ for (location in settings$location_ids) {
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
     " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: largest count of ",
-    "each (half) season | Gray: tuning season (not scored)"),
+    "each (half) season | Gray: tuning period (not scored)"),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
