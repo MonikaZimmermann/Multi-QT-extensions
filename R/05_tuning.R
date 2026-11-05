@@ -1,7 +1,7 @@
 # Purpose: tune one setting per recalibration method on the tuning period of the
 # design prepared by R/01_data_overview.R and save the choice for R/04_methods.R.
 # Run from the project root after R/01_data_overview.R: Rscript R/05_tuning.R
-# (about 45 minutes on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04.
+# (about 20 minutes on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04.
 # Every method runs online from the first round on, exactly as in 04; only the rows of
 # the tuning period are scored (phase_weeks(..., period = "tuning")).
 source("R/03_functions.R")
@@ -20,10 +20,9 @@ tuning_horizons <- if (design == "seasons") 0:3 else settings$horizons
 # residents ("natural"). Both are saved, with the calibration error.
 tuning_score <- "log"
 transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses settings$transform.
-# One grid per tuned setting (tuned_setting in R/03_functions.R); multiples of S0 except
-# H, lambda, switching strength and the studentized eta (units of sigma_t). Switching
-# strength follows the ordinary inner tuning, using the tuned diverse common bank;
-# the outer rates come last, on the tuned inner mixtures.
+# One grid per tuned setting (tuned_setting in R/03_functions.R, plus the soft switch's
+# threshold, width and signal weights); multiples of S0 except H, lambda, the switch
+# settings and the studentized eta (units of sigma_t).
 grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4),
               slope_min_multiplier = c(.002, .004, .01, .02, .05, .1),
               median_rate = c(.003, .01, .03, .1, .3, 1),
@@ -31,7 +30,22 @@ grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4)
               restart_lambda = c(.25, .5, 1, 2.72, 7, 20),
               diverse_slow_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2),
               switch_strength = c(0, .25, .5, .75, 1),
+              switch_threshold = c(.02, .05, .1, .2),
+              switch_width = c(.02, .05, .1, .2),
+              switch_weight_path = c(0, .5, 1),
+              switch_weight_nowcast = c(0, .5, 1),
+              switch_weight_revision = c(0, .5, 1),
               outer_multiplier = c(.001, .002, .004, .01, .02, .05, .1, .2))
+# Stages, in order; each uses the values chosen in the earlier ones. First every
+# method's own setting except the soft switch's and the outer rates; then the soft
+# switch's settings one after another, on the tuned diverse common bank (strength 0 is
+# that comparator); last the outer rates, on the tuned inner mixtures.
+switch_settings <- c("switch_strength", "switch_threshold", "switch_width",
+  "switch_weight_path", "switch_weight_nowcast", "switch_weight_revision")
+stages <- c(list(setdiff(names(grids), c(switch_settings, "outer_multiplier"))),
+  as.list(switch_settings), list("outer_multiplier"))
+tuned_methods <- function(setting) if (setting %in% switch_settings) "diverse_soft_switch" else
+  names(tuned_setting)[tuned_setting == setting]
 # A value chosen on the edge of its grid is flagged in tuned_settings.csv (on_grid_edge).
 cores <- max(1L, parallel::detectCores() - 2L)
 result_dir <- "output/results/tuning"
@@ -55,69 +69,62 @@ score_tuning <- function(case, predictions, count_scale) {
       loss = natural$quantile_loss, coverage_error = natural$coverage_error)
   }))
 }
-# One grid value of one setting, for every case of a disease, in parallel. by_method:
-# the settings already tuned (the diverse bank for switching; inner mixtures for outer).
-run_grid_value <- function(disease, transform, setting, value, by_method = list()) {
+# Every grid value of a stage's settings for every case of a disease, in parallel over
+# cases. by_method: the values chosen in earlier stages. Each case keeps one cache, so
+# its scales, expert banks and mixtures are computed once for all grid values.
+run_stage <- function(disease, transform, stage, by_method = list()) {
   run_settings <- settings
   run_settings$transform <- transform
-  methods <- names(tuned_setting)[tuned_setting == setting]
-  params <- method_parameters()
-  params$by_method <- by_method
-  for (method in methods) params$by_method[[method]][[setting]] <- value
   keys <- Filter(function(key) prepared$cases[[key]]$disease == disease &&
     prepared$cases[[key]]$horizon %in% tuning_horizons, names(prepared$cases))
   rows <- parallel::mclapply(keys, function(key) {
     prepared_case <- prepared$cases[[key]]
     case <- get_case(prepared, disease, prepared_case$location, prepared_case$horizon,
       run_settings$feedback_delay)
-    run <- apply_methods(case, run_settings, params, methods)
-    data.frame(disease, location = case$location, horizon = case$horizon, transform,
-      setting, value, score_tuning(case, run$predictions[c("original", methods)],
-        run$scaling$scale))
+    cache <- new.env()
+    do.call(rbind, lapply(stage, function(setting) do.call(rbind, lapply(grids[[setting]],
+      function(value) {
+        methods <- tuned_methods(setting)
+        params <- method_parameters()
+        params$by_method <- by_method
+        for (method in methods) params$by_method[[method]][[setting]] <- value
+        run <- apply_methods(case, run_settings, params, methods, cache)
+        data.frame(disease, location = case$location, horizon = case$horizon, transform,
+          setting, value, score_tuning(case, run$predictions[c("original", methods)],
+            run$scaling$scale))
+      }))))
   }, mc.cores = cores)
   failed <- vapply(rows, inherits, logical(1), "try-error")
   if (any(failed)) stop(rows[[which(failed)[1]]])
   do.call(rbind, rows)
 }
-# The tuned value per method: the smallest mean criterion over cases (ties: the
-# smaller value, i.e. the slower rate, shorter lookback or weaker context dependence).
+# The tuned value per method and setting: the smallest mean criterion over cases (ties:
+# the smaller value, i.e. the slower rate, shorter lookback or weaker context dependence).
 choose_values <- function(scores) {
   scores <- scores[scores$method != "original", ]
   criterion <- if (tuning_score == "log") "log_loss" else "loss"
   means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform + method +
     setting + value, scores, mean)
-  means <- means[order(means$disease, means$transform, means$method, means[[criterion]],
-    means$value), ]
-  means[!duplicated(means[c("disease", "transform", "method")]), ]
+  means <- means[order(means$disease, means$transform, means$method, means$setting,
+    means[[criterion]], means$value), ]
+  means[!duplicated(means[c("disease", "transform", "method", "setting")]), ]
 }
 
 all_scores <- list()
 for (disease in diseases) for (transform in transforms) {
-  for (setting in setdiff(names(grids), c("switch_strength", "outer_multiplier"))) for (value in grids[[setting]]) {
-    message("Tuning: ", disease, " | ", transform, " | ", setting, " = ", value)
-    all_scores[[length(all_scores) + 1L]] <- run_grid_value(disease, transform, setting, value)
-  }
-  inner <- do.call(rbind, all_scores)
-  inner <- inner[inner$disease == disease & inner$transform == transform & is.finite(inner$log_loss), ]
-  if (!nrow(inner)) {
-    message("No tuning rows for ", disease, " (", transform, "): no switching or outer stage.")
-    next
-  }
-  tuned_inner <- choose_values(inner)
   by_method <- list()
-  for (i in seq_len(nrow(tuned_inner)))
-    by_method[[tuned_inner$method[i]]][[tuned_inner$setting[i]]] <- tuned_inner$value[i]
-  # The soft switch inherits the diverse_shared_common bank, so select its strength
-  # only after that bank's slow rate has been tuned. Zero is a context-free comparator.
-  for (value in grids$switch_strength) {
-    message("Tuning: ", disease, " | ", transform, " | switch_strength = ", value)
-    all_scores[[length(all_scores) + 1L]] <- run_grid_value(disease, transform,
-      "switch_strength", value, by_method)
-  }
-  for (value in grids$outer_multiplier) {
-    message("Tuning: ", disease, " | ", transform, " | outer_multiplier = ", value)
-    all_scores[[length(all_scores) + 1L]] <- run_grid_value(disease, transform,
-      "outer_multiplier", value, by_method)
+  for (stage in stages) {
+    message("Tuning: ", disease, " | ", transform, " | ", paste(stage, collapse = ", "))
+    scores <- run_stage(disease, transform, stage, by_method)
+    all_scores[[length(all_scores) + 1L]] <- scores
+    scores <- scores[is.finite(scores$log_loss), ]
+    if (!nrow(scores)) {
+      message("No tuning rows for ", disease, " (", transform, "): no further stages.")
+      break
+    }
+    chosen <- choose_values(scores)
+    for (i in seq_len(nrow(chosen)))
+      by_method[[chosen$method[i]]][[chosen$setting[i]]] <- chosen$value[i]
   }
 }
 all_scores <- do.call(rbind, all_scores)
@@ -155,8 +162,8 @@ means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
 criterion <- if (tuning_score == "log") "log_loss" else "loss"
 criterion_label <- if (tuning_score == "log") "log(counts + 1)" else
   count_scale_label(settings$scale_method)
-cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15, height = 9.5,
-  family = "DejaVu Sans")
+cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15,
+  height = 3.6 * ceiling(length(grids) / 4L) + 1.5, family = "DejaVu Sans")
 for (disease in intersect(diseases, means$disease)) {
   # Eight setting panels plus a separate legend strip.
   panel_rows <- ceiling(length(grids) / 4L)
