@@ -10,7 +10,7 @@
 multiqt_settings <- function() list(
   location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
   horizons = -1:3,
-  transform = "log1p",              # MultiQT tracks log1p(counts); "identity": raw counts.
+  transform = "identity",           # MultiQT tracks raw counts; "log1p": log1p(counts).
   scale_method = "population",      # Scores/plots: per 100k residents ("population"), or "max", "median" or "none".
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
@@ -288,10 +288,10 @@ level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
 }
 
 # Peak-relative windows, as a logical vector over the case's weeks, within the given
-# period(s) of the target week: "evaluation" (2024/25 and 2025/26 by default),
-# "tuning" (2023/24) or "other". A peak is the largest latest-reported count of a
-# season or, for covid, a half season (R/01_data_overview.R; hindsight label only);
-# each week counts from its nearest peak. before and after are window lengths:
+# period(s) of the target week: "evaluation", "tuning" or "other" (the design in
+# R/01_data_overview.R). A peak is a local maximum of the latest-reported counts
+# (find_peaks() in R/01_data_overview.R; hindsight label only); each week counts from
+# its nearest peak. before and after are window lengths:
 # before = weeks -(before - 1)..0, including the peak week, and after = weeks
 # 1..after; overall = all weeks of the period(s).
 phase_weeks <- function(case, phase, before = 8L, after = 8L, period = "evaluation") {
@@ -304,8 +304,7 @@ phase_weeks <- function(case, phase, before = 8L, after = 8L, period = "evaluati
     stop("Unknown phase ", phase))
 }
 
-# A maximum on the edge of its (half) season may be the tail of another wave, and
-# missing weeks shorten the before/after windows. Report both, but keep the peak.
+# Missing weeks shorten the before/after windows: report them, but keep the peak.
 check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_latest,
                               period = "evaluation") {
   label <- paste0(case$disease, " | ", case$location_name, " (", case$location,
@@ -314,11 +313,7 @@ check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_
   ok_all <- TRUE
   for (k in which(case$peaks$period %in% period)) {
     peak <- case$peaks[k, ]
-    peak_label <- paste0(label, " | ", peak$season,
-      if (peak$half != "season") paste0(" ", peak$half), " peak ", peak$peak_date)
-    if (peak$boundary_peak)
-      warning(peak_label, ": maximum on the edge of its (half) season; peak kept.",
-        call. = FALSE, immediate. = TRUE)
+    peak_label <- paste0(label, " | peak ", peak$peak_date)
     rows <- which(case$peak_index == k)
     i <- rows[match(weeks, case$relative_week[rows])]
     ok <- !is.na(i)
@@ -326,7 +321,7 @@ check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_
     if (!all(ok))
       warning(peak_label, ": no scored target in peak-relative week(s) ",
         paste(weeks[!ok], collapse = ","), "; peak kept.", call. = FALSE, immediate. = TRUE)
-    ok_all <- ok_all && all(ok) && !peak$boundary_peak
+    ok_all <- ok_all && all(ok)
   }
   invisible(ok_all)
 }

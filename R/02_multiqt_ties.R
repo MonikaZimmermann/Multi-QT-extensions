@@ -8,9 +8,10 @@ source("R/03_functions.R")
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
 season_disease <- "covid"                 # Season forecast plot only: "covid" or "flu".
 season_horizon <- 2                       # Season forecast plot only: -1, 0, 1, 2 or 3.
-# Descriptive CMU path page only: each location's peak in the selected season/half.
+# Descriptive CMU path page only: each location's largest peak in the selected season
+# and half season (winter: October to March, summer: April to September).
 path_season <- c(covid = "2024/25", flu = "2024/25")
-path_half <- c(covid = "summer", flu = "season")
+path_half <- c(covid = "summer", flu = "winter")
 path_weeks <- -5:5                        # Reference weeks relative to that location's peak.
 diseases <- c("covid", "flu")
 expert_multipliers <- settings$expert_multipliers
@@ -174,12 +175,13 @@ plot_forecast_path_panel <- function(disease, location) {
   case <- get_case(prepared, disease, location, 0, settings$feedback_delay)
   peak <- case$peaks[case$peaks$season == path_season[disease] &
     case$peaks$half == path_half[disease], ]
-  if (nrow(peak) != 1L) {
+  if (!nrow(peak)) {
     plot.new()
     title(main = paste(case$location_name, "|", toupper(disease)))
-    text(.5, .5, paste("No unique peak for", path_season[disease], path_half[disease]))
+    text(.5, .5, paste("No peak in", path_season[disease], path_half[disease]))
     return(invisible())
   }
+  peak <- peak[which.max(peak$peak_value), ]
   reference_dates <- peak$peak_date + 7 * path_weeks
   dates <- seq(min(reference_dates) - 7, max(reference_dates) + 21, by = "week")
   forecasts <- path_forecasts[path_forecasts$disease == disease &
@@ -206,8 +208,7 @@ plot_forecast_path_panel <- function(disease, location) {
       lwd = 1.5, col = path_colours[i])
   }
   lines(dates, observed, col = "gray20", lwd = 1.8, lty = 2)
-  mtext(paste0("Peak: ", format(peak$peak_date, "%d %b %Y"),
-    if (peak$boundary_peak) " (window boundary)" else "", " | ",
+  mtext(paste0("Peak: ", format(peak$peak_date, "%d %b %Y"), " | ",
     length(unique(forecasts$reference_date)), " submitted reference weeks"),
     side = 3, line = .15, cex = .67)
 }

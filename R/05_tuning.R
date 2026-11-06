@@ -15,10 +15,11 @@ diseases <- c("covid", "flu")
 # tuned on 0-3 (the windowed_seasonal base has zero width there, and its 2023/24 forecasts
 # used final counts); "hub_first_months": CMU's horizon -1 nowcasts are tuned as well.
 tuning_horizons <- if (design == "seasons") 0:3 else settings$horizons
-# Criterion: the mean pinball loss of log(counts + 1) ("log", Bosse et al. 2023:
-# relative errors, comparable across locations and seasons) or of counts per 100k
-# residents ("natural"). Both are saved, with the calibration error.
-tuning_score <- "log"
+# Criterion per tracker, the scale it learns on (as 04 evaluates): the mean pinball loss
+# of log(counts + 1) for log1p ("log", Bosse et al. 2023: relative errors) and of counts
+# per 100k residents for identity ("natural"). Both are saved, with the calibration error.
+tuning_score <- c(log1p = "log", identity = "natural")
+criterion_of <- function(transform) ifelse(tuning_score[transform] == "log", "log_loss", "loss")
 transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses settings$transform.
 # One grid per tuned setting (tuned_setting in R/03_functions.R, plus the soft switch's
 # threshold, width and signal weights); multiples of S0 except H, lambda, the switch
@@ -102,11 +103,11 @@ run_stage <- function(disease, transform, stage, by_method = list()) {
 # the smaller value, i.e. the slower rate, shorter lookback or weaker context dependence).
 choose_values <- function(scores) {
   scores <- scores[scores$method != "original", ]
-  criterion <- if (tuning_score == "log") "log_loss" else "loss"
   means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform + method +
     setting + value, scores, mean)
+  criterion <- ifelse(criterion_of(means$transform) == "log_loss", means$log_loss, means$loss)
   means <- means[order(means$disease, means$transform, means$method, means$setting,
-    means[[criterion]], means$value), ]
+    criterion, means$value), ]
   means[!duplicated(means[c("disease", "transform", "method", "setting")]), ]
 }
 
@@ -142,8 +143,9 @@ base <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform,
     "log_loss", "loss", "coverage_error")]), mean)
 names(base)[3:5] <- paste0("original_", names(base)[3:5])
 tuned <- merge(tuned, base, by = c("disease", "transform"))
-tuned$criterion <- tuning_score
+tuned$criterion <- unname(tuning_score[tuned$transform])
 tuned$log_loss_change_percent <- 100 * (tuned$log_loss / tuned$original_log_loss - 1)
+tuned$loss_change_percent <- 100 * (tuned$loss / tuned$original_loss - 1)
 tuned$on_grid_edge <- mapply(function(setting, value) value %in% range(grids[[setting]]),
   tuned$setting, tuned$value)
 tuned <- tuned[order(tuned$disease, tuned$transform, match(tuned$method, method_names)), ]
@@ -151,17 +153,16 @@ rownames(tuned) <- NULL
 write.csv(tuned, file.path(result_dir, paste0("tuned_settings_", design, ".csv")),
   row.names = FALSE)
 print(tuned[c("disease", "transform", "method", "setting", "value", "on_grid_edge",
-  "log_loss_change_percent", "coverage_error", "original_coverage_error")], digits = 3,
+  "loss_change_percent", "log_loss_change_percent", "coverage_error",
+  "original_coverage_error")], digits = 3,
   row.names = FALSE)
 
 # 4. PLOT: CRITERION OVER EACH GRID -------------------------------------------
 # One page per disease; one panel per tuned setting; one line per method. Solid: log1p
-# tracker, dashed: identity; the chosen value is circled.
+# tracker (loss of log(counts + 1)), dashed: identity (loss per 100k); each tracker on its
+# own criterion; the chosen value is circled.
 means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform + method +
   setting + value, scored, mean)
-criterion <- if (tuning_score == "log") "log_loss" else "loss"
-criterion_label <- if (tuning_score == "log") "log(counts + 1)" else
-  count_scale_label(settings$scale_method)
 cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15,
   height = 3.6 * ceiling(length(grids) / 4L) + 1.5, family = "DejaVu Sans")
 for (disease in intersect(diseases, means$disease)) {
@@ -174,13 +175,15 @@ for (disease in intersect(diseases, means$disease)) {
   for (setting in names(grids)) {
     rows <- means[means$disease == disease & means$setting == setting &
       means$method != "original", ]
-    rows$change <- 100 * (rows[[criterion]] / base[[paste0("original_", criterion)]][
-      match(paste(rows$disease, rows$transform), paste(base$disease, base$transform))] - 1)
+    original <- base[match(paste(rows$disease, rows$transform),
+      paste(base$disease, base$transform)), ]
+    rows$change <- 100 * ifelse(criterion_of(rows$transform) == "log_loss",
+      rows$log_loss / original$original_log_loss, rows$loss / original$original_loss) - 100
     methods <- unique(rows$method)
     colours <- setNames(hcl.colors(max(3L, length(methods)), "Dark 3")[seq_along(methods)], methods)
     plot(NA, xlim = range(grids[[setting]]), ylim = range(0, rows$change, na.rm = TRUE),
       log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
-      ylab = paste0("Loss vs original (%), ", tuning_score), main = setting)
+      ylab = "Loss vs original (%)", main = setting)
     abline(h = 0, col = "gray60")
     for (method in methods) for (transform in transforms) {
       line <- rows[rows$method == method & rows$transform == transform, ]
@@ -195,12 +198,14 @@ for (disease in intersect(diseases, means$disease)) {
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  legend("center", c("log1p tracker", "identity tracker", "chosen value"), lty = c(1, 2, NA),
+  legend("center", c("log1p tracker (loss of log(counts + 1))",
+    paste0("identity tracker (loss in ", count_scale_label(settings$scale_method), ")"),
+    "chosen value"), lty = c(1, 2, NA),
     pch = c(NA, NA, 1), bty = "n", ncol = 3)
   mtext(paste(disease, "| design", design, "| tuning period", prepared$settings$tuning_label,
     "| horizons", paste(range(tuning_horizons), collapse = " to "), "| all locations"),
     side = 3, outer = TRUE, line = 1.2, font = 2)
-  mtext(paste("Mean pinball loss of", criterion_label, "relative to the original forecasts",
-    "(mean over locations and horizons)"), side = 1, outer = TRUE, line = 1)
+  mtext(paste("Mean pinball loss relative to the original forecasts (mean over locations",
+    "and horizons), on each tracker's scale"), side = 1, outer = TRUE, line = 1)
 }
 dev.off()
