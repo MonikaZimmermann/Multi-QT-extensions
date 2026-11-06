@@ -28,7 +28,7 @@ par_of <- function(method, name) method_parameter(params, method, name)
 
 # 2. RUN EACH LOCATION INDEPENDENTLY --------------------------------
 # apply_methods() (R/03_functions.R) issues every method's forecasts from the online
-# feedback only. Peaks are the largest latest-reported count of each (half) season;
+# feedback only. Peaks are local maxima of the latest-reported counts (R/01);
 # only the target oracle uses that hindsight date to choose forecasts. Alignment
 # changes evaluation coordinates, never when feedback becomes available. Every
 # location starts fresh: offsets, expert weights, lambda and loss history.

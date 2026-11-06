@@ -479,8 +479,8 @@ for (location in settings$location_ids) {
     "| horizon", season_horizon, "|", min(dates), "to", max(dates)),
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
-    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: largest count of ",
-    "each (half) season | Gray: tuning period (not scored)"),
+    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: peaks (local ",
+    "maxima of the latest counts) | Gray: tuning period (not scored)"),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
