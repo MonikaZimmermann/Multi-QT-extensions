@@ -175,15 +175,18 @@ print(available_then)
 #   "seasons": the base per disease (`base`) from 2023-10-14; tuning on the 2023/24
 #     season, evaluation on the 2024/25 and 2025/26 seasons. Nothing is forecast from
 #     May to November 2024, so the methods carry their 2023/24 state across that gap.
-# Peaks only label weeks in hindsight; they do not affect online feedback. A peak is
-# the largest latest-reported weekly count of a season (flu) or a half season (covid:
-# October to March and April to September, one for the winter and one for the summer
-# wave). Only peaks whose week was forecast are kept. Boundary maxima are retained;
-# ties use the earliest date. Each target week belongs to its nearest peak.
+# Peaks only label weeks in hindsight; they do not affect online feedback. A peak is a
+# local maximum of the latest-reported weekly counts (find_peaks() below): the largest
+# value within peak_halfwidth weeks on either side, whose counts fall by at least
+# peak_drop of its height on both sides before any higher week, by at least
+# peak_min_prominence of the location's largest forecast-week count, on the centred
+# peak_smooth-week mean (small locations are noisy). Peaks between the first and the
+# last forecast target week are kept, in any period. Each target week belongs to its
+# nearest peak.
 #
 # The output contains:
 #   settings : the settings below;
-#   peaks    : one row per disease, location and (half) season with a forecast peak;
+#   peaks    : one row per disease, location and peak (find_peaks());
 #   cases    : named disease_location_horizon lists, e.g. covid_18_0.
 # Each case contains its raw forecast matrix, quantiles, online feedback per delay,
 # latest-vintage truth for scoring, dates, seasons and periods, peak-relative week
@@ -204,6 +207,13 @@ print(available_then)
 #   so the counts of these target weeks are incomplete (Texas covid: 643, 274, 8, 2 in
 #   the weeks ending 2024-04-27 to 2024-05-18). Forecasts of them are dropped: never
 #   learned from, never scored.
+# invalid_submissions: CMU hub submissions broken by pipeline bugs or bad data, as
+#   excluded in Delphi's calibration reports (location or horizon NA: all of them).
+#   Covid 2024-11-23: made from a bad NHSN release corrected the next day (US median
+#   21,614 at horizon 0, final count 8,104); covid 2026-04-25 horizon -1: a stale data
+#   fetch (US 892, final 1,711); flu US 2024-12-14, 2024-12-21 and 2025-01-04: about half
+#   the sum of the states. They are dropped and filled like missing rounds, as are
+#   forecasts that are 0 at every quantile and location of a round and horizon.
 # feedback_delays: the delays (weeks after the first report) prepared for the
 #   online feedback; feedback_delay in R/03_functions.R chooses one of them.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
@@ -218,9 +228,16 @@ prepare_settings <- list(design = design,
                          tuning_seasons = "2023/24",                         # "seasons"
                          hub_tuning_through = as.Date("2025-05-31"),         # "hub_first_months"
                          evaluation_seasons = c("2024/25", "2025/26"),
-                         half_season_peaks = c(covid = TRUE, flu = FALSE),
+                         peak_halfwidth = 8L, peak_drop = .3, peak_min_prominence = .1,
+                         peak_smooth = 3L,
                          final_data_through = as.Date("2024-04-27"),
                          incomplete_weeks = as.Date(c("2024-05-04", "2024-11-02")),
+                         invalid_submissions = data.frame(
+                           disease = c("covid", "covid", "flu", "flu", "flu"),
+                           reference_date = as.Date(c("2024-11-23", "2026-04-25",
+                             "2024-12-14", "2024-12-21", "2025-01-04")),
+                           location = c(NA, NA, "US", "US", "US"),
+                           horizon = c(NA, -1L, NA, NA, NA)),
                          horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
 # Season of a date (October to September, e.g. "2024/25") and its half season.
@@ -230,6 +247,37 @@ season_of <- function(date, start_month = 10L) {
 }
 half_season_of <- function(date, start_month = 10L)
   ifelse((as.integer(format(date, "%m")) - start_month) %% 12L < 6L, "winter", "summer")
+# Peaks of a weekly series x: local maxima of its centred `smooth`-week mean s that are
+# the largest value of s within `halfwidth` weeks on either side (ties: the earliest) and
+# whose prominence is at least `drop` times their height and `min_prominence` times
+# `scale`. Prominence: the height above the higher of the two lowest points between the
+# week and the nearest higher week on each side (or the end of the series), so a
+# maximum at the end of the series has none. Each peak is placed at the largest x within
+# one week. Returns the rows of x and the relative prominence.
+find_peaks <- function(x, halfwidth = 8L, drop = .3, min_prominence = .1, smooth = 3L,
+                       scale = max(x)) {
+  n <- length(x)
+  s <- if (smooth > 1L) as.numeric(stats::filter(x, rep(1 / smooth, smooth), sides = 2)) else x
+  s[is.na(s)] <- x[is.na(s)]
+  prominence <- vapply(seq_len(n), function(i) {
+    higher_left <- which(s[seq_len(i - 1L)] > s[i])
+    higher_right <- i + which(s[i + seq_len(n - i)] > s[i])
+    left <- min(s[(if (length(higher_left)) max(higher_left) else 1L):i])
+    right <- min(s[i:(if (length(higher_right)) min(higher_right) else n)])
+    s[i] - max(left, right)
+  }, numeric(1))
+  local_max <- vapply(seq_len(n), function(i) {
+    around <- max(1L, i - halfwidth):min(n, i + halfwidth)
+    s[i] == max(s[around]) && !any(s[around[around < i]] == s[i])
+  }, logical(1))
+  top <- which(local_max & prominence > 0 & prominence >= drop * s &
+    prominence >= min_prominence * scale)
+  row <- vapply(top, function(i) {
+    near <- max(1L, i - 1L):min(n, i + 1L)
+    near[which.max(x[near])]
+  }, integer(1))
+  data.frame(row, relative_prominence = prominence[top] / s[top])
+}
 # A missing horizon-h forecast of round r is filled with the latest earlier forecast
 # of the same target week: the horizon-(h + k) forecast issued k weeks earlier, with
 # the smallest k. It uses no information after r. Only gaps of at most max_gap
@@ -270,6 +318,17 @@ prepare_data <- function(forecasts, vintages, settings) {
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
     forecasts$reference_date >= settings$start_date, forecast_columns])
+  # Broken CMU hub submissions (settings$invalid_submissions) are dropped and filled
+  # like a missing round; a dropped first round stays missing.
+  bad <- settings$invalid_submissions
+  broken <- Reduce(`|`, lapply(seq_len(nrow(bad)), function(i)
+    settings$base[selected$disease] == "cmu_hub" & selected$disease == bad$disease[i] &
+      selected$reference_date == bad$reference_date[i] &
+      (is.na(bad$location[i]) | selected$location == bad$location[i]) &
+      (is.na(bad$horizon[i]) | selected$horizon == bad$horizon[i])), FALSE)
+  if (any(broken)) message("Broken submissions dropped and filled: ",
+    paste(unique(paste(selected$disease, selected$reference_date)[broken]), collapse = "; "))
+  selected <- selected[!broken, , drop = FALSE]
   # Invalid submissions: a round and horizon whose forecasts are 0 at every quantile
   # and location are dropped and filled like a missing round. CMU's flu submission of
   # 2025-11-22 has such zeros at horizon -1 (its horizons 0-3 are fine).
@@ -337,35 +396,24 @@ prepare_data <- function(forecasts, vintages, settings) {
     # older finite vintage. This ordering also applies to scaling and feedback.
     latest <- r[!duplicated(r$target_end_date, fromLast = TRUE), , drop = FALSE]
 
-    # Peaks: the largest latest report of each tuning or evaluation (half) season,
-    # among the reported weeks of that (half) season; kept if its week was forecast.
-    half <- settings$half_season_peaks[[disease]]
-    part_of <- function(date) {
-      season <- season_of(date, settings$season_start_month)
-      if (half) paste(season, half_season_of(date, settings$season_start_month)) else season
-    }
-    latest_part <- part_of(latest$target_end_date)
-    location_peaks <- list()
-    for (part in unique(part_of(f$target_end_date))) {
-      window <- latest[latest_part == part & is.finite(latest$value), , drop = FALSE]
-      if (!nrow(window)) next
-      season <- season_of(window$target_end_date[1], settings$season_start_month)
-      best <- which.max(window$value)
-      # The peak's period is that of its week.
-      if (period_of(window$target_end_date[best]) == "other" ||
-          !window$target_end_date[best] %in% f$target_end_date) next
-      tied <- which(window$value == window$value[best])
-      location_peaks[[part]] <- data.frame(disease, location = r$location[1],
-        geo_value = r$geo_value[1], location_name, season,
-        half = if (half) half_season_of(window$target_end_date[best],
-          settings$season_start_month) else "season",
-        period = period_of(window$target_end_date[best]), peak_date = window$target_end_date[best],
-        peak_value = window$value[best], boundary_peak = best %in% c(1L, nrow(window)),
-        tied_peak_n = length(tied), last_tied_date = max(window$target_end_date[tied]),
-        window_start = min(window$target_end_date), window_end = max(window$target_end_date),
-        n_window_weeks = nrow(window))
-    }
-    location_peaks <- do.call(rbind, location_peaks)
+    # Peaks: local maxima of the latest reports of all weeks (find_peaks()), without the
+    # incomplete weeks; kept between the first and the last forecast target week.
+    series <- latest[is.finite(latest$value) &
+      (latest$target_end_date < settings$incomplete_weeks[1] |
+        latest$target_end_date > settings$incomplete_weeks[2]), , drop = FALSE]
+    found <- find_peaks(series$value, settings$peak_halfwidth, settings$peak_drop,
+      settings$peak_min_prominence, settings$peak_smooth,
+      scale = max(series$value[series$target_end_date %in% f$target_end_date]))
+    found <- found[series$target_end_date[found$row] >= min(f$target_end_date) &
+      series$target_end_date[found$row] <= max(f$target_end_date), , drop = FALSE]
+    peak_date <- series$target_end_date[found$row]
+    location_peaks <- if (nrow(found)) data.frame(disease, location = r$location[1],
+      geo_value = r$geo_value[1], location_name,
+      season = season_of(peak_date, settings$season_start_month),
+      half = half_season_of(peak_date, settings$season_start_month),
+      period = period_of(peak_date), peak_date, peak_value = series$value[found$row],
+      relative_prominence = found$relative_prominence,
+      forecast_week = peak_date %in% f$target_end_date)
     if (is.null(location_peaks)) {
       warning("No forecast peak for ", key, ": no before/after windows.", call. = FALSE)
     } else {
