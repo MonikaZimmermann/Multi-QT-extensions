@@ -9,14 +9,18 @@ disease_name <- "covid"                    # "covid" or "flu"
 horizon_id <- 2                            # -1, 0, 1, 2 or 3: forecast and weight plots.
 settings <- multiqt_settings()             # Locations, tracker, experts and windows (R/03_functions.R).
 transform <- settings$transform
-tradeoff_delays <- 0:2                     # Feedback delays of the trade-off pages (all horizons).
+# Feedback designs of the trade-off pages (all horizons): the delay in weeks after the first
+# report, and the weekly re-run on the reports known then (get_case() in R/03_functions.R).
+tradeoff_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
 cores <- max(1L, parallel::detectCores() - 2L)
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")
 # The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
-# on the tuning period by R/05_tuning.R for this disease, tracker and design.
-params <- tuned_parameters(disease_name, transform, design = prepared$settings$design)
+# on the tuning period by R/05_tuning.R for this disease, tracker, design and feedback.
+tuned_for <- function(delay, revisions) tuned_parameters(disease_name, transform,
+  design = prepared$settings$design, feedback_delay = delay, revisions = revisions)
+params <- tuned_for(settings$feedback_delay, settings$feedback_revisions)
 seasons <- c("all", prepared$settings$evaluation_seasons)   # Scored: each season and all.
 result_dir <- "output/results/peak_reasoning"
 figure_dir <- "output/pdf"
@@ -32,14 +36,15 @@ par_of <- function(method, name) method_parameter(params, method, name)
 # only the target oracle uses that hindsight date to choose forecasts. Alignment
 # changes evaluation coordinates, never when feedback becomes available. Every
 # location starts fresh: offsets, expert weights, lambda and loss history.
-run_methods <- function(case) {
-  run <- apply_methods(case, settings, params)
+# issue_weeks: the weeks a re-run case re-runs (apply_methods(); default all).
+run_methods <- function(case, run_params = params, issue_weeks = NULL) {
+  run <- apply_methods(case, settings, run_params, weeks = issue_weeks)
   predictions <- run$predictions
 
   # SCORE AGAINST THE CHOSEN TARGET -------------------------------------
   # The online updates saw only the feedback released so far: the report
-  # available feedback_delay weeks after the first report. Scores use
-  # score_truth(): the latest vintage by default.
+  # available feedback_delay weeks after the first report (re-run: as known at each
+  # issue week). Scores use score_truth(): the latest vintage by default.
   # Counts are already scaled: do not divide quantile loss a second time. The log-scale
   # loss (score_quantiles(score_scale = "log")) needs counts. Windows lie in the evaluation
   # seasons: each season, and "all" of them together (the default of the plots).
@@ -75,35 +80,41 @@ run_methods <- function(case) {
   }
   id <- data.frame(disease = case$disease, location = case$location,
     location_name = case$location_name, horizon = case$horizon,
-    feedback_delay = case$feedback_delay)
+    feedback_delay = case$feedback_delay, feedback_revisions = case$feedback_revised)
   c(run, list(truth = truth, weekly = weekly, duplicate_of = duplicate_of,
     scores = data.frame(id, do.call(rbind, scores), row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL)))
 }
 runs <- list()
 for (location in settings$location_ids) {
-  case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay)
+  case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay,
+    settings$feedback_revisions)
   check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak,
     score_truth(case, settings$score_target, settings$score_filled))
   message("Methods: ", disease_name, " | ", location, " | horizon ", horizon_id)
   runs[[location]] <- run_methods(case)
 }
 saveRDS(runs, file.path(result_dir, "issued_forecasts.rds"))
-# Scores of every prepared location, horizon and feedback delay for the trade-off pages
-# (section 9), in parallel; only the scores are kept. The runs above are reused.
+# Scores of every prepared location, horizon and feedback design for the trade-off pages
+# (section 9), in parallel; only the scores are kept. Each design uses the settings tuned
+# with it; a re-run re-runs only the evaluation weeks. The runs above are reused.
 all_locations <- unique(unlist(lapply(prepared$cases, function(case)
   if (case$disease == disease_name) case$location)))
+tradeoff_params <- Map(tuned_for, tradeoff_feedback$delay, tradeoff_feedback$revisions)
 tradeoff_cases <- expand.grid(location = all_locations, horizon = settings$horizons,
-  feedback_delay = tradeoff_delays, stringsAsFactors = FALSE)
+  feedback = seq_len(nrow(tradeoff_feedback)), stringsAsFactors = FALSE)
 message("Trade-off scores: ", disease_name, " | ", length(all_locations), " locations x ",
-  length(settings$horizons), " horizons x ", length(tradeoff_delays), " feedback delays")
+  length(settings$horizons), " horizons x ", nrow(tradeoff_feedback), " feedback designs")
 all_scores <- parallel::mclapply(seq_len(nrow(tradeoff_cases)), function(i) {
   location <- tradeoff_cases$location[i]
   horizon <- tradeoff_cases$horizon[i]
-  delay <- tradeoff_cases$feedback_delay[i]
-  if (location %in% names(runs) && horizon == horizon_id && delay == settings$feedback_delay)
-    return(runs[[location]]$scores)
-  run_methods(get_case(prepared, disease_name, location, horizon, delay))$scores
+  k <- tradeoff_cases$feedback[i]
+  delay <- tradeoff_feedback$delay[k]
+  revisions <- tradeoff_feedback$revisions[k]
+  if (location %in% names(runs) && horizon == horizon_id && delay == settings$feedback_delay &&
+    revisions == settings$feedback_revisions) return(runs[[location]]$scores)
+  case <- get_case(prepared, disease_name, location, horizon, delay, revisions)
+  run_methods(case, tradeoff_params[[k]], which(case$period == "evaluation"))$scores
 }, mc.cores = cores)
 failed <- vapply(all_scores, inherits, logical(1), "try-error")
 if (any(failed)) stop(all_scores[[which(failed)[1]]])
@@ -248,7 +259,7 @@ plot_title <- function(run = NULL) paste(disease_name, "| horizon", horizon_id, 
     paste(run$case$location_name, paste0("(", run$case$location, ")")), "| evaluation:",
   evaluation_label, "|",
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
-  "| feedback delay", settings$feedback_delay, "week(s)")
+  "| feedback", feedback_label(settings$feedback_delay, settings$feedback_revisions))
 # Plots leave out a method whose identical twin is drawn in the same plot.
 shown_methods <- function(run, methods) {
   twins <- run$duplicate_of[names(run$duplicate_of) %in% methods]
@@ -318,10 +329,10 @@ dev.off()
 
 # 9. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
 # One page per location, after a first page with all prepared locations. Columns:
-# horizons; rows: the feedback delays of tradeoff_delays, each with its three windows.
+# horizons; rows: the feedback designs of tradeoff_feedback, each with its three windows.
 # Every method in each panel. The loss is scored on the tracker's scale: log(counts + 1)
-# for the log1p tracker, counts per 100k residents for raw counts. Every delay uses the
-# settings tuned (R/05_tuning.R) with settings$feedback_delay.
+# for the log1p tracker, counts per 100k residents for raw counts. Each feedback design
+# uses the settings tuned (R/05_tuning.R) with it.
 # A method is coloured by the first group that lists it: one colour family per group,
 # one shade per method; common-weight and outer variants share their method's shade.
 # CE = mean over levels of |coverage - alpha| over the window's weeks. Every panel has
@@ -386,8 +397,11 @@ panel_limits <- function(x, reference = NA, cap = 4) {
 tradeoff_loss <- if (transform == "log1p") "log_quantile_loss" else "quantile_loss"
 tradeoff_loss_label <- if (transform == "log1p") "Mean quantile loss of log(counts + 1)" else
   mean_loss_axis_label
-panel_rows <- expand.grid(phase = phases, feedback_delay = tradeoff_delays,
-  stringsAsFactors = FALSE)                 # Rows: the windows of each feedback delay.
+panel_rows <- expand.grid(phase = phases, feedback = seq_len(nrow(tradeoff_feedback)),
+  stringsAsFactors = FALSE)                 # Rows: the windows of each feedback design.
+# Short names for the panel headings: "delay d" or "re-run".
+feedback_names <- with(tradeoff_feedback, ifelse(revisions,
+  ifelse(delay > 0, paste("re-run, delay", delay), "re-run"), paste("delay", delay)))
 panel_height <- 2.6                         # Inches per row of panels.
 legend_height <- 2.6
 tradeoff_title <- function(location = NULL) paste(disease_name, "|",
@@ -409,8 +423,9 @@ draw_tradeoff_page <- function(location = NULL) {
   par(oma = c(9, 3.4, 7.8, 0), mgp = c(2.2, .6, 0))
   for (r in seq_len(nrow(panel_rows))) for (horizon in settings$horizons) {
     phase <- panel_rows$phase[r]
-    delay <- panel_rows$feedback_delay[r]
-    rows <- page[page$horizon == horizon & page$feedback_delay == delay & page$phase == phase, ]
+    k <- panel_rows$feedback[r]
+    rows <- page[page$horizon == horizon & page$feedback_delay == tradeoff_feedback$delay[k] &
+      page$feedback_revisions == tradeoff_feedback$revisions[k] & page$phase == phase, ]
     # All locations: every location as a small, light symbol per method (legend shapes)
     # and the mean over locations as the usual symbol; the axes span the 1st to 99th
     # percentile of the single locations and the means.
@@ -425,7 +440,7 @@ draw_tradeoff_page <- function(location = NULL) {
     par(mar = c(3.4, 3.6, 2.9, .8))
     plot(NA, xlim = xlim, ylim = ylim, xlab = tradeoff_loss_label, ylab = "Calibration error")
     mtext(window_titles[phase], side = 3, line = 1.4, font = 2, cex = .75)
-    mtext(paste0("Horizon ", horizon, " | delay ", delay, " | ",
+    mtext(paste0("Horizon ", horizon, " | ", feedback_names[k], " | ",
       if (all_page) paste(length(unique(rows$location)), "locations") else
         paste(rows$n_weeks[1], "weeks"), if (any(beyond)) " | >: beyond 4x the original's"),
       side = 3, line = .3, cex = .65)
@@ -448,14 +463,14 @@ draw_tradeoff_page <- function(location = NULL) {
     pt.lwd = ifelse(legend_entries == "original", 2, 1),
     text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = 1.1,
     text.width = NA)                         # Column-wise widths, so every group column fits.
-  # Delay blocks: a label in the left margin and a line between blocks; horizons on top.
+  # Feedback blocks: a label in the left margin and a line between blocks; horizons on top.
   inner_height <- nrow(panel_rows) * panel_height + legend_height
   block <- length(phases) * panel_height / inner_height
-  for (k in seq_along(tradeoff_delays)) mtext(paste("Feedback delay", tradeoff_delays[k],
-    "week(s)"), side = 2, outer = TRUE, line = 1.6, at = 1 - (k - .5) * block, font = 2,
-    cex = 1.2)
+  for (k in seq_len(nrow(tradeoff_feedback))) mtext(paste("Feedback", feedback_label(
+    tradeoff_feedback$delay[k], tradeoff_feedback$revisions[k])), side = 2, outer = TRUE,
+    line = 1.6, at = 1 - (k - .5) * block, font = 2, cex = 1.2)
   par(xpd = NA)
-  for (k in seq_along(tradeoff_delays)[-1]) segments(grconvertX(0, "nic"),
+  for (k in seq_len(nrow(tradeoff_feedback))[-1]) segments(grconvertX(0, "nic"),
     grconvertY(1 - (k - 1) * block, "nic"), grconvertX(1, "nic"),
     grconvertY(1 - (k - 1) * block, "nic"), col = "gray45", lwd = 1.5)
   par(xpd = FALSE)
@@ -463,10 +478,9 @@ draw_tradeoff_page <- function(location = NULL) {
     side = 3, outer = TRUE, line = .5, at = (j - .5) / length(settings$horizons), font = 2,
     cex = 1.2)
   mtext(tradeoff_title(location), side = 3, outer = TRUE, line = 5.9, font = 2, cex = 1.45)
-  mtext(paste0("Rows: feedback delay (MultiQT learns from the report that many weeks after ",
-    "the first one) and window; columns: horizon. Every delay uses the settings tuned with ",
-    "feedback delay ", settings$feedback_delay, "."), side = 3, outer = TRUE, line = 3.9,
-    cex = 1.05)
+  mtext(paste("Rows: feedback design (delay d: learn from the report d weeks after the",
+    "first one; re-run: re-run every week on the reports known then) and window; columns:",
+    "horizon."), side = 3, outer = TRUE, line = 3.9, cex = 1.05)
   if (all_page) mtext(paste("Small: single locations; large: means over locations;",
     "axes: 1st to 99th percentile of both."), side = 3, outer = TRUE, line = 2.5, cex = 1.05)
   notes <- c("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
@@ -474,6 +488,9 @@ draw_tradeoff_page <- function(location = NULL) {
       "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
     if (length(hidden_pairs)) paste("Not drawn (identical forecasts):",
       paste(hidden_pairs, collapse = "; ")),
+    paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
+      "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
+      " (all: output/results/tuning)."),
     # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
     # which are the original base (e.g. most of the flu up-to-peak window).
     paste0("Studentized median methods: sigma_t = RMS of the last ", params$median_window,

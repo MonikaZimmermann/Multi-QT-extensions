@@ -189,9 +189,10 @@ print(available_then)
 #   peaks    : one row per disease, location and peak (find_peaks());
 #   cases    : named disease_location_horizon lists, e.g. covid_18_0.
 # Each case contains its raw forecast matrix, quantiles, online feedback per delay,
-# latest-vintage truth for scoring, dates, seasons and periods, peak-relative week
-# labels, the population (counts per 100k residents) and the historical counts for
-# other scalings. Scripts 02/04 choose the scaling without reopening the data files.
+# the later revisions of each report (re-run design), latest-vintage truth for
+# scoring, dates, seasons and periods, peak-relative week labels, the population
+# (counts per 100k residents) and the historical counts for other scalings. Scripts
+# 02/04 choose the scaling without reopening the data files.
 # US remains a separate case and must not be counted as an additional state.
 #
 # base: the base forecasts per disease. "windowed_seasonal": R/00_base_forecasts.R,
@@ -215,7 +216,8 @@ print(available_then)
 #   the sum of the states. They are dropped and filled like missing rounds, as are
 #   forecasts that are 0 at every quantile and location of a round and horizon.
 # feedback_delays: the delays (weeks after the first report) prepared for the
-#   online feedback; feedback_delay in R/03_functions.R chooses one of them.
+#   online feedback; feedback_delay in R/03_functions.R chooses one of them, and
+#   feedback_revisions whether later revisions are learned as well (re-run).
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
 #   see fill_missing_rounds() below; the gap from May to November 2024 stays.
 design <- "hub_first_months"                  # "hub_first_months" or "seasons".
@@ -485,6 +487,18 @@ prepare_data <- function(forecasts, vintages, settings) {
           list(observed = observed, date = date,
             by_week = lapply(seq_len(nrow(z)), function(i) which(!is.na(used_at) & used_at == i)))
         })
+      # Every later change of each row's report (re-run design): the row, the first
+      # issue (row index) whose as-of reports show the new value, and that value.
+      # get_case() in R/03_functions.R keeps the changes after the row is learned.
+      report_revisions <- do.call(rbind, c(list(data.frame(row = integer(),
+        week = integer(), value = numeric())), lapply(seq_len(nrow(z) - 1L), function(i) {
+          later <- seq.int(i + 1L, nrow(z))
+          counts <- available[issues[later], targets[i]]
+          week <- later[is.finite(counts)]
+          counts <- counts[is.finite(counts)]
+          changed <- which(diff(counts) != 0) + 1L
+          if (length(changed)) data.frame(row = i, week = week[changed], value = counts[changed])
+        })))
 
       season <- season_of(target_date, settings$season_start_month)
       nearest <- if (is.null(location_peaks)) rep(NA_integer_, length(target_date)) else
@@ -509,7 +523,7 @@ prepare_data <- function(forecasts, vintages, settings) {
         # Latest stored report of each target week: scoring target only, never feedback.
         truth_latest = latest$value[match(target_date, latest$target_end_date)],
         # Online feedback per delay; get_case() in R/03_functions.R selects one.
-        feedback_by_delay = feedback_by_delay,
+        feedback_by_delay = feedback_by_delay, report_revisions = report_revisions,
         # The base, and the reports' as-of date of each round (also for the feedback).
         base_name = settings$base[[disease]], as_of = issue_as_of[issues],
         # Season of the target week and its period: "tuning", "evaluation" or "other".
