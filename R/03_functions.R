@@ -16,6 +16,7 @@ multiqt_settings <- function() list(
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
   feedback_delay = 0L,              # Weeks after the first report before MultiQT learns from a forecast.
+  feedback_revisions = FALSE,       # TRUE: re-run each week on the reports known then (Delphi).
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
   scale_floor = 1e-6,               # Guard on S0, sigma_t and the level scales, not each rate.
@@ -29,17 +30,33 @@ multiqt_settings <- function() list(
 # Prepared cases are named disease_location_horizon, e.g. covid_06_0.
 # feedback_delay selects the online feedback: each forecast is learned from the
 # report available feedback_delay weeks after its first report (0: first report).
-get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L) {
+# revisions = TRUE: the re-run design of Delphi's calibration reports. Every issue week,
+# each method is re-run from the first week on the reports as known then, so it also
+# learns from later revisions of those reports (apply_methods(), case_as_of()).
+# feedback_revisions: the revisions after a row is learned (week, row, value in counts).
+get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
+                     revisions = FALSE) {
   case <- prepared$cases[[paste(disease, location, horizon, sep = "_")]]
   if (is.null(case)) stop("No prepared case ", disease, " ", location, " h", horizon,
     ". Rerun Rscript R/01_data_overview.R.")
   feedback <- case$feedback_by_delay[[as.character(feedback_delay)]]
   if (is.null(feedback)) stop("No feedback with a ", feedback_delay, "-week delay. Add it to ",
     "feedback_delays in R/01_data_overview.R and rerun it.")
+  if (revisions && is.null(case$report_revisions)) stop("No report revisions in the ",
+    "prepared data. Rerun Rscript R/01_data_overview.R.")
   case$feedback_delay <- feedback_delay
+  case$feedback_revised <- revisions
   case$feedback_observed <- feedback$observed
   case$feedback_date <- feedback$date
   case$feedback_by_week <- feedback$by_week
+  case$feedback_revisions <- if (revisions) {
+    learned_at <- match(feedback$date, case$reference_date)   # Week a row is learned.
+    r <- case$report_revisions
+    r <- r[!is.na(learned_at[r$row]) & r$week > learned_at[r$row], c("week", "row", "value")]
+    r <- r[order(r$week, r$row), , drop = FALSE]
+    rownames(r) <- NULL
+    r
+  }
   # Cross-horizon inputs for the soft-switch method. Keep the workflow's selected
   # base and its original availability/filling flags; no outcomes enter this panel.
   case$context_forecasts <- do.call(rbind, lapply(-1:3, function(h) {
@@ -50,6 +67,36 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L) 
     data.frame(reference_date = other$reference_date, target_date = other$target_date,
       as_of = other$as_of, horizon = h, median = other$base[, mid], filled = other$filled)
   }))
+  case
+}
+# Label of a feedback design.
+feedback_label <- function(delay, revisions = FALSE)
+  paste0("delay ", delay, if (revisions) " + revisions (re-run)")
+
+# The case as re-run at issue week `week` (re-run design): its first `week` rows, every
+# report released by then as known at that week, and no later revisions. S0 and the
+# weighting loss scale stay those of the whole case (frozen_s0, frozen_loss_scale).
+case_as_of <- function(case, week, frozen_s0 = NULL, frozen_loss_scale = NULL) {
+  rows <- seq_len(week)
+  released <- unlist(case$feedback_by_week[rows])
+  r <- case$feedback_revisions
+  r <- r[r$week <= week, , drop = FALSE]               # Ordered by week: the last is latest.
+  r <- r[!duplicated(r$row, fromLast = TRUE), , drop = FALSE]
+  observed <- case$feedback_observed
+  observed[r$row] <- r$value
+  stopifnot(all(r$row %in% released))
+  for (name in c("reference_date", "target_date", "truth_finalized", "filled", "filled_from",
+    "truth_latest", "as_of", "season", "period", "peak_index", "peak_date", "relative_week",
+    "feedback_date", "feedback_by_week")) case[[name]] <- case[[name]][rows]
+  case$base <- case$base[rows, , drop = FALSE]
+  case$feedback_observed <- observed[rows]
+  case$feedback_by_delay <- lapply(case$feedback_by_delay, function(feedback) list(
+    observed = feedback$observed[rows], date = feedback$date[rows],
+    by_week = feedback$by_week[rows]))
+  case$feedback_revised <- FALSE
+  case$feedback_revisions <- NULL
+  case$frozen_s0 <- frozen_s0
+  case$frozen_loss_scale <- frozen_loss_scale
   case
 }
 
@@ -167,6 +214,7 @@ count_scale_label <- function(method) switch(method,
 # only its first `rounds` rows enter S0. With fewer releases every week is warmup.
 # replay = TRUE keeps S0 but has no warmup weeks: MultiQT learns from the first
 # week on, so S0 uses reports released later (hindsight, acceptable here).
+# The re-run design uses the S0 of the reports learned first, as delay 0.
 error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
                         replay = FALSE) {
   feedback_by_week <- case$feedback_by_week
@@ -329,7 +377,8 @@ check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_
 # 3. SCORING --------------------------------------------------------------
 # Truth for coverage, coverage residuals and quantile losses. "latest": the latest
 # stored report of each target week. "feedback": the report the online updates
-# learned from at the case's feedback delay (NA for weeks never released).
+# learned from at the case's feedback delay (NA for weeks never released; the first
+# report in the re-run design).
 # filled = FALSE leaves filled rounds unscored; MultiQT still issues and learns there.
 score_truth <- function(case, target = "latest", filled = TRUE) {
   truth <- switch(target,
@@ -415,13 +464,14 @@ weighted_isoreg <- function(v, w) {
 # the case's feedback delay; feedback_by_week[[w]]: the earlier rows whose feedback
 # is released at issue week w. eta: one rate, or one per week, in tracker units. The first
 # warmup_weeks forecasts keep the base and their reports are never replayed.
-# Optional leaky shift of all levels (leak = 0: standard MultiQT): each report adds
-# leak * mean(alpha - covered); the shift is multiplied by decay (one value, or one
-# per week) at every issue week and capped at +-leak_bound.
+# Optional leaky shift of all levels on the log1p(counts) scale, for either tracker
+# (leak = 0: standard MultiQT): each report adds leak * mean(alpha - covered); the shift
+# is multiplied by decay (one value, or one per week) at every issue week and capped at
+# +-leak_bound. The identity tracker shifts negative quantiles like 0.
 # Optional studentized offsets (sigma = 1, start = 0: standard MultiQT): week w issues
 # base + sigma[w] * offsets. sigma: one value, or one per week, in tracker units; then
 # offsets and eta are in units of sigma, and a change of sigma rescales the whole
-# accumulated offset (the leaky shift stays in tracker units). A matrix sigma
+# accumulated offset (not the leaky shift). A matrix sigma
 # [week x level] gives each level its own scale; the projection is then weighted
 # isotonic regression with weights 1 / sigma^2 (Euclidean in units of sigma).
 # start: the offsets before the first update, one value or one per level.
@@ -450,6 +500,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     all(is.finite(base_tracker)), all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
   offsets <- rep_len(start, length(alpha))
   shift <- 0
+  # The leaky shift on the log1p scale: inside the projection for log1p, after it for
+  # identity (isoreg commutes with a constant shift, so log1p stays exactly as before).
+  inner_shift <- function() if (transform == "log1p") shift else 0
+  log_shift <- function(q) if (shift == 0) q else expm1(log1p(pmax(q, 0)) + shift) + pmin(q, 0)
   q_tracker <- base_tracker
   for (week in seq_len(n)) {
     if (week <= warmup_weeks) next
@@ -466,8 +520,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     # isoreg restores quantile order: e.g., (12,10) becomes (11,11).
     # Weights (min sigma / sigma)^2: the same projection as 1 / sigma^2, without overflow.
     q_tracker[week, ] <- if (by_level) weighted_isoreg(base_tracker[week, ] +
-      sigma[week, ] * offsets + shift, (min(sigma[week, ]) / sigma[week, ])^2) else
-      isoreg(base_tracker[week, ] + sigma[week] * offsets + shift)$yf
+      sigma[week, ] * offsets + inner_shift(), (min(sigma[week, ]) / sigma[week, ])^2) else
+      isoreg(base_tracker[week, ] + sigma[week] * offsets + inner_shift())$yf
+    if (transform != "log1p") q_tracker[week, ] <- to_tracker(log_shift(from_tracker(
+      q_tracker[week, ], transform)), transform)
   }
   # Do not clip negative predictions: that would change the issued coverage indicators.
   q <- from_tracker(q_tracker, transform)
@@ -552,12 +608,14 @@ make_restart_experts <- function(case, multipliers, scale, count_scale = 1, tran
 # All experts issue the base during the S0 warmup.
 #   base     the original forecast;
 #   slow     slow MultiQT on the base;
-#   leaky    slow MultiQT plus a leaky shift of all levels (see multiqt()), halved
-#            every week since the previous issue;
-#   damp=k   start from the base minus k times its implied growth: base median minus
-#            the latest released report, in tracker units, clipped to [-1, 1]
-#            (k = 1 centres on the latest report, k < 0 extrapolates further);
-#   width=w  start from the base quantiles moved w times as far from the base median.
+#   leaky    slow MultiQT plus a leaky shift of all levels on the log1p scale (see
+#            multiqt()), halved every week since the previous issue;
+#   damp=k   start from the base minus k times its implied growth on the log1p scale
+#            (either tracker): log1p(base median) minus log1p(the latest released
+#            report), clipped to [-1, 1] (k = 1 centres on the latest report, k < 0
+#            extrapolates further);
+#   width=w  start from the base quantiles moved w times as far from the base median
+#            (tracker units).
 make_diverse_experts <- function(case, scale, count_scale = 1, transform = "log1p",
                                  slow = .01, leak = .2, damping = c(-.5, .5, 1),
                                  widths = c(.75, 1.5)) {
@@ -568,12 +626,13 @@ make_diverse_experts <- function(case, scale, count_scale = 1, transform = "log1
   # First reports at any feedback delay: the starting point uses what is known then.
   first <- case$feedback_by_delay[["0"]]
   latest <- cummax(vapply(first$by_week, function(rows) max(0L, rows), integer(1)))
-  implied <- mid - to_tracker(first$observed[ifelse(latest > 0, latest, NA)], transform)
+  implied <- log1p(case$base[, match(.5, case$alpha)]) -
+    log1p(first$observed[ifelse(latest > 0, latest, NA)])
   implied <- pmin(1, pmax(-1, ifelse(is.finite(implied), implied, 0)))
   # Starting forecasts in counts, floored at zero counts.
   starts <- list(slow = case$base, leaky = case$base)
   for (k in damping) starts[[paste0("damp=", k)]] <-
-    from_tracker(pmax(base_tracker - k * implied, 0), transform)
+    expm1(pmax(log1p(case$base) - k * implied, 0))
   for (w in widths) starts[[paste0("width=", w)]] <-
     from_tracker(pmax(mid + w * (base_tracker - mid), 0), transform)
   decay <- .5^c(1, pmax(1, as.numeric(diff(case$reference_date)) / 7))
@@ -765,7 +824,7 @@ soft_switch_weights <- function(experts, base, feedback, feedback_by_week, alpha
 # 7. THE RECALIBRATION METHODS OF SCRIPTS 04 AND 05 ----------------------------
 # Settings of the methods. Rates are multiples m of S0 (eta = m * S0, so they act alike
 # for both trackers and every location), except median_rate (in units of sigma_t) and
-# the diverse leak and damping (tracker units, sized for log1p). by_method overrides a
+# the diverse leak and damping (log1p units for either tracker). by_method overrides a
 # setting for one method, e.g. list(shared = list(H = 4L)); R/05_tuning.R tunes one
 # setting per method (tuned_setting) on the tuning season.
 method_parameters <- function() list(
@@ -804,16 +863,24 @@ method_parameter <- function(params, method, name) {
     value <- params$by_method$diverse_shared_common[[name]]
   if (is.null(value)) params[[name]] else value
 }
-# The values R/05_tuning.R chose for one disease and tracker transform under a design
-# of R/01_data_overview.R, as by_method overrides of params; the defaults where none
-# were tuned (with a message).
+# The values R/05_tuning.R chose for one disease, tracker transform and feedback design
+# (delay, revisions) under a design of R/01_data_overview.R, as by_method overrides of
+# params; the defaults where none were tuned (with a message).
 tuned_parameters <- function(disease, transform, params = method_parameters(),
-                             design = "seasons", dir = "output/results/tuning") {
+                             design = "seasons", dir = "output/results/tuning",
+                             feedback_delay = 0L, revisions = FALSE) {
   path <- file.path(dir, paste0("tuned_settings_", design, ".csv"))
   tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
-    transform = character())
-  tuned <- tuned[tuned$disease == disease & tuned$transform == transform, , drop = FALSE]
-  if (!nrow(tuned)) message("No tuned settings for ", disease, " (", transform, ") in ", path,
+    transform = character(), feedback_delay = integer(), feedback_revisions = logical())
+  if (!"feedback_delay" %in% names(tuned)) {       # Tuned before the feedback designs.
+    tuned$feedback_delay <- rep(0L, nrow(tuned))
+    tuned$feedback_revisions <- rep(FALSE, nrow(tuned))
+  }
+  tuned <- tuned[tuned$disease == disease & tuned$transform == transform &
+    tuned$feedback_delay == feedback_delay & tuned$feedback_revisions == revisions, ,
+    drop = FALSE]
+  if (!nrow(tuned)) message("No tuned settings for ", disease, " (", transform, ", feedback ",
+    feedback_label(feedback_delay, revisions), ") in ", path,
     ": the defaults of method_parameters(). Run Rscript R/05_tuning.R.")
   for (i in seq_len(nrow(tuned)))
     params$by_method[[tuned$method[i]]][[tuned$setting[i]]] <- tuned$value[i]
@@ -849,8 +916,12 @@ outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
 # cache (R/05_tuning.R): an environment for one case and fixed settings apart from the
 # transform. Scales, expert banks and mixtures computed for one grid value are reused for
 # the next; each key holds every setting the stored object depends on. NULL: no reuse.
+# Re-run design (get_case(revisions = TRUE)): rerun_methods() below; weeks: the issue
+# weeks it re-runs (default: all), e.g. only the scored ones.
 apply_methods <- function(case, settings, params = method_parameters(), methods = method_names,
-                          cache = NULL) {
+                          cache = NULL, weeks = NULL) {
+  if (isTRUE(case$feedback_revised))
+    return(rerun_methods(case, settings, params, methods, cache, weeks))
   par <- function(method, name) method_parameter(params, method, name)
   methods <- union(methods, outer_inner[intersect(names(outer_inner), methods)])
   want <- function(...) any(c(...) %in% methods)
@@ -863,8 +934,8 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   }
   scaling <- choose_count_scale(case, settings$scale_method)
   count_scale <- scaling$scale
-  s0 <- memo("s0", error_scale(case, settings$warmup_rounds, settings$scale_floor, transform,
-    settings$replay_warmup))
+  s0 <- if (!is.null(case$frozen_s0)) case$frozen_s0 else memo("s0", error_scale(case,
+    settings$warmup_rounds, settings$scale_floor, transform, settings$replay_warmup))
   # Keep stored predictions and the scoring/weighting inputs in counts / count_scale.
   base <- case$base / count_scale
   feedback <- case$feedback_observed / count_scale
@@ -964,7 +1035,8 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # forecasts, divided by the base's mean loss over the S0 rows, so the count scale does
   # not change the weights. Their deterministic average still uses LEARNED weights;
   # equal averaging is a control.
-  loss_scale <- weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
+  loss_scale <- if (!is.null(case$frozen_loss_scale)) case$frozen_loss_scale else
+    weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
   weigh <- function(method, experts, ...) exp_weights(experts, base, feedback,
     case$feedback_by_week, case$alpha, H = par(method, "H"),
     lambda_start = par(method, "lambda_start"), warmup_weeks = s0$warmup_weeks,
@@ -1063,4 +1135,70 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
     rate_experts = rate_experts, restart_experts = restart_experts,
     diverse_experts = if (length(diverse_banks)) diverse_banks[[1]], soft_switch = soft_switch)
+}
+
+# Re-run design, as in Delphi's calibration reports: at every issue week t of `weeks`
+# (default: all), every method is re-run from the first week on the reports as known at t
+# (case_as_of()), and only its week-t forecasts and weights are issued. So each report is
+# learned from with its latest revision, and earlier forecasts inside the re-run change
+# with it. S0 and the weighting loss scale stay frozen at those of the first reports. The
+# issued rows outside `weeks` are NA; experts not yet started have weight 0. The other
+# results (scales, experts) are those of the run at the last week. cache: one environment
+# per week (see apply_methods()).
+rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks = NULL) {
+  n <- nrow(case$base)
+  weeks <- sort(if (is.null(weeks)) seq_len(n) else weeks)
+  first_reports <- case
+  first_reports$feedback_revised <- FALSE
+  s0 <- error_scale(first_reports, settings$warmup_rounds, settings$scale_floor,
+    settings$transform, settings$replay_warmup)
+  loss_scale <- weighting_loss_scale(first_reports, s0,
+    choose_count_scale(case, settings$scale_method)$scale, settings$scale_floor)
+  run_at <- function(t) {
+    week_cache <- NULL
+    if (!is.null(cache)) {
+      key <- paste("re-run week", t)
+      if (is.null(cache[[key]])) cache[[key]] <- new.env()
+      week_cache <- cache[[key]]
+    }
+    apply_methods(case_as_of(case, t, s0, loss_scale), settings, params, methods, week_cache)
+  }
+  # n rows of NA with the other dimensions of x (one row per issue week).
+  blank <- function(x) {
+    if (is.data.frame(x)) {
+      x <- x[rep(NA_integer_, n), , drop = FALSE]
+      rownames(x) <- NULL
+      return(x)
+    }
+    d <- if (is.null(dim(x))) c(length(x), 1L) else dim(x)
+    array(NA_real_, c(n, d[-1]), c(list(NULL), dimnames(x)[-1]))
+  }
+  # Row t of x from the run at t (experts matched by name: weekly restarts join over time).
+  fill <- function(target, x, t) {
+    if (is.data.frame(target)) {
+      target[t, ] <- x[t, ]
+    } else if (length(dim(target)) == 3L) {
+      target[t, , ] <- 0
+      target[t, match(dimnames(x)[[2]], dimnames(target)[[2]]), ] <- x[t, , ]
+    } else {
+      target[t, ] <- if (is.null(dim(x))) x[t] else x[t, ]
+    }
+    target
+  }
+  last <- run_at(max(weeks))
+  parts <- c("predictions", "weights", "lambda")
+  switch_parts <- c("q", "weights", "lambda", "regime_weights", "regime_lambda", "gate")
+  issued <- lapply(last[parts], function(part) lapply(part, blank))
+  switched <- if (!is.null(last$soft_switch)) lapply(last$soft_switch[switch_parts], blank)
+  for (t in weeks) {
+    run <- if (t == max(weeks)) last else run_at(t)
+    for (part in parts) for (method in names(issued[[part]]))
+      issued[[part]][[method]] <- fill(issued[[part]][[method]], run[[part]][[method]], t)
+    for (part in names(switched)) switched[[part]] <- fill(switched[[part]],
+      run$soft_switch[[part]], t)
+  }
+  last[parts] <- issued
+  if (!is.null(switched)) last$soft_switch[switch_parts] <- switched
+  last$case <- case
+  last
 }

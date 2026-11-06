@@ -36,7 +36,8 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # 2. RUN MULTIQT ON THE RATE GRID, ONE LOCATION AT A TIME ----------------
 # 01 supplies full issue histories and the online feedback in raw counts.
 # MultiQT tracks log1p(counts) or counts and learns only from the feedback released
-# so far: the report available feedback_delay weeks after the first report.
+# so far: the report available feedback_delay weeks after the first report. (The
+# re-run design, settings$feedback_revisions, is compared in R/04_methods.R.)
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
 # (per 100k residents by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
