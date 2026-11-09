@@ -15,7 +15,7 @@ multiqt_settings <- function() list(
   expert_multipliers = c(0, .01, .015, .02, .03, .05, .075, .1, .15, .2, .3),
   warmup_rounds = 20L,              # First released rows that freeze the error scale S0.
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
-  feedback_delay = 0L,              # Weeks after the first report before MultiQT learns from a forecast.
+  feedback_delay = 0L,              # Wait this many weeks after the first report, then learn once from the current one.
   feedback_revisions = FALSE,       # TRUE: re-run each week on the reports known then (Delphi).
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
@@ -26,37 +26,152 @@ multiqt_settings <- function() list(
   weeks_before_peak = 8L,           # before = weeks -7..0: 8 weeks, including the peak week.
   weeks_after_peak = 8L)            # after = weeks 1..8: 8 weeks.
 
-# 2. CASES, SCALES AND WINDOWS --------------------------------------------
-# Prepared cases are named disease_location_horizon, e.g. covid_06_0.
-# feedback_delay selects the online feedback: each forecast is learned from the
-# report available feedback_delay weeks after its first report (0: first report).
-# revisions = TRUE: the re-run design of Delphi's calibration reports. Every issue week,
-# each method is re-run from the first week on the reports as known then, so it also
-# learns from later revisions of those reports (apply_methods(), case_as_of()).
-# feedback_revisions: the revisions after a row is learned (week, row, value in counts).
+# 2. DELAYED FEEDBACK, CASES, SCALES AND WINDOWS ----------------------------
+# The delayed-feedback protocol of notes/notes.tex, Section 2.1.1 (wait for the delay, then
+# learn once from the report current at the update). R/01_data_overview.R builds every
+# case's feedback with feedback_schedule() and stores this protocol with the prepared data;
+# R/05 and R/04 write its id into the tuned settings and the scores. get_case(),
+# tuned_parameters() and R/06 stop on any other id, so results of different feedback
+# definitions are never combined. Change the id when the protocol changes. The
+# initialization is a separate convention (error_scale(), replay_warmup).
+feedback_protocol <- function() list(
+  id = "latest-at-use-v2",
+  cutoff = paste("Issue cutoff of a round: the base's actual generation date where known",
+    "(windowed_seasonal; CMU hub rounds that Delphi's production schedule ran late),",
+    "otherwise the hub's Wednesday deadline (reference date - 3, also for filled rounds).",
+    "Reports have dates only: a report dated on the cutoff day is available (same-day",
+    "convention)."),
+  vintage = paste("Delay d: each forecast is learned once, at the first later round whose",
+    "cutoff is at least its first valid report + 7d days and whose current report (the",
+    "latest by that cutoff) is valid, from that report; later revisions are ignored. An",
+    "invalid current report waits for the next round; an older report is never used",
+    "instead. Re-run: the same rows in the same rounds, each with its report at the re-run",
+    "round's cutoff; invalid ones are left out."))
+# Stop unless `found` (the protocol id of prepared data, tuned settings or scores, read
+# from `what`) is the current one.
+check_feedback_protocol <- function(found, what, rerun) {
+  found <- unique(found)
+  if (!length(found)) found <- "none (made before the protocol was versioned)"
+  if (!identical(found, feedback_protocol()$id)) stop(what, " uses feedback protocol ",
+    paste(found, collapse = ", "), ", not ", feedback_protocol()$id, ". Rerun ", rerun, ".",
+    call. = FALSE)
+  invisible(TRUE)
+}
+# A report is valid if it is a finite, nonnegative count; an NA in a stored version is an
+# explicitly missing report.
+valid_report <- function(x) is.finite(x) & x >= 0
+
+# The report of each of `rows` that is current at `cutoff` (one date): the latest version
+# published by then. versions: every stored report of a case, columns row, version and
+# value, sorted by row and version. Value NA: no report yet, or a missing latest report
+# (never replaced by an older valid one).
+report_snapshot <- function(versions, rows, cutoff) {
+  stopifnot(length(cutoff) == 1L, !is.na(cutoff))
+  known <- versions[versions$version <= cutoff & versions$row %in% rows, , drop = FALSE]
+  known <- known[!duplicated(known$row, fromLast = TRUE), , drop = FALSE]
+  i <- match(rows, known$row)
+  data.frame(row = rows, version = known$version[i], value = known$value[i])
+}
+
+# The delayed feedback of one case with a delay of `delay` weeks (notes/notes.tex, Section
+# 2.1.1). versions: every stored report of each row's target week (row, version, value and
+# optionally source; sorted by row and version); cutoff: the issue cutoff of each row's
+# round, non-decreasing. For each row s:
+#   first_report  nu_s, the date of its first valid report;
+#   maturity      m_s = nu_s + 7 * delay days: calendar weeks after the first report,
+#                 not forecast rounds, so neither a missing round nor a revision restarts
+#                 this clock;
+#   consumed_row  tau(s): the first later row t > s whose cutoff is at least m_s and whose
+#                 current report there (the latest version on or before the cutoff, a
+#                 report of the cutoff day included) is valid (NA: none, no feedback). An
+#                 invalid current report waits for the next round (invalid_cutoffs counts
+#                 these rounds); an older valid report is never used instead. The strict
+#                 t > s keeps a forecast's own error out of it, also at horizon -1, whose
+#                 first report is often known at its own issue;
+#   selected      that current report, learned once at tau(s); later revisions are ignored.
+# Returns observed (the selected values of the consumed rows, NA otherwise), date (the
+# reference date of each row's consumption round), by_week (the rows consumed at each row,
+# before its forecast is issued) and audit.
+feedback_schedule <- function(versions, cutoff, delay, reference_date = NULL) {
+  n <- length(cutoff)
+  stopifnot(length(delay) == 1L, is.finite(delay), delay >= 0, !anyNA(cutoff),
+    !is.unsorted(cutoff), all(versions$row %in% seq_len(n)), !anyNA(versions$version),
+    identical(order(versions$row, versions$version), seq_len(nrow(versions))),
+    !anyDuplicated(versions[c("row", "version")]),
+    is.null(reference_date) || length(reference_date) == n)
+  source <- if (is.null(versions$source)) rep("archive", nrow(versions)) else versions$source
+  first_report <- maturity <- consumed_cutoff <- selected_version <- rep(as.Date(NA), n)
+  selected_value <- rep(NA_real_, n)
+  first_report_source <- selected_source <- rep(NA_character_, n)
+  consumed_row <- invalid_cutoffs <- rep(NA_integer_, n)
+  by_row <- split(seq_len(nrow(versions)), factor(versions$row, seq_len(n)))
+  for (s in seq_len(n)) {
+    k <- by_row[[s]]
+    ok <- valid_report(versions$value[k])
+    first <- match(TRUE, ok)
+    if (is.na(first)) next                        # Never a valid report: no feedback.
+    v <- versions$version[k]
+    first_report[s] <- v[first]
+    first_report_source[s] <- source[k[first]]
+    maturity[s] <- v[first] + 7 * delay
+    # Eligible rounds: later rows whose cutoff is at least the maturity, each with its
+    # current report (the latest version by its cutoff; at least the first valid one).
+    eligible <- which(seq_len(n) > s & cutoff >= maturity[s])
+    current <- findInterval(as.numeric(cutoff[eligible]), as.numeric(v))
+    use <- match(TRUE, ok[current])
+    invalid_cutoffs[s] <- if (is.na(use)) length(eligible) else use - 1L
+    if (is.na(use)) next                          # No later round with a valid report.
+    consumed_row[s] <- eligible[use]
+    consumed_cutoff[s] <- cutoff[eligible[use]]
+    selected_version[s] <- v[current[use]]
+    selected_value[s] <- versions$value[k[current[use]]]
+    selected_source[s] <- source[k[current[use]]]
+  }
+  consumed <- which(!is.na(consumed_row))
+  by_week <- lapply(seq_len(n), function(t) which(consumed_row == t))
+  stopifnot(all(consumed_row[consumed] > consumed),
+    all(maturity[consumed] <= consumed_cutoff[consumed]),
+    all(selected_version[consumed] <= consumed_cutoff[consumed]),
+    all(valid_report(selected_value[consumed])), !anyDuplicated(unlist(by_week)))
+  observed <- rep(NA_real_, n)
+  observed[consumed] <- selected_value[consumed]
+  date <- if (is.null(reference_date)) rep(as.Date(NA), n) else reference_date[consumed_row]
+  list(observed = observed, date = date, by_week = by_week,
+    audit = data.frame(row = seq_len(n), issue_cutoff = cutoff, delay = as.integer(delay),
+      first_report, first_report_source, maturity, consumed_row, consumed_date = date,
+      consumed_cutoff, invalid_cutoffs, selected_version, selected_value, selected_source))
+}
+# Every case's feedback schedule in one table (one row per case row and delay), with the
+# reference and target dates, for audits: feedback_audit(readRDS("output/data/peak_aligned.rds")).
+feedback_audit <- function(prepared) do.call(rbind, lapply(prepared$cases, function(case)
+  do.call(rbind, lapply(case$feedback_by_delay, function(feedback) data.frame(
+    disease = case$disease, location = case$location, horizon = case$horizon,
+    reference_date = case$reference_date, target_date = case$target_date,
+    filled = case$filled, cutoff_source = case$cutoff_source, feedback$audit)))))
+
+# Prepared cases are named disease_location_horizon, e.g. covid_06_0. feedback_delay
+# selects the stateful feedback of feedback_schedule(): each forecast is learned once, at
+# the first later round at least feedback_delay weeks after its first valid report whose
+# current report is valid, from that report.
+# revisions = TRUE: the weekly re-run design (Delphi's "exact" re-run). At every issue week
+# each method is re-run from the first week, with the same rows in the same rounds but each
+# with its report at that week's cutoff (rerun_methods(), case_as_of()).
 get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
                      revisions = FALSE) {
+  check_feedback_protocol(prepared$settings$feedback_protocol$id,
+    "output/data/peak_aligned.rds", "Rscript R/01_data_overview.R")
   case <- prepared$cases[[paste(disease, location, horizon, sep = "_")]]
   if (is.null(case)) stop("No prepared case ", disease, " ", location, " h", horizon,
     ". Rerun Rscript R/01_data_overview.R.")
   feedback <- case$feedback_by_delay[[as.character(feedback_delay)]]
   if (is.null(feedback)) stop("No feedback with a ", feedback_delay, "-week delay. Add it to ",
     "feedback_delays in R/01_data_overview.R and rerun it.")
-  if (revisions && is.null(case$report_revisions)) stop("No report revisions in the ",
-    "prepared data. Rerun Rscript R/01_data_overview.R.")
+  case$feedback_protocol <- prepared$settings$feedback_protocol$id
   case$feedback_delay <- feedback_delay
   case$feedback_revised <- revisions
   case$feedback_observed <- feedback$observed
   case$feedback_date <- feedback$date
   case$feedback_by_week <- feedback$by_week
-  case$feedback_revisions <- if (revisions) {
-    learned_at <- match(feedback$date, case$reference_date)   # Week a row is learned.
-    r <- case$report_revisions
-    r <- r[!is.na(learned_at[r$row]) & r$week > learned_at[r$row], c("week", "row", "value")]
-    r <- r[order(r$week, r$row), , drop = FALSE]
-    rownames(r) <- NULL
-    r
-  }
   # Cross-horizon inputs for the soft-switch method. Keep the workflow's selected
   # base and its original availability/filling flags; no outcomes enter this panel.
   case$context_forecasts <- do.call(rbind, lapply(-1:3, function(h) {
@@ -73,28 +188,38 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
 feedback_label <- function(delay, revisions = FALSE)
   paste0("delay ", delay, if (revisions) " + revisions (re-run)")
 
-# The case as re-run at issue week `week` (re-run design): its first `week` rows, every
-# report released by then as known at that week, and no later revisions. S0 and the
-# weighting loss scale stay those of the whole case (frozen_s0, frozen_loss_scale).
+# The case as re-run at issue week `week` (re-run design): its first `week` rows. The rows
+# consumed by then keep their rounds of the stateful schedule (every delay; later
+# revisions never move them), but each is learned from its report current at this week's
+# cutoff (case$as_of[week]); a row whose current report is invalid is left out of this
+# replay (rerun_omitted), not replaced by an older or later report. The diverse experts'
+# delay-0 feedback is replayed alike. S0 and the weighting loss scale stay frozen
+# (frozen_s0, frozen_loss_scale: those of the stateful design with the same delay, see
+# rerun_methods()).
 case_as_of <- function(case, week, frozen_s0 = NULL, frozen_loss_scale = NULL) {
   rows <- seq_len(week)
-  released <- unlist(case$feedback_by_week[rows])
-  r <- case$feedback_revisions
-  r <- r[r$week <= week, , drop = FALSE]               # Ordered by week: the last is latest.
-  r <- r[!duplicated(r$row, fromLast = TRUE), , drop = FALSE]
-  observed <- case$feedback_observed
-  observed[r$row] <- r$value
-  stopifnot(all(r$row %in% released))
+  current <- report_snapshot(case$report_versions, rows, case$as_of[week])$value
+  replay <- function(feedback) {
+    by_week <- feedback$by_week[rows]
+    released <- unlist(by_week)
+    omitted <- released[!valid_report(current[released])]
+    observed <- rep(NA_real_, week)
+    kept <- setdiff(released, omitted)
+    observed[kept] <- current[kept]
+    list(observed = observed, date = feedback$date[rows],
+      by_week = lapply(by_week, setdiff, omitted), omitted = omitted)
+  }
+  case$feedback_by_delay <- lapply(case$feedback_by_delay, replay)
+  own <- case$feedback_by_delay[[as.character(case$feedback_delay)]]
   for (name in c("reference_date", "target_date", "truth_finalized", "filled", "filled_from",
-    "truth_latest", "as_of", "season", "period", "peak_index", "peak_date", "relative_week",
-    "feedback_date", "feedback_by_week")) case[[name]] <- case[[name]][rows]
+    "truth_latest", "as_of", "cutoff_source", "season", "period", "peak_index", "peak_date",
+    "relative_week")) case[[name]] <- case[[name]][rows]
   case$base <- case$base[rows, , drop = FALSE]
-  case$feedback_observed <- observed[rows]
-  case$feedback_by_delay <- lapply(case$feedback_by_delay, function(feedback) list(
-    observed = feedback$observed[rows], date = feedback$date[rows],
-    by_week = feedback$by_week[rows]))
+  case$feedback_observed <- own$observed
+  case$feedback_date <- own$date
+  case$feedback_by_week <- own$by_week
+  case$rerun_omitted <- own$omitted
   case$feedback_revised <- FALSE
-  case$feedback_revisions <- NULL
   case$frozen_s0 <- frozen_s0
   case$frozen_loss_scale <- frozen_loss_scale
   case
@@ -213,8 +338,10 @@ count_scale_label <- function(method) switch(method,
 # The whole release batch of the freeze week is consumed as warmup (no replay), but
 # only its first `rounds` rows enter S0. With fewer releases every week is warmup.
 # replay = TRUE keeps S0 but has no warmup weeks: MultiQT learns from the first
-# week on, so S0 uses reports released later (hindsight, acceptable here).
-# The re-run design uses the S0 of the reports learned first, as delay 0.
+# week on, so S0 uses reports released later (a retrospective initialization, declared
+# separately from the feedback protocol: forecasts before the 20th release depend on it).
+# The released rows and values are those of the case's stateful schedule (the reports
+# learned from); the re-run design keeps this S0 of its stateful design (rerun_methods()).
 error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
                         replay = FALSE) {
   feedback_by_week <- case$feedback_by_week
@@ -376,9 +503,11 @@ check_peak_window <- function(case, before = 8L, after = 8L, truth = case$truth_
 
 # 3. SCORING --------------------------------------------------------------
 # Truth for coverage, coverage residuals and quantile losses. "latest": the latest
-# stored report of each target week. "feedback": the report the online updates
-# learned from at the case's feedback delay (NA for weeks never released; the first
-# report in the re-run design).
+# stored report of each target week (the archive's last version, prepared$settings$
+# truth_version), the same truth for every feedback design. "feedback": the report the
+# stateful updates learned from at the case's feedback delay, current at the update (NA
+# for rows never consumed; in the re-run design, too, the stateful design's report).
+# Calibration against these learning vintages is not calibration against the latest counts.
 # filled = FALSE leaves filled rounds unscored; MultiQT still issues and learns there.
 score_truth <- function(case, target = "latest", filled = TRUE) {
   truth <- switch(target,
@@ -390,7 +519,7 @@ score_truth <- function(case, target = "latest", filled = TRUE) {
 }
 score_truth_label <- function(target, delay = 0L) switch(target,
   latest = "latest reported counts",
-  feedback = paste0("reports ", delay, " week(s) after the first report"),
+  feedback = paste0("the reports learned from (delay ", delay, ": current at the update)"),
   stop("Unknown score target ", target))
 
 # Coverage and pinball loss of quantile forecasts q [week x level] against one
@@ -460,9 +589,12 @@ weighted_isoreg <- function(v, w) {
   rep(value[seq_len(k)], size[seq_len(k)])
 }
 
-# base: issued quantiles [week x level] in counts; feedback: reported counts at
-# the case's feedback delay; feedback_by_week[[w]]: the earlier rows whose feedback
-# is released at issue week w. eta: one rate, or one per week, in tracker units. The first
+# base: issued quantiles [week x level] in counts; feedback: the reported counts learned
+# from (the case's feedback schedule); feedback_by_week[[w]]: the earlier rows consumed at
+# issue week w, before its forecast is issued. Each consumed row is compared with ITS
+# historical issued forecast, and the steps of a batch are summed (not averaged), all with
+# eta[w], the rate of the update week. eta: one rate, or one per week, in tracker units.
+# Only the issued forecasts are projected; the offsets stay unprojected. The first
 # warmup_weeks forecasts keep the base and their reports are never replayed.
 # Optional leaky shift of all levels on the log1p(counts) scale, for either tracker
 # (leak = 0: standard MultiQT): each report adds leak * mean(alpha - covered); the shift
@@ -622,8 +754,9 @@ make_diverse_experts <- function(case, scale, count_scale = 1, transform = "log1
   n <- nrow(case$base)
   base_tracker <- to_tracker(case$base, transform)
   mid <- base_tracker[, match(.5, case$alpha)]
-  # Latest row whose first report is released by each issue week (none: no growth).
-  # First reports at any feedback delay: the starting point uses what is known then.
+  # Latest row released by each issue week under delay 0 (none: no growth), with its report
+  # current at that release, at any feedback delay: the starting point uses what is known
+  # then; in a re-run, case_as_of() replaces it by the current report.
   first <- case$feedback_by_delay[["0"]]
   latest <- cummax(vapply(first$by_week, function(rows) max(0L, rows), integer(1)))
   implied <- log1p(case$base[, match(.5, case$alpha)]) -
@@ -865,17 +998,17 @@ method_parameter <- function(params, method, name) {
 }
 # The values R/05_tuning.R chose for one disease, tracker transform and feedback design
 # (delay, revisions) under a design of R/01_data_overview.R, as by_method overrides of
-# params; the defaults where none were tuned (with a message).
+# params; the defaults where none were tuned (with a message). Settings tuned under another
+# feedback protocol (feedback_protocol()) stop with an error instead of being used.
 tuned_parameters <- function(disease, transform, params = method_parameters(),
                              design = "seasons", dir = "output/results/tuning",
                              feedback_delay = 0L, revisions = FALSE) {
   path <- file.path(dir, paste0("tuned_settings_", design, ".csv"))
   tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
-    transform = character(), feedback_delay = integer(), feedback_revisions = logical())
-  if (!"feedback_delay" %in% names(tuned)) {       # Tuned before the feedback designs.
-    tuned$feedback_delay <- rep(0L, nrow(tuned))
-    tuned$feedback_revisions <- rep(FALSE, nrow(tuned))
-  }
+    transform = character(), feedback_delay = integer(), feedback_revisions = logical(),
+    feedback_protocol = character())
+  if (file.exists(path)) check_feedback_protocol(tuned$feedback_protocol, path,
+    "Rscript R/05_tuning.R")
   tuned <- tuned[tuned$disease == disease & tuned$transform == transform &
     tuned$feedback_delay == feedback_delay & tuned$feedback_revisions == revisions, ,
     drop = FALSE]
@@ -1138,21 +1271,25 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
 }
 
 # Re-run design, as in Delphi's calibration reports: at every issue week t of `weeks`
-# (default: all), every method is re-run from the first week on the reports as known at t
-# (case_as_of()), and only its week-t forecasts and weights are issued. So each report is
-# learned from with its latest revision, and earlier forecasts inside the re-run change
-# with it. S0 and the weighting loss scale stay frozen at those of the first reports. The
-# issued rows outside `weeks` are NA; experts not yet started have weight 0. The other
-# results (scales, experts) are those of the run at the last week. cache: one environment
-# per week (see apply_methods()).
+# (default: all), every method is re-run from the first week with the reports current at
+# t's cutoff (case_as_of()): the same rows are consumed in the same rounds as in the
+# stateful design with this delay, but each with its report as known at t. Only the week-t
+# forecasts and weights are issued; the earlier forecasts inside each re-run are
+# reconstructions and generally differ from those issued then. S0 and the weighting loss
+# scale are those of the stateful design with this delay (from its stateful feedback),
+# frozen for every re-run. Rows outside `weeks` are NA; experts not yet started have
+# weight 0. The other results (scales, experts) are those of the run at the last week;
+# rerun_omitted: the rows left out of the re-run at each week because their current report
+# was invalid.
+# cache: one environment per week (see apply_methods()).
 rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks = NULL) {
   n <- nrow(case$base)
   weeks <- sort(if (is.null(weeks)) seq_len(n) else weeks)
-  first_reports <- case
-  first_reports$feedback_revised <- FALSE
-  s0 <- error_scale(first_reports, settings$warmup_rounds, settings$scale_floor,
+  stateful <- case
+  stateful$feedback_revised <- FALSE
+  s0 <- error_scale(stateful, settings$warmup_rounds, settings$scale_floor,
     settings$transform, settings$replay_warmup)
-  loss_scale <- weighting_loss_scale(first_reports, s0,
+  loss_scale <- weighting_loss_scale(stateful, s0,
     choose_count_scale(case, settings$scale_method)$scale, settings$scale_floor)
   run_at <- function(t) {
     week_cache <- NULL
@@ -1190,15 +1327,21 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
   switch_parts <- c("q", "weights", "lambda", "regime_weights", "regime_lambda", "gate")
   issued <- lapply(last[parts], function(part) lapply(part, blank))
   switched <- if (!is.null(last$soft_switch)) lapply(last$soft_switch[switch_parts], blank)
+  omitted <- list()
   for (t in weeks) {
     run <- if (t == max(weeks)) last else run_at(t)
     for (part in parts) for (method in names(issued[[part]]))
       issued[[part]][[method]] <- fill(issued[[part]][[method]], run[[part]][[method]], t)
     for (part in names(switched)) switched[[part]] <- fill(switched[[part]],
       run$soft_switch[[part]], t)
+    if (length(run$case$rerun_omitted))
+      omitted[[length(omitted) + 1L]] <- data.frame(week = t, row = run$case$rerun_omitted)
   }
   last[parts] <- issued
   if (!is.null(switched)) last$soft_switch[switch_parts] <- switched
   last$case <- case
+  last$rerun_omitted <- do.call(rbind, c(list(data.frame(week = integer(), row = integer())),
+    omitted))
+  last$frozen <- list(s0 = s0, loss_scale = loss_scale)
   last
 }

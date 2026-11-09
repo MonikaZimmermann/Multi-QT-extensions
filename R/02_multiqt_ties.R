@@ -36,8 +36,10 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # 2. RUN MULTIQT ON THE RATE GRID, ONE LOCATION AT A TIME ----------------
 # 01 supplies full issue histories and the online feedback in raw counts.
 # MultiQT tracks log1p(counts) or counts and learns only from the feedback released
-# so far: the report available feedback_delay weeks after the first report. (The
-# re-run design, settings$feedback_revisions, is compared in R/04_methods.R.)
+# so far: each forecast once, at the first later round feedback_delay weeks after its
+# first valid report, from its report current then (feedback_protocol() in
+# R/03_functions.R). (The re-run design, settings$feedback_revisions, is compared in
+# R/04_methods.R.)
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
 # (per 100k residents by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
@@ -76,7 +78,8 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
     }
   }
   id <- data.frame(disease = case$disease, location = case$location,
-    location_name = case$location_name, horizon = case$horizon)
+    location_name = case$location_name, horizon = case$horizon,
+    feedback_protocol = case$feedback_protocol)
   scores <- do.call(rbind, scores)
   # Loss change versus the same phase's m=0 baseline (the original forecasts).
   zero <- scores[scores$multiplier == 0, ]
@@ -137,8 +140,9 @@ print(scores[scores$disease == season_disease & scores$horizon == season_horizon
 score_units <- count_scale_label(settings$scale_method)
 tracker_label <- if (settings$transform == "log1p") "Log1p-count tracking" else "Count tracking"
 settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
-  settings$warmup_rounds, if (settings$replay_warmup) "released rows (warmup replayed)" else
-  "released rows", "| Feedback delay", settings$feedback_delay, "week(s) | Scored against",
+  settings$warmup_rounds, if (settings$replay_warmup)
+  "released rows (in hindsight: warmup replayed)" else "released rows", "| Feedback delay",
+  settings$feedback_delay, "week(s), protocol", feedback_protocol()$id, "| Scored against",
   score_truth_label(settings$score_target, settings$feedback_delay), "in",
   score_units)
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),

@@ -6,6 +6,7 @@
 .libPaths(c("agent/tmp/multiqt-lib", .libPaths()))  # Same local package folder as script 02.
 library(epiprocess)
 library(dplyr)  # glimpse() used in this overview.
+source("R/03_functions.R")  # feedback_schedule(): the delayed-feedback protocol (section 5).
 
 # 0. THE DATA FILES ------------------------------------------------------------
 # R/00_base_forecasts.R downloads both tables once and stores them as Parquet in
@@ -185,25 +186,41 @@ print(available_then)
 # nearest peak.
 #
 # The output contains:
-#   settings : the settings below;
+#   settings : the settings below, the feedback protocol (feedback_protocol() in
+#              R/03_functions.R) and truth_version, the report version scored against;
 #   peaks    : one row per disease, location and peak (find_peaks());
 #   cases    : named disease_location_horizon lists, e.g. covid_18_0.
-# Each case contains its raw forecast matrix, quantiles, online feedback per delay,
-# the later revisions of each report (re-run design), latest-vintage truth for
-# scoring, dates, seasons and periods, peak-relative week labels, the population
-# (counts per 100k residents) and the historical counts for other scalings. Scripts
-# 02/04 choose the scaling without reopening the data files.
+# Each case contains its raw forecast matrix, quantiles, the issue cutoff of each row
+# (as_of, cutoff_source), every stored report of each row's target week (report_versions,
+# for the feedback and the re-run design), the online feedback per delay with its audit
+# (feedback_by_delay; all cases in one table: feedback_audit() in R/03_functions.R),
+# latest-vintage truth for scoring, dates, seasons and periods, peak-relative week labels,
+# the population (counts per 100k residents) and the historical counts for other
+# scalings. Scripts 02/04 choose the scaling without reopening the data files.
 # US remains a separate case and must not be counted as an additional state.
 #
 # base: the base forecasts per disease. "windowed_seasonal": R/00_base_forecasts.R,
 #   Delphi's forecaster, made on Wednesdays (the generation date) from the reports as
 #   of that day. "cmu_hub": the CMU-TimeSeries submissions (covid from 2024-11-23 only).
-#   The online feedback of a round uses the reports as of the base's generation date
-#   (windowed_seasonal) or the day before the reference date (cmu_hub).
+# Issue cutoff of a round (notes/notes.tex, Section 2): what is known just before its
+#   forecasts are issued, the as-of date of its reports and of its feedback. The base's
+#   actual generation date where known (windowed_seasonal: its generation_date; CMU hub:
+#   hub_generation_dates), otherwise the hubs' Wednesday submission deadline, the
+#   reference date - 3, also for a round without any submitted forecast (filled). The
+#   archive dates reports but has no times: a report dated on the cutoff day counts as
+#   known then (same-day convention). So the first report of a week, mostly published on
+#   the Wednesday after it, is known at the issue of its horizon -1 nowcast.
+# hub_generation_dates: the CMU hub rounds that Delphi's production pipeline generated
+#   after the Wednesday deadline (flu's first round, the holidays), from the production
+#   schedule in pipelines/<disease>_hosp_prod.R of the Delphi code pinned in
+#   R/00_base_forecasts.R (the same dates as the windowed_seasonal generation dates).
 # final_data_through: there are no report versions before 2024-11-19. Target weeks
 #   ending by this date get a first report with their latest value on the Wednesday
 #   after the week (target_end_date + 4), so in 2023/24 MultiQT learns from final
-#   counts, as the windowed_seasonal forecasts were made from final counts.
+#   counts, as the windowed_seasonal forecasts were made from final counts. These
+#   synthetic reports have source "synthetic_final"; archived versions "archive", and
+#   the archive's first version (2024-11-19, a bulk load of all older weeks, without their
+#   original publication dates) "archive_start".
 # incomplete_weeks: mandatory hospital reporting paused from 2024-05-01 to 2024-10-31,
 #   so the counts of these target weeks are incomplete (Texas covid: 643, 274, 8, 2 in
 #   the weeks ending 2024-04-27 to 2024-05-18). Forecasts of them are dropped: never
@@ -215,9 +232,13 @@ print(available_then)
 #   fetch (US 892, final 1,711); flu US 2024-12-14, 2024-12-21 and 2025-01-04: about half
 #   the sum of the states. They are dropped and filled like missing rounds, as are
 #   forecasts that are 0 at every quantile and location of a round and horizon.
-# feedback_delays: the delays (weeks after the first report) prepared for the
-#   online feedback; feedback_delay in R/03_functions.R chooses one of them, and
-#   feedback_revisions whether later revisions are learned as well (re-run).
+# feedback_delays: the delays d prepared for the online feedback (feedback_schedule() in
+#   R/03_functions.R): a forecast is learned once, at the first later round whose cutoff
+#   is at least d calendar weeks after its first valid report and whose current report is
+#   valid, from that report (missing rounds and invalid reports delay the update; later
+#   revisions are ignored). feedback_delay in R/03_functions.R chooses one of them, and
+#   feedback_revisions the re-run design, which re-learns the same rows in the same rounds
+#   from their reports current at each later cutoff.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
 #   see fill_missing_rounds() below; the gap from May to November 2024 stays.
 design <- "hub_first_months"                  # "hub_first_months" or "seasons".
@@ -240,6 +261,14 @@ prepare_settings <- list(design = design,
                              "2024-12-14", "2024-12-21", "2025-01-04")),
                            location = c(NA, NA, "US", "US", "US"),
                            horizon = c(NA, -1L, NA, NA, NA)),
+                         hub_generation_dates = data.frame(
+                           disease = c("flu", rep(c("covid", "flu"), 3)),
+                           reference_date = as.Date(c("2024-11-23", "2024-12-28",
+                             "2024-12-28", "2025-01-04", "2025-01-04", "2025-12-27",
+                             "2025-12-27")),
+                           generation_date = as.Date(c("2024-11-21", "2024-12-26",
+                             "2024-12-26", "2025-01-02", "2025-01-02", "2025-12-29",
+                             "2025-12-29"))),
                          horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
 # Season of a date (October to September, e.g. "2024/25") and its half season.
@@ -320,6 +349,8 @@ prepare_data <- function(forecasts, vintages, settings) {
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
     forecasts$reference_date >= settings$start_date, forecast_columns])
+  # Rounds with a submitted base forecast, broken or not (the others are filled).
+  submitted <- unique(paste(selected$disease, selected$reference_date))
   # Broken CMU hub submissions (settings$invalid_submissions) are dropped and filled
   # like a missing round; a dropped first round stays missing.
   bad <- settings$invalid_submissions
@@ -343,28 +374,44 @@ prepare_data <- function(forecasts, vintages, settings) {
   selected <- fill_missing_rounds(selected, settings$fill_gaps_up_to)
   selected <- selected[selected$target_end_date < settings$incomplete_weeks[1] |
     selected$target_end_date > settings$incomplete_weeks[2], , drop = FALSE]
-  # Reports as of each round: the base's generation date, or the day before the
-  # reference date. Filled rounds: the Wednesday before the reference date.
+  # Issue cutoff of each round (see the settings above), with its source: "generation_date"
+  # (windowed_seasonal), "delphi_production_schedule" (hub_generation_dates),
+  # "wednesday_deadline" (the hubs' deadline) or "wednesday_no_submission" (filled round).
   generation <- unique(as.data.frame(forecasts[!is.na(forecasts$generation_date),
     c("disease", "reference_date", "generation_date")]))
-  stopifnot(!anyDuplicated(generation[c("disease", "reference_date")]))
-  round_as_of <- function(disease, reference_date) {
-    if (settings$base[[disease]] == "cmu_hub") return(reference_date - 1)
-    as_of <- generation$generation_date[match(paste(disease, reference_date),
-      paste(generation$disease, generation$reference_date))]
-    as.Date(ifelse(is.na(as_of), reference_date - 3, as_of), origin = "1970-01-01")
+  generation$source <- rep("generation_date", nrow(generation))
+  hub <- settings$hub_generation_dates
+  hub <- hub[settings$base[hub$disease] == "cmu_hub", , drop = FALSE]
+  generation <- rbind(generation, data.frame(hub,
+    source = rep("delphi_production_schedule", nrow(hub))))
+  stopifnot(!anyDuplicated(generation[c("disease", "reference_date")]),
+    all(abs(as.numeric(generation$generation_date - (generation$reference_date - 3))) <= 7))
+  round_cutoff <- function(disease, reference_date) {
+    key <- paste(disease, reference_date)
+    known <- match(key, paste(generation$disease, generation$reference_date))
+    known[!key %in% submitted] <- NA
+    date <- reference_date - 3
+    date[!is.na(known)] <- generation$generation_date[known[!is.na(known)]]
+    source <- ifelse(!is.na(known), generation$source[known], ifelse(key %in% submitted,
+      "wednesday_deadline", "wednesday_no_submission"))
+    data.frame(date, source)
   }
   reports <- as.data.frame(vintages[!is.na(vintages$location),
     c("disease", "location", "geo_value", "target_end_date", "version", "value")])
-  # Final counts before the report versions: a first report of the latest value on the
-  # Wednesday after the week, before every stored version.
+  reports$source <- ifelse(reports$version == min(reports$version), "archive_start", "archive")
+  # Final counts before the report versions: a synthetic first report of the latest value
+  # on the Wednesday after the week, before every stored version.
   reports <- reports[order(reports$disease, reports$location, reports$target_end_date,
     reports$version), , drop = FALSE]
   final <- reports[!duplicated(reports[c("disease", "location", "target_end_date")],
     fromLast = TRUE) & reports$target_end_date <= settings$final_data_through, , drop = FALSE]
   final$version <- final$target_end_date + 4
+  final$source <- rep("synthetic_final", nrow(final))
   stopifnot(all(final$version < min(reports$version)))
   reports <- rbind(final, reports)
+  # Scoring truth: the latest report of each week, the archive's last version.
+  settings$truth_version <- max(reports$version)
+  settings$feedback_protocol <- feedback_protocol()
   group_key <- function(x) paste(x$disease, x$location, sep = "_")
   forecast_groups <- split(seq_len(nrow(selected)), group_key(selected))
   report_groups <- split(seq_len(nrow(reports)), group_key(reports))
@@ -424,22 +471,8 @@ prepare_data <- function(forecasts, vintages, settings) {
       peaks[[key]] <- location_peaks
     }
 
-    # One raw report lookup table is shared by this location's horizons.
     # The median identifies the issue/target rows; all quantiles enter base below.
     medians <- f[is.finite(f$truth_finalized) & f$quantile_level == .5, , drop = FALSE]
-    issue_dates <- sort(unique(medians$reference_date))
-    issue_as_of <- round_as_of(disease, issue_dates)
-    target_dates <- sort(unique(medians$target_end_date))
-    available <- matrix(NA_real_, length(issue_dates), length(target_dates))
-    report_targets <- split(seq_len(nrow(r)), as.character(r$target_end_date))
-    for (j in seq_along(target_dates)) {
-      rows <- report_targets[[as.character(target_dates[j])]]
-      if (!length(rows)) next
-      # The latest report with version <= the round's as-of date.
-      latest_index <- findInterval(as.numeric(issue_as_of), as.numeric(r$version[rows]))
-      found <- latest_index > 0L
-      available[found, j] <- r$value[rows[latest_index[found]]]
-    }
     for (horizon in sort(unique(f$horizon))) {
       fh <- f[f$horizon == horizon, , drop = FALSE]
       z <- medians[medians$horizon == horizon, , drop = FALSE]
@@ -461,44 +494,19 @@ prepare_data <- function(forecasts, vintages, settings) {
       base[cbind(row, column)] <- finite$value
       stopifnot(all(is.finite(base)))
 
-      # Each earlier forecast is consumed once. With delay d it waits d weeks after
-      # the first later issue with a finite report, and is consumed at the first
-      # issue from then on, with the report available at that issue (d = 0: the
-      # first report). The saved value never changes when later revisions arrive.
-      issues <- match(reference_date, issue_dates)
-      targets <- match(target_date, target_dates)
+      # The issue cutoff of each row's round, and every stored report of its target week
+      # (including invalid ones) for the feedback schedules and the re-run design.
+      cutoff <- round_cutoff(disease, reference_date)
+      versions <- r[r$target_end_date %in% target_date, , drop = FALSE]
+      versions <- data.frame(row = match(versions$target_end_date, target_date),
+        version = versions$version, value = versions$value, source = versions$source)
+      versions <- versions[order(versions$row, versions$version), , drop = FALSE]
+      rownames(versions) <- NULL
+      # Each earlier forecast is learned once, at the first later round at least d weeks
+      # after its first valid report whose current report is valid, from that report
+      # (feedback_schedule() in R/03_functions.R, with its audit).
       feedback_by_delay <- lapply(setNames(settings$feedback_delays, settings$feedback_delays),
-        function(delay) {
-          observed <- rep(NA_real_, nrow(z))
-          date <- rep(as.Date(NA), nrow(z))
-          for (i in seq_len(nrow(z))) {
-            if (i == nrow(z)) next
-            later <- seq.int(i + 1L, nrow(z))
-            counts <- available[issues[later], targets[i]]
-            first <- which(is.finite(counts))[1L]
-            if (is.na(first)) next
-            due <- reference_date[later[first]] + 7 * delay
-            use <- which(is.finite(counts) & reference_date[later] >= due)[1L]
-            if (is.na(use)) next
-            observed[i] <- counts[use]
-            date[i] <- reference_date[later[use]]
-          }
-          used_at <- match(date, reference_date)
-          list(observed = observed, date = date,
-            by_week = lapply(seq_len(nrow(z)), function(i) which(!is.na(used_at) & used_at == i)))
-        })
-      # Every later change of each row's report (re-run design): the row, the first
-      # issue (row index) whose as-of reports show the new value, and that value.
-      # get_case() in R/03_functions.R keeps the changes after the row is learned.
-      report_revisions <- do.call(rbind, c(list(data.frame(row = integer(),
-        week = integer(), value = numeric())), lapply(seq_len(nrow(z) - 1L), function(i) {
-          later <- seq.int(i + 1L, nrow(z))
-          counts <- available[issues[later], targets[i]]
-          week <- later[is.finite(counts)]
-          counts <- counts[is.finite(counts)]
-          changed <- which(diff(counts) != 0) + 1L
-          if (length(changed)) data.frame(row = i, week = week[changed], value = counts[changed])
-        })))
+        function(delay) feedback_schedule(versions, cutoff$date, delay, reference_date))
 
       season <- season_of(target_date, settings$season_start_month)
       nearest <- if (is.null(location_peaks)) rep(NA_integer_, length(target_date)) else
@@ -506,9 +514,10 @@ prepare_data <- function(forecasts, vintages, settings) {
           1, which.min)
       relative_week <- as.numeric(target_date - location_peaks$peak_date[nearest]) / 7
 
-      # Save the exact pre-first-forecast history, before filtering finalized
-      # truth. Scripts 02/03 can use its median, maximum, or no scaling.
-      scale_as_of <- min(fh$reference_date) - 1
+      # Save the exact pre-first-forecast history (reports by the first round's cutoff),
+      # before filtering finalized truth. Scripts 02/03 can use its median, maximum, or no
+      # scaling.
+      scale_as_of <- round_cutoff(disease, min(fh$reference_date))$date
       history <- r[r$version <= scale_as_of, , drop = FALSE]
       history <- history[!duplicated(history$target_end_date, fromLast = TRUE), , drop = FALSE]
       history <- history[history$target_end_date <= scale_as_of & is.finite(history$value), , drop = FALSE]
@@ -522,10 +531,12 @@ prepare_data <- function(forecasts, vintages, settings) {
         filled = !is.na(z$filled_from), filled_from = z$filled_from,
         # Latest stored report of each target week: scoring target only, never feedback.
         truth_latest = latest$value[match(target_date, latest$target_end_date)],
-        # Online feedback per delay; get_case() in R/03_functions.R selects one.
-        feedback_by_delay = feedback_by_delay, report_revisions = report_revisions,
-        # The base, and the reports' as-of date of each round (also for the feedback).
-        base_name = settings$base[[disease]], as_of = issue_as_of[issues],
+        # Online feedback per delay (get_case() in R/03_functions.R selects one) and
+        # every stored report of each row's target week (row, version, value, source).
+        feedback_by_delay = feedback_by_delay, report_versions = versions,
+        # The base, and the issue cutoff of each round (the as-of date of its reports and
+        # feedback) with its source.
+        base_name = settings$base[[disease]], as_of = cutoff$date, cutoff_source = cutoff$source,
         # Season of the target week and its period: "tuning", "evaluation" or "other".
         season = season, period = period_of(target_date),
         # This location's peaks, and per week the nearest one (hindsight labels only).
@@ -564,6 +575,32 @@ prepare_settings$evaluation_label <- if (design == "seasons")
 peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
 dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
 saveRDS(peak_aligned, "output/data/peak_aligned.rds")
+# The feedback schedules, all locations and horizons: rows with a valid report, consumed
+# rows, rows learned from a synthetic final report, horizon -1 style rows whose first
+# report is known at their own issue (learned at the next round at the earliest), consumed
+# rows learned from a revision instead of their first report, consumed rows that waited
+# at a round after the delay because their current report was invalid, rows consumed a
+# week or more after the delay and their own issue (missing rounds, invalid reports, the
+# off-season), and rows with a valid report never consumed (the last rounds; reports
+# invalid ever since).
+feedback_rows <- feedback_audit(peak_aligned)
+cat("\nFEEDBACK SCHEDULES (", feedback_protocol()$id, ")\n", feedback_protocol()$cutoff, "\n",
+  feedback_protocol()$vintage, "\n", sep = "")
+print(do.call(rbind, lapply(split(feedback_rows, list(feedback_rows$delay,
+  feedback_rows$disease), drop = TRUE), function(a) {
+  consumed <- !is.na(a$consumed_row)
+  data.frame(disease = a$disease[1], delay = a$delay[1], rows = nrow(a),
+    with_valid_report = sum(!is.na(a$first_report)), consumed = sum(consumed),
+    synthetic_final = sum(consumed & a$selected_source %in% "synthetic_final"),
+    known_at_issue = sum(a$first_report <= a$issue_cutoff, na.rm = TRUE),
+    learned_revision = sum(consumed & a$selected_version != a$first_report),
+    waited_invalid = sum(consumed & a$invalid_cutoffs > 0),
+    consumed_a_week_late = sum(consumed &
+      a$consumed_cutoff - pmax(a$maturity, a$issue_cutoff + 1) >= 7),
+    never_consumed = sum(!is.na(a$first_report) & !consumed))
+})), row.names = FALSE)
+cat("Issue cutoffs by source (rows of all cases):\n")
+print(table(unlist(lapply(peak_aligned$cases, `[[`, "cutoff_source"))))
 
 
 # 6. MISSING DATA: ALL DATES ----------------------------------------------------

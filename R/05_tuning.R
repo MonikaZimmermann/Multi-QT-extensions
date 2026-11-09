@@ -22,7 +22,8 @@ tuning_score <- c(log1p = "log", identity = "natural")
 criterion_of <- function(transform) ifelse(tuning_score[transform] == "log", "log_loss", "loss")
 transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses settings$transform.
 # Feedback designs, each tuned separately (04 compares them): the delay in weeks after the
-# first report, and whether later revisions of a learned report are learned (re-run).
+# first report, after which each forecast is learned once from its report current then, or
+# the weekly re-run on the reports known then (feedback_protocol() in R/03_functions.R).
 tuning_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
 # One grid per tuned setting (tuned_setting in R/03_functions.R, plus the soft switch's
 # threshold, width and signal weights); multiples of S0 except H, lambda, the switch
@@ -139,6 +140,9 @@ for (disease in diseases) for (transform in transforms) for (f in seq_len(nrow(t
 }
 all_scores <- do.call(rbind, all_scores)
 rownames(all_scores) <- NULL
+# The feedback protocol (R/03_functions.R): tuned_parameters() uses no settings tuned under
+# another one.
+all_scores$feedback_protocol <- rep(feedback_protocol()$id, nrow(all_scores))
 write.csv(all_scores, file.path(result_dir, paste0("tuning_scores_", design, ".csv")),
   row.names = FALSE)
 
@@ -160,6 +164,7 @@ tuned$on_grid_edge <- mapply(function(setting, value) value %in% range(grids[[se
 tuned <- tuned[order(tuned$disease, tuned$transform, tuned$feedback_delay,
   tuned$feedback_revisions, match(tuned$method, method_names)), ]
 rownames(tuned) <- NULL
+tuned$feedback_protocol <- rep(feedback_protocol()$id, nrow(tuned))
 write.csv(tuned, file.path(result_dir, paste0("tuned_settings_", design, ".csv")),
   row.names = FALSE)
 print(tuned[c(groups, "method", "setting", "value", "on_grid_edge",
@@ -215,7 +220,8 @@ for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tunin
     "chosen value"), lty = c(1, 2, NA),
     pch = c(NA, NA, 1), bty = "n", ncol = 3)
   mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
-    feedback$revisions), "| tuning period", prepared$settings$tuning_label, "| horizons",
+    feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
+    prepared$settings$tuning_label, "| horizons",
     paste(range(tuning_horizons), collapse = " to "), "| all locations"),
     side = 3, outer = TRUE, line = 1.2, font = 2)
   mtext(paste("Mean pinball loss relative to the original forecasts (mean over locations",
