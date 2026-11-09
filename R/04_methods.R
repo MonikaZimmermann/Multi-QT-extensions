@@ -6,15 +6,21 @@ source("R/03_functions.R")
 
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 disease_name <- "covid"                    # "covid" or "flu"
-horizon_id <- 2                            # -1, 0, 1, 2 or 3
+horizon_id <- 2                            # -1, 0, 1, 2 or 3: forecast and weight plots.
 settings <- multiqt_settings()             # Locations, tracker, experts and windows (R/03_functions.R).
 transform <- settings$transform
-# The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
-# on the tuning season by R/05_tuning.R for this disease and tracker (tuned_parameters()).
-params <- tuned_parameters(disease_name, transform)
+# Feedback designs of the trade-off pages (all horizons): the delay in weeks after the first
+# report, and the weekly re-run on the reports known then (get_case() in R/03_functions.R).
+tradeoff_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
+cores <- max(1L, parallel::detectCores() - 2L)
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- readRDS("output/data/peak_aligned.rds")
+# The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
+# on the tuning period by R/05_tuning.R for this disease, tracker, design and feedback.
+tuned_for <- function(delay, revisions) tuned_parameters(disease_name, transform,
+  design = prepared$settings$design, feedback_delay = delay, revisions = revisions)
+params <- tuned_for(settings$feedback_delay, settings$feedback_revisions)
 seasons <- c("all", prepared$settings$evaluation_seasons)   # Scored: each season and all.
 result_dir <- "output/results/peak_reasoning"
 figure_dir <- "output/pdf"
@@ -26,18 +32,19 @@ par_of <- function(method, name) method_parameter(params, method, name)
 
 # 2. RUN EACH LOCATION INDEPENDENTLY --------------------------------
 # apply_methods() (R/03_functions.R) issues every method's forecasts from the online
-# feedback only. Peaks are the largest latest-reported count of each (half) season;
+# feedback only. Peaks are local maxima of the latest-reported counts (R/01);
 # only the target oracle uses that hindsight date to choose forecasts. Alignment
 # changes evaluation coordinates, never when feedback becomes available. Every
 # location starts fresh: offsets, expert weights, lambda and loss history.
-run_methods <- function(case) {
-  run <- apply_methods(case, settings, params)
+# issue_weeks: the weeks a re-run case re-runs (apply_methods(); default all).
+run_methods <- function(case, run_params = params, issue_weeks = NULL) {
+  run <- apply_methods(case, settings, run_params, weeks = issue_weeks)
   predictions <- run$predictions
 
   # SCORE AGAINST THE CHOSEN TARGET -------------------------------------
   # The online updates saw only the feedback released so far: the report
-  # available feedback_delay weeks after the first report. Scores use
-  # score_truth(): the latest vintage by default.
+  # available feedback_delay weeks after the first report (re-run: as known at each
+  # issue week). Scores use score_truth(): the latest vintage by default.
   # Counts are already scaled: do not divide quantile loss a second time. The log-scale
   # loss (score_quantiles(score_scale = "log")) needs counts. Windows lie in the evaluation
   # seasons: each season, and "all" of them together (the default of the plots).
@@ -46,61 +53,74 @@ run_methods <- function(case) {
   weekly <- lapply(predictions, score_quantiles, truth = truth, alpha = case$alpha)
   weekly_log <- lapply(predictions, function(q) score_quantiles(q * count_scale,
     truth * count_scale, case$alpha, score_scale = "log"))
+  # A method whose issued forecasts equal an earlier method's is that method's duplicate
+  # here, e.g. the first restart copy equals Fixed MultiQT when the warmup is replayed
+  # and restart_multiplier = fixed_multiplier.
+  methods <- names(predictions)
+  duplicate_of <- character()
+  for (i in seq_along(methods)[-1]) {
+    twin <- Find(function(j) identical(unname(predictions[[methods[i]]]),
+      unname(predictions[[methods[j]]])), seq_len(i - 1L))
+    if (!is.null(twin)) duplicate_of[methods[i]] <- methods[twin]
+  }
   scores <- scores_by_level <- list()
   for (season in seasons) for (phase in phases) {
     weeks <- which(is.finite(truth) & phase_weeks(case, phase, settings$weeks_before_peak,
       settings$weeks_after_peak) & (season == "all" | case$season == season))
-    for (method in names(predictions)) {
+    for (method in methods) {
       s <- summarize_scores(weekly[[method]], case$alpha, weeks)
       key <- paste(method, season, phase)
       scores[[key]] <- data.frame(method, season, phase, n_weeks = s$n_weeks,
         quantile_loss = s$quantile_loss,
         log_quantile_loss = summarize_scores(weekly_log[[method]], case$alpha, weeks)$quantile_loss,
-        coverage_error = s$coverage_error)
+        coverage_error = s$coverage_error, duplicate_of = unname(duplicate_of[method]))
       if (season == "all") scores_by_level[[key]] <- data.frame(method, phase,
         n_weeks = s$n_weeks, s$by_level)
     }
   }
   id <- data.frame(disease = case$disease, location = case$location,
-    location_name = case$location_name, horizon = case$horizon)
-  c(run, list(truth = truth, weekly = weekly,
+    location_name = case$location_name, horizon = case$horizon,
+    feedback_delay = case$feedback_delay, feedback_revisions = case$feedback_revised)
+  c(run, list(truth = truth, weekly = weekly, duplicate_of = duplicate_of,
     scores = data.frame(id, do.call(rbind, scores), row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL)))
 }
 runs <- list()
 for (location in settings$location_ids) {
-  case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay)
+  case <- get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay,
+    settings$feedback_revisions)
   check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak,
     score_truth(case, settings$score_target, settings$score_filled))
   message("Methods: ", disease_name, " | ", location, " | horizon ", horizon_id)
   runs[[location]] <- run_methods(case)
 }
-# A method whose issued forecasts equal an earlier method's at a location is that
-# method's duplicate there, e.g. the first restart copy equals Fixed MultiQT when
-# the warmup is replayed and restart_multiplier = fixed_multiplier.
-for (location in names(runs)) {
-  p <- runs[[location]]$predictions
-  methods <- names(p)
-  runs[[location]]$duplicate_of <- unlist(lapply(seq_along(methods)[-1], function(i) {
-    twin <- Find(function(j) identical(unname(p[[methods[i]]]), unname(p[[methods[j]]])),
-      seq_len(i - 1L))
-    if (is.null(twin)) NULL else setNames(methods[twin], methods[i])
-  }))
-}
 saveRDS(runs, file.path(result_dir, "issued_forecasts.rds"))
-summary_scores <- do.call(rbind, lapply(runs, `[[`, "scores"))
-rownames(summary_scores) <- NULL
-write_result(summary_scores, "summary_scores.csv")
-# Scores of every prepared location of the disease and horizon, for the first row of the
-# trade-off page; only the scores are kept for locations without their own plots.
+# Scores of every prepared location, horizon and feedback design for the trade-off pages
+# (section 9), in parallel; only the scores are kept. Each design uses the settings tuned
+# with it; a re-run re-runs only the evaluation weeks. The runs above are reused.
 all_locations <- unique(unlist(lapply(prepared$cases, function(case)
-  if (case$disease == disease_name && case$horizon == horizon_id) case$location)))
-all_scores <- do.call(rbind, lapply(all_locations, function(location) {
-  if (location %in% names(runs)) return(runs[[location]]$scores)
-  message("Scores: ", disease_name, " | ", location, " | horizon ", horizon_id)
-  run_methods(get_case(prepared, disease_name, location, horizon_id, settings$feedback_delay))$scores
-}))
+  if (case$disease == disease_name) case$location)))
+tradeoff_params <- Map(tuned_for, tradeoff_feedback$delay, tradeoff_feedback$revisions)
+tradeoff_cases <- expand.grid(location = all_locations, horizon = settings$horizons,
+  feedback = seq_len(nrow(tradeoff_feedback)), stringsAsFactors = FALSE)
+message("Trade-off scores: ", disease_name, " | ", length(all_locations), " locations x ",
+  length(settings$horizons), " horizons x ", nrow(tradeoff_feedback), " feedback designs")
+all_scores <- parallel::mclapply(seq_len(nrow(tradeoff_cases)), function(i) {
+  location <- tradeoff_cases$location[i]
+  horizon <- tradeoff_cases$horizon[i]
+  k <- tradeoff_cases$feedback[i]
+  delay <- tradeoff_feedback$delay[k]
+  revisions <- tradeoff_feedback$revisions[k]
+  if (location %in% names(runs) && horizon == horizon_id && delay == settings$feedback_delay &&
+    revisions == settings$feedback_revisions) return(runs[[location]]$scores)
+  case <- get_case(prepared, disease_name, location, horizon, delay, revisions)
+  run_methods(case, tradeoff_params[[k]], which(case$period == "evaluation"))$scores
+}, mc.cores = cores)
+failed <- vapply(all_scores, inherits, logical(1), "try-error")
+if (any(failed)) stop(all_scores[[which(failed)[1]]])
+all_scores <- do.call(rbind, all_scores)
 rownames(all_scores) <- NULL
+write_result(all_scores[all_scores$location %in% settings$location_ids, ], "summary_scores.csv")
 write_result(all_scores, "summary_scores_all_locations.csv")
 write_result(do.call(rbind, lapply(runs, `[[`, "scores_by_level")), "summary_scores_by_level.csv")
 write_result(do.call(rbind, lapply(runs, function(run) data.frame(location = run$case$location,
@@ -118,6 +138,32 @@ write_result(do.call(rbind, lapply(runs, function(run)
   data.frame(location = rep(run$case$location, nrow(run$restart_experts$experts)),
     run$restart_experts$experts, birth_week = run$restart_experts$birth_week))),
   "restart_experts.csv")
+# The context and both expert distributions are saved at issuance, alongside the
+# actual mixed weights. The gate describes declining context, not a peak probability.
+switch_runs <- Filter(function(run) !is.null(run$soft_switch), runs)
+if (length(switch_runs)) {
+  write_result(do.call(rbind, lapply(switch_runs, function(run) data.frame(
+    disease = run$case$disease, location = run$case$location,
+    location_name = run$case$location_name, horizon = run$case$horizon,
+    target_date = run$case$target_date, run$soft_switch$gate,
+    lambda_baseline = run$soft_switch$regime_lambda[, "baseline"],
+    lambda_declining = run$soft_switch$regime_lambda[, "declining"],
+    # A gate-weighted summary of the two learning rates, not a third update rate.
+    lambda_average = as.numeric(run$lambda$diverse_soft_switch)))), "soft_switch_gate.csv")
+  write_result(do.call(rbind, lapply(switch_runs, function(run) {
+    regimes <- run$soft_switch$regime_weights
+    weights <- list(baseline = regimes[, , "baseline"],
+      declining = regimes[, , "declining"], issued = run$weights$diverse_soft_switch[, , 1])
+    do.call(rbind, lapply(names(weights), function(context) {
+      values <- weights[[context]]
+      data.frame(disease = run$case$disease, location = run$case$location,
+        location_name = run$case$location_name, horizon = run$case$horizon,
+        reference_date = rep(run$case$reference_date, ncol(values)),
+        target_date = rep(run$case$target_date, ncol(values)), context,
+        expert = rep(colnames(values), each = nrow(values)), weight = as.vector(values))
+    }))
+  })), "soft_switch_weights.csv")
+}
 
 # 7. PLOT SETTINGS ---------------------------------------------------
 # Labels show each method's own value of its tuned setting (tuned_setting in R/03).
@@ -157,6 +203,8 @@ labels <- c(original = "Original",
     "H=", par_of("diverse_shared", "H"), ")"),
   diverse_shared_common = paste0("Diverse experts: learned + sharing, common weights (",
     slow("diverse_shared_common"), ")"),
+  diverse_soft_switch = paste0("Diverse experts: soft switching (strength=",
+    value("diverse_soft_switch"), ")"),
   studentized = paste0("Studentized median (", residual_label, ", ", params$median_start,
     " start, ", eta("studentized"), ")"),
   studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",
@@ -177,10 +225,12 @@ colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
   restart_grid = "#882255", restart_uniform_outer = "#56B4E9",
   restart_weighted_outer = "#D55E00", restart_grid_outer = "#CC79A7",
   diverse_uniform = "#E69F00", diverse_shared = "#009E73", diverse_shared_common = "#009E73",
+  diverse_soft_switch = "#7B3294",
   studentized = "#D55E00", studentized_base = "#009E73", median_constant = "#CC79A7",
   studentized_full = "#D55E00", studentized_levels = "#009E73", studentized_level_rms = "#CC79A7")
 # Common weights across quantile levels: dashed lines and triangles.
 common <- setNames(grepl("_common", names(labels)), names(labels))
+common["diverse_soft_switch"] <- TRUE
 line_types <- ifelse(common, 2, 1)
 point_shapes <- ifelse(common, 17, 16)
 method_groups <- list(
@@ -191,7 +241,7 @@ method_groups <- list(
     "restart_weighted", "restart_grid", "restart_uniform_outer", "restart_weighted_outer",
     "restart_grid_outer"),
   "Diverse experts" = c("original", "shared", "shared_common", "diverse_uniform",
-    "diverse_shared", "diverse_shared_common"),
+    "diverse_shared", "diverse_shared_common", "diverse_soft_switch"),
   "Studentized median" = c("original", "fixed", "studentized", "studentized_base",
     "median_constant"),
   "Studentized full base" = c("original", "fixed", "studentized_full", "studentized_levels",
@@ -199,16 +249,17 @@ method_groups <- list(
 score_units <- count_scale_label(settings$scale_method)
 loss_axis_label <- paste0("Quantile loss (", score_units, ")")
 mean_loss_axis_label <- paste("Mean", tolower(loss_axis_label))
-evaluation_label <- paste(prepared$settings$evaluation_seasons, collapse = " and ")
-window_titles <- c(overall = paste("Seasons", evaluation_label),
+evaluation_label <- prepared$settings$evaluation_label
+window_titles <- c(overall = paste0(toupper(substr(evaluation_label, 1, 1)),
+  substring(evaluation_label, 2)),
   before = paste0("Up to peak (weeks -", settings$weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", settings$weeks_after_peak, ")"))
 plot_title <- function(run = NULL) paste(disease_name, "| horizon", horizon_id, "|",
   if (is.null(run)) "all locations" else
-    paste(run$case$location_name, paste0("(", run$case$location, ")")), "| seasons",
+    paste(run$case$location_name, paste0("(", run$case$location, ")")), "| evaluation:",
   evaluation_label, "|",
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
-  "| feedback delay", settings$feedback_delay, "week(s)")
+  "| feedback", feedback_label(settings$feedback_delay, settings$feedback_revisions))
 # Plots leave out a method whose identical twin is drawn in the same plot.
 shown_methods <- function(run, methods) {
   twins <- run$duplicate_of[names(run$duplicate_of) %in% methods]
@@ -217,7 +268,7 @@ shown_methods <- function(run, methods) {
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 date_ticks <- function(dates) pretty(as.Date(range(dates), origin = "1970-01-01"), n = 6)
-# Background of the time plots: the tuning season shaded, dotted lines at the peaks.
+# Background of the time plots: the tuning period shaded, dotted lines at the peaks.
 mark_time <- function(case, col = "gray60") {
   tuning <- case$target_date[case$period == "tuning"]
   usr <- par("usr")
@@ -271,17 +322,21 @@ for (run in runs) for (group_name in names(method_groups)) {
     pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n", text.width = NA)
   mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 2, font = 2, cex = 1.15)
   mtext(paste("Issued alpha-quantile forecasts and their weekly pinball loss in", score_units,
-    "against the", truth_label, "| Dotted lines: peaks | Gray: tuning season (not scored)"),
+    "against the", truth_label, "| Dotted lines: peaks | Gray: tuning period (not scored)"),
     side = 3, outer = TRUE, line = .5)
 }
 dev.off()
 
 # 9. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
-# One page: one row per location, one column per window, every method in each panel.
+# One page per location, after a first page with all prepared locations. Columns:
+# horizons; rows: the feedback designs of tradeoff_feedback, each with its three windows.
+# Every method in each panel. The loss is scored on the tracker's scale: log(counts + 1)
+# for the log1p tracker, counts per 100k residents for raw counts. Each feedback design
+# uses the settings tuned (R/05_tuning.R) with it.
 # A method is coloured by the first group that lists it: one colour family per group,
 # one shade per method; common-weight and outer variants share their method's shade.
-# CE = mean over levels of |coverage - alpha| over the window's weeks. Axes are
-# shared by the three windows of a location; up to peak includes the peak week.
+# CE = mean over levels of |coverage - alpha| over the window's weeks. Every panel has
+# its own axis ranges (panel_limits()); up to peak includes the peak week.
 # Every method group needs a palette: methods of a group without one are not drawn.
 group_palettes <- c("Single trackers" = "Blues 3", "Rate-grid experts" = "Oranges",
   "Weekly starts: immediate admission" = "Greens 3", "Diverse experts" = "Purples 3",
@@ -307,14 +362,15 @@ tradeoff_shapes <- setNames(ifelse(outer_variant, ifelse(common[tradeoff_methods
 tradeoff_shapes["original"] <- 1
 tradeoff_sizes <- ifelse(tradeoff_methods == "original", 2.2, 1.6)
 names(tradeoff_sizes) <- tradeoff_methods
-# Duplicates (identical forecasts) are not drawn; those hidden at every location
-# also leave the legend, and a footnote names each pair.
-hidden_everywhere <- Reduce(intersect, lapply(runs, function(run)
-  setdiff(tradeoff_methods, shown_methods(run, tradeoff_methods))))
-hidden_pairs <- unique(unlist(lapply(runs, function(run) {
-  hidden <- setdiff(tradeoff_methods, shown_methods(run, tradeoff_methods))
-  if (length(hidden)) paste(labels[hidden], "=", labels[run$duplicate_of[hidden]])
-})))
+tradeoff_scores <- all_scores[all_scores$season == "all" & all_scores$method %in% tradeoff_methods, ]
+# Duplicates (identical forecasts) of a drawn method are not drawn; those hidden in
+# every case also leave the legend, and a footnote names each pair of the location pages.
+tradeoff_scores$hidden <- tradeoff_scores$duplicate_of %in% tradeoff_methods
+hidden_everywhere <- names(which(tapply(tradeoff_scores$hidden, tradeoff_scores$method, all)))
+hidden_rows <- tradeoff_scores[tradeoff_scores$hidden &
+  tradeoff_scores$location %in% settings$location_ids, ]
+hidden_pairs <- unique(paste(labels[hidden_rows$method], "=", labels[hidden_rows$duplicate_of],
+  recycle0 = TRUE))
 # Legend: one column per group, headed by the group name; the two studentized groups
 # share a column, so the legend fits the page width.
 legend_groups <- lapply(setNames(names(method_groups), names(method_groups)), function(group_name)
@@ -330,61 +386,73 @@ legend_entries <- unlist(lapply(legend_columns, function(column)
 legend_method <- legend_entries %in% tradeoff_methods
 legend_header <- legend_entries %in% names(legend_groups)
 
-tradeoff_rows <- length(runs) + 1L          # First row: all prepared locations.
-# One page per loss: per 100k residents (natural scale) and of log(counts + 1).
-draw_tradeoff_page <- function(loss, loss_label) {
-  layout(rbind(matrix(seq_len(3 * tradeoff_rows), tradeoff_rows, 3, byrow = TRUE),
-    3 * tradeoff_rows + 1L), heights = c(rep(1, tradeoff_rows), .9))
-  par(oma = c(7.6, 0, 3, 0), mgp = c(2.4, .7, 0))
-  # First row: every prepared location as a small, light symbol per method (legend shapes),
-  # and the mean over locations as the usual symbol. The axes end at the 99th percentile of
-  # the single locations.
-  cloud <- all_scores[all_scores$season == "all" &
-    all_scores$method %in% setdiff(tradeoff_methods, hidden_everywhere), ]
-  cloud <- cloud[order(cloud$method == "original"), ]
-  xlim <- c(0, 1.05 * max(1e-8, quantile(cloud[[loss]], .99, na.rm = TRUE)))
-  ylim <- c(0, 1.05 * max(.01, quantile(cloud$coverage_error, .99, na.rm = TRUE)))
-  for (phase in phases) {
-    rows <- cloud[cloud$phase == phase, ]
-    means <- aggregate(rows[c(loss, "coverage_error")], rows["method"], mean, na.rm = TRUE)
-    means <- means[order(means$method == "original"), ]
-    par(mar = c(3.8, 4, 3.4, 1))
-    plot(NA, xlim = xlim, ylim = ylim, xlab = loss_label, ylab = "Calibration error",
-      main = "")
-    mtext(paste("All", length(all_locations), "locations |", window_titles[phase]), side = 3,
-      line = 1.6, font = 2, cex = .85)
-    mtext("Small: single locations; large: means; axes to the 99th percentile", side = 3,
-      line = .3, cex = .75)
+# Axis range of one panel: the values, with the loss axis capped at `cap` times the
+# original's loss (reference), so one diverging method does not squeeze the others.
+panel_limits <- function(x, reference = NA, cap = 4) {
+  x <- x[is.finite(x)]
+  if (!length(x)) return(c(0, 1))
+  upper <- if (is.finite(reference) && reference > 0) min(max(x), cap * reference) else max(x)
+  extendrange(c(min(x), upper))
+}
+tradeoff_loss <- if (transform == "log1p") "log_quantile_loss" else "quantile_loss"
+tradeoff_loss_label <- if (transform == "log1p") "Mean quantile loss of log(counts + 1)" else
+  mean_loss_axis_label
+panel_rows <- expand.grid(phase = phases, feedback = seq_len(nrow(tradeoff_feedback)),
+  stringsAsFactors = FALSE)                 # Rows: the windows of each feedback design.
+# Short names for the panel headings: "delay d" or "re-run".
+feedback_names <- with(tradeoff_feedback, ifelse(revisions,
+  ifelse(delay > 0, paste("re-run, delay", delay), "re-run"), paste("delay", delay)))
+panel_height <- 2.6                         # Inches per row of panels.
+legend_height <- 2.6
+tradeoff_title <- function(location = NULL) paste(disease_name, "|",
+  if (is.null(location)) paste("all", length(all_locations), "locations") else
+    paste0(tradeoff_scores$location_name[match(location, tradeoff_scores$location)],
+      " (", location, ")"), "| evaluation:", evaluation_label, "|",
+  if (transform == "log1p") "log1p(counts) updates, loss of log(counts + 1)" else
+    paste("raw-count updates, loss in", score_units))
+# One page; location NULL: all prepared locations. Every panel has its own axis ranges;
+# a loss beyond the axis is drawn at its edge as ">".
+draw_tradeoff_page <- function(location = NULL) {
+  all_page <- is.null(location)
+  page <- tradeoff_scores[if (all_page) !tradeoff_scores$method %in% hidden_everywhere else
+    tradeoff_scores$location == location & !tradeoff_scores$hidden, ]
+  page <- page[order(page$method == "original"), ]   # Original last, on top of the others.
+  n_panels <- nrow(panel_rows) * length(settings$horizons)
+  layout(rbind(matrix(seq_len(n_panels), nrow(panel_rows), byrow = TRUE), n_panels + 1L),
+    heights = c(rep(panel_height, nrow(panel_rows)), legend_height))
+  par(oma = c(9, 3.4, 7.8, 0), mgp = c(2.2, .6, 0))
+  for (r in seq_len(nrow(panel_rows))) for (horizon in settings$horizons) {
+    phase <- panel_rows$phase[r]
+    k <- panel_rows$feedback[r]
+    rows <- page[page$horizon == horizon & page$feedback_delay == tradeoff_feedback$delay[k] &
+      page$feedback_revisions == tradeoff_feedback$revisions[k] & page$phase == phase, ]
+    # All locations: every location as a small, light symbol per method (legend shapes)
+    # and the mean over locations as the usual symbol; the axes span the 1st to 99th
+    # percentile of the single locations and the means.
+    drawn <- if (all_page) aggregate(rows[c(tradeoff_loss, "coverage_error")], rows["method"],
+      mean, na.rm = TRUE) else rows
+    drawn <- drawn[order(drawn$method == "original"), ]
+    spread <- function(x) if (all_page) quantile(x, c(.01, .99), na.rm = TRUE)
+    xlim <- panel_limits(c(spread(rows[[tradeoff_loss]]), drawn[[tradeoff_loss]]),
+      drawn[[tradeoff_loss]][drawn$method == "original"])
+    ylim <- panel_limits(c(spread(rows$coverage_error), drawn$coverage_error))
+    beyond <- is.finite(drawn[[tradeoff_loss]]) & drawn[[tradeoff_loss]] > xlim[2]
+    par(mar = c(3.4, 3.6, 2.9, .8))
+    plot(NA, xlim = xlim, ylim = ylim, xlab = tradeoff_loss_label, ylab = "Calibration error")
+    mtext(window_titles[phase], side = 3, line = 1.4, font = 2, cex = .75)
+    mtext(paste0("Horizon ", horizon, " | ", feedback_names[k], " | ",
+      if (all_page) paste(length(unique(rows$location)), "locations") else
+        paste(rows$n_weeks[1], "weeks"), if (any(beyond)) " | >: beyond 4x the original's"),
+      side = 3, line = .3, cex = .65)
     grid(col = "gray90")
-    points(rows[[loss]], rows$coverage_error, pch = tradeoff_shapes[rows$method],
-      cex = .5 * tradeoff_sizes[rows$method],
+    if (all_page) points(rows[[tradeoff_loss]], rows$coverage_error,
+      pch = tradeoff_shapes[rows$method], cex = .5 * tradeoff_sizes[rows$method],
       col = adjustcolor(tradeoff_colours[rows$method], alpha.f = .35))
-    points(means[[loss]], means$coverage_error, col = tradeoff_colours[means$method],
-      pch = tradeoff_shapes[means$method], cex = tradeoff_sizes[means$method],
-      lwd = ifelse(means$method == "original", 2, 1))
-  }
-  for (run in runs) {
-    scores <- run$scores[run$scores$season == "all" &
-      run$scores$method %in% shown_methods(run, tradeoff_methods), ]
-    # Original last, so it stays visible on top of the other methods.
-    scores <- scores[order(scores$method == "original"), ]
-    xlim <- c(0, 1.1 * max(1e-8, scores[[loss]], na.rm = TRUE))
-    ylim <- c(0, 1.1 * max(.01, scores$coverage_error, na.rm = TRUE))
-    for (phase in phases) {
-      rows <- scores[scores$phase == phase, ]
-      par(mar = c(3.8, 4, 3.4, 1))
-      plot(NA, xlim = xlim, ylim = ylim, xlab = loss_label, ylab = "Calibration error",
-        main = "")
-      mtext(paste(run$case$location_name, "|", window_titles[phase]), side = 3, line = 1.6,
-        font = 2, cex = .85)
-      mtext(paste(rows$n_weeks[1], "weeks"), side = 3, line = .3, cex = .75)
-      grid(col = "gray90")
-      points(rows[[loss]], rows$coverage_error, col = tradeoff_colours[rows$method],
-        pch = tradeoff_shapes[rows$method], cex = tradeoff_sizes[rows$method],
-        lwd = ifelse(rows$method == "original", 2, 1))
-      if (!any(is.finite(rows$coverage_error)))
-        text(mean(xlim), mean(ylim), "No observations inside the peak window", cex = .8)
-    }
+    points(pmin(drawn[[tradeoff_loss]], xlim[2]), drawn$coverage_error,
+      col = tradeoff_colours[drawn$method], pch = ifelse(beyond, 62, tradeoff_shapes[drawn$method]),
+      cex = tradeoff_sizes[drawn$method], lwd = ifelse(drawn$method == "original", 2, 1))
+    if (!any(is.finite(drawn$coverage_error)))
+      text(mean(xlim), mean(ylim), "No observations inside the peak window", cex = .8)
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
@@ -393,35 +461,52 @@ draw_tradeoff_page <- function(loss, loss_label) {
     pch = ifelse(legend_method, tradeoff_shapes[legend_entries], NA),
     pt.cex = ifelse(legend_method, tradeoff_sizes[legend_entries], 1),
     pt.lwd = ifelse(legend_entries == "original", 2, 1),
-    text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = .88,
+    text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = 1.1,
     text.width = NA)                         # Column-wise widths, so every group column fits.
-  mtext(plot_title(), side = 3, outer = TRUE, line = 1, font = 2, cex = 1.05)
-  mtext("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
-    side = 1, outer = TRUE, line = .5, cex = .8)
-  mtext(paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
-    "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
-    side = 1, outer = TRUE, line = 1.7, cex = .8)
-  if (length(hidden_pairs)) mtext(paste("Not drawn (identical forecasts):",
-    paste(hidden_pairs, collapse = "; ")), side = 1, outer = TRUE, line = 2.9, cex = .8)
-  # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
-  # which are the original base (e.g. most of the flu up-to-peak window).
-  mtext(paste0("Studentized median methods: sigma_t = RMS of the last ", params$median_window,
-    " released median residuals, or the base's ", base_width, " interval width / ",
-    round(diff(qnorm(params$median_base_levels)), 3), " (a normal sd)."), side = 1, outer = TRUE,
-    line = 4.1, cex = .8)
-  median_warmup <- range(sapply(runs, function(run) run$sigma$warmup_weeks))
-  if (median_warmup[2] > 0) mtext(paste0("With residuals, the original base is issued in the first ",
-    paste(unique(median_warmup), collapse = "-"), " weeks, until sigma_t exists; these weeks are ",
-    "scored as the base."), side = 1, outer = TRUE, line = 5.3, cex = .8)
-  mtext(paste0("Studentized full base: offsets start at the base; level scales = normal sd of the ",
-    "base's central interval at each level, or the RMS of each level's last ", params$median_window,
-    " released residuals (weighted isotonic projection)."), side = 1, outer = TRUE, line = 6.5,
-    cex = .8)
+  # Feedback blocks: a label in the left margin and a line between blocks; horizons on top.
+  inner_height <- nrow(panel_rows) * panel_height + legend_height
+  block <- length(phases) * panel_height / inner_height
+  for (k in seq_len(nrow(tradeoff_feedback))) mtext(paste("Feedback", feedback_label(
+    tradeoff_feedback$delay[k], tradeoff_feedback$revisions[k])), side = 2, outer = TRUE,
+    line = 1.6, at = 1 - (k - .5) * block, font = 2, cex = 1.2)
+  par(xpd = NA)
+  for (k in seq_len(nrow(tradeoff_feedback))[-1]) segments(grconvertX(0, "nic"),
+    grconvertY(1 - (k - 1) * block, "nic"), grconvertX(1, "nic"),
+    grconvertY(1 - (k - 1) * block, "nic"), col = "gray45", lwd = 1.5)
+  par(xpd = FALSE)
+  for (j in seq_along(settings$horizons)) mtext(paste("Horizon", settings$horizons[j]),
+    side = 3, outer = TRUE, line = .5, at = (j - .5) / length(settings$horizons), font = 2,
+    cex = 1.2)
+  mtext(tradeoff_title(location), side = 3, outer = TRUE, line = 5.9, font = 2, cex = 1.45)
+  mtext(paste("Rows: feedback design (delay d: learn from the report d weeks after the",
+    "first one; re-run: re-run every week on the reports known then) and window; columns:",
+    "horizon."), side = 3, outer = TRUE, line = 3.9, cex = 1.05)
+  if (all_page) mtext(paste("Small: single locations; large: means over locations;",
+    "axes: 1st to 99th percentile of both."), side = 3, outer = TRUE, line = 2.5, cex = 1.05)
+  notes <- c("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
+    paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
+      "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
+    if (length(hidden_pairs)) paste("Not drawn (identical forecasts):",
+      paste(hidden_pairs, collapse = "; ")),
+    paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
+      "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
+      " (all: output/results/tuning)."),
+    # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
+    # which are the original base (e.g. most of the flu up-to-peak window).
+    paste0("Studentized median methods: sigma_t = RMS of the last ", params$median_window,
+      " released median residuals, or the base's ", base_width, " interval width / ",
+      round(diff(qnorm(params$median_base_levels)), 3), " (a normal sd)."),
+    paste("With residuals, the original base is issued until sigma_t exists; these weeks are",
+      "scored as the base."),
+    paste0("Studentized full base: offsets start at the base; level scales = normal sd of the ",
+      "base's central interval at each level, or the RMS of each level's last ",
+      params$median_window, " released residuals (weighted isotonic projection)."))
+  mtext(notes, side = 1, outer = TRUE, line = .6 + 1.3 * (seq_along(notes) - 1), cex = .95)
 }
-cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 15,
-  height = 3.3 * tradeoff_rows + 3, family = "DejaVu Sans")
-draw_tradeoff_page("quantile_loss", mean_loss_axis_label)
-draw_tradeoff_page("log_quantile_loss", "Mean quantile loss of log(counts + 1)")
+cairo_pdf(file.path(figure_dir, "multiqt_peak_reasoning_tradeoff.pdf"), width = 19,
+  height = nrow(panel_rows) * panel_height + legend_height + 2.5, family = "DejaVu Sans")
+draw_tradeoff_page()
+for (location in settings$location_ids) draw_tradeoff_page(location)
 dev.off()
 
 # 10. ISSUED WEIGHTS OVER TIME ---------------------------------------
@@ -438,8 +523,9 @@ weight_pages <- list(
     method = c("diverse_uniform", "diverse_shared"),
     common_method = c("diverse_uniform", "diverse_shared_common"),
     title = c("Equal weights", "Learned + sharing"))))
-plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row) {
-  times <- as.numeric(run$case$target_date)
+plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row,
+                                     dates = run$case$target_date) {
+  times <- as.numeric(dates)
   par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, 1.5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1),
     xaxs = "i", yaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
@@ -456,7 +542,7 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   abline(h = .5, col = adjustcolor("white", .6), lty = 3)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
   axis(2, at = c(0, .5, 1), las = 1, cex.axis = .75)
-  if (last_row) axis.Date(1, at = date_ticks(run$case$target_date), format = "%b %Y", cex.axis = .8)
+  if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
   box(col = "gray70")
 }
 cairo_pdf(file.path(figure_dir, "multiqt_weight_timelines.pdf"), width = 18,
@@ -493,3 +579,56 @@ for (run in runs) for (page in names(weight_pages)) {
     line = 2.8, cex = .8)
 }
 dev.off()
+
+# 11. SOFT SWITCHING: CONTEXT AND COMMON WEIGHTS ---------------------
+# Issue dates align the signal with the information used for that forecast. Each
+# regime learns from delayed own-horizon losses using the context saved at issuance.
+if (length(switch_runs)) {
+  cairo_pdf(file.path(figure_dir, "multiqt_soft_switch_timelines.pdf"), width = 15,
+    height = 11, family = "DejaVu Sans")
+  for (run in switch_runs) {
+    signal <- run$soft_switch$gate
+    regimes <- run$soft_switch$regime_weights
+    dates <- run$case$reference_date
+    experts <- dimnames(regimes)[[2]]
+    fills <- c("gray45", hcl.colors(length(experts) - 1L, "Dark 3"))
+    layout(matrix(1:5, ncol = 1), heights = c(1.1, 1, 1, 1, .45))
+    par(oma = c(4.4, .5, 4.1, .5), mgp = c(2, .4, 0), cex = .9)
+    par(mar = c(.4, 3.7, 2.1, .6))
+    plot(dates, signal$gate, type = "n", xlim = range(dates) + c(-.5, .5) * 7,
+      ylim = c(0, 1.18), xaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
+      ylab = "Context weight", main = "Declining context at issuance")
+    axis(2, at = c(0, .5, 1), las = 1, cex.axis = .8)
+    abline(h = .5, col = "gray70", lty = 3)
+    abline(v = as.numeric(run$case$peaks$peak_date), col = "gray50", lty = 3)
+    score_names <- c("path_score", "nowcast_score", "revision_score")
+    score_colours <- c("#0072B2", "#D55E00", "#009E73")
+    broken <- break_gaps(dates, as.matrix(signal[c(score_names, "gate")]))
+    for (j in seq_along(score_names)) lines(broken$dates, broken[[2]][, j],
+      col = score_colours[j], lwd = 1)
+    lines(broken$dates, broken[[2]][, "gate"], col = colours["diverse_soft_switch"], lwd = 2)
+    points(dates, signal$gate, col = colours["diverse_soft_switch"], pch = 16, cex = .3)
+    legend("topleft", c("Forecast path", "Nowcast change", "Same-target revisions", "Mixed gate"),
+      col = c(score_colours, colours["diverse_soft_switch"]), lty = 1, lwd = c(1, 1, 1, 2),
+      ncol = 4, bty = "n", cex = .85)
+    plot_weight_distribution(run, regimes[, , "baseline"], fills,
+      "Baseline-context expert weights", "Weight", TRUE, FALSE, dates)
+    plot_weight_distribution(run, regimes[, , "declining"], fills,
+      "Declining-context expert weights", "Weight", TRUE, FALSE, dates)
+    plot_weight_distribution(run, run$weights$diverse_soft_switch[, , 1], fills,
+      "Issued mixture: (1 - gate) x baseline + gate x declining", "Weight", TRUE, TRUE, dates)
+    par(mar = c(0, 0, 0, 0))
+    plot.new()
+    legend("center", experts, fill = fills, border = NA, ncol = ceiling(length(experts) / 2),
+      bty = "n", cex = .9)
+    mtext(labels["diverse_soft_switch"], side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
+    mtext(plot_title(run), side = 3, outer = TRUE, line = .8, cex = .9)
+    mtext("Issue date | Common expert weights across quantile levels | Dotted lines: hindsight peaks",
+      side = 1, outer = TRUE, line = .4, cex = .85)
+    mtext("The gate is a context weight, not a peak probability; missing signals contribute a neutral score of 0.5.",
+      side = 1, outer = TRUE, line = 1.6, cex = .8)
+    if (any(run$case$filled)) mtext("Lighter bars: filled forecast rounds.",
+      side = 1, outer = TRUE, line = 2.8, cex = .8)
+  }
+  dev.off()
+}

@@ -8,9 +8,10 @@ source("R/03_functions.R")
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
 season_disease <- "covid"                 # Season forecast plot only: "covid" or "flu".
 season_horizon <- 2                       # Season forecast plot only: -1, 0, 1, 2 or 3.
-# Descriptive CMU path page only: each location's peak in the selected season/half.
+# Descriptive CMU path page only: each location's largest peak in the selected season
+# and half season (winter: October to March, summer: April to September).
 path_season <- c(covid = "2024/25", flu = "2024/25")
-path_half <- c(covid = "summer", flu = "season")
+path_half <- c(covid = "summer", flu = "winter")
 path_weeks <- -5:5                        # Reference weeks relative to that location's peak.
 diseases <- c("covid", "flu")
 expert_multipliers <- settings$expert_multipliers
@@ -35,7 +36,8 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # 2. RUN MULTIQT ON THE RATE GRID, ONE LOCATION AT A TIME ----------------
 # 01 supplies full issue histories and the online feedback in raw counts.
 # MultiQT tracks log1p(counts) or counts and learns only from the feedback released
-# so far: the report available feedback_delay weeks after the first report.
+# so far: the report available feedback_delay weeks after the first report. (The
+# re-run design, settings$feedback_revisions, is compared in R/04_methods.R.)
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
 # (per 100k residents by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
@@ -141,8 +143,7 @@ settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
   score_units)
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
-  overall = paste0("Overall (seasons ", paste(prepared$settings$evaluation_seasons,
-    collapse = " and "), ")"))
+  overall = paste0("Overall (", prepared$settings$evaluation_label, ")"))
 phase_colours <- c(before = "#D55E00", after = "#0072B2", overall = "gray25")
 phase_pch <- c(before = 17, after = 16, overall = 15)   # m = 0: open version of the symbol.
 phase_open_pch <- c(before = 2, after = 1, overall = 0)
@@ -175,12 +176,13 @@ plot_forecast_path_panel <- function(disease, location) {
   case <- get_case(prepared, disease, location, 0, settings$feedback_delay)
   peak <- case$peaks[case$peaks$season == path_season[disease] &
     case$peaks$half == path_half[disease], ]
-  if (nrow(peak) != 1L) {
+  if (!nrow(peak)) {
     plot.new()
     title(main = paste(case$location_name, "|", toupper(disease)))
-    text(.5, .5, paste("No unique peak for", path_season[disease], path_half[disease]))
+    text(.5, .5, paste("No peak in", path_season[disease], path_half[disease]))
     return(invisible())
   }
+  peak <- peak[which.max(peak$peak_value), ]
   reference_dates <- peak$peak_date + 7 * path_weeks
   dates <- seq(min(reference_dates) - 7, max(reference_dates) + 21, by = "week")
   forecasts <- path_forecasts[path_forecasts$disease == disease &
@@ -207,8 +209,7 @@ plot_forecast_path_panel <- function(disease, location) {
       lwd = 1.5, col = path_colours[i])
   }
   lines(dates, observed, col = "gray20", lwd = 1.8, lty = 2)
-  mtext(paste0("Peak: ", format(peak$peak_date, "%d %b %Y"),
-    if (peak$boundary_peak) " (window boundary)" else "", " | ",
+  mtext(paste0("Peak: ", format(peak$peak_date, "%d %b %Y"), " | ",
     length(unique(forecasts$reference_date)), " submitted reference weeks"),
     side = 3, line = .15, cex = .67)
 }
@@ -408,7 +409,7 @@ colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(disp
   diff(range(log10(display_multipliers[-1]))))
 multiplier_colours <- c("orange", hcl.colors(320, "Viridis")[colour_index])
 # Both weekly diagnostics use the same quantile styles and peak marker.
-# Background of the time plots: the tuning season shaded, dotted lines at the peaks.
+# Background of the time plots: the tuning period shaded, dotted lines at the peaks.
 mark_time <- function(case) {
   tuning <- case$target_date[case$period == "tuning"]
   usr <- par("usr")
@@ -479,8 +480,8 @@ for (location in settings$location_ids) {
     "| horizon", season_horizon, "|", min(dates), "to", max(dates)),
     side = 3, outer = TRUE, line = 1, cex = 1)
   mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
-    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: largest count of ",
-    "each (half) season | Gray: tuning season (not scored)"),
+    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: peaks (local ",
+    "maxima of the latest counts) | Gray: tuning period (not scored)"),
     side = 3, outer = TRUE, line = -0.3, cex = 0.8)
   mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
     line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
