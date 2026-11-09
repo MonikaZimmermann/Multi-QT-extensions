@@ -34,7 +34,9 @@
 \begin{document}
 \maketitle
 
-\section{Studentized score}
+\section{Methodological notes}
+
+\subsection{Studentized score}
 Writing the score as a signed residual gives the usual additive MultiQT
 correction. Studentizing that residual gives multiplicatively scaled offsets,
 or, equivalently, offsets tracked in scaled coordinates. A changing scale
@@ -49,7 +51,7 @@ it remains a nonempty closed convex polyhedron with a unique Euclidean
 projection, computable through weighted isotonic regression in forecast
 coordinates. The gradient steps use a weighted quantile loss. The coverage criterion and calibration target are unchanged (strictly increasing invertible transformation); calibration is not guaranteed.
 
-\subsection{Standard MultiQT}
+\subsubsection{Standard MultiQT}
 For standard MultiQT~\cite{multiqt}, let
 $\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$ and let
 $b_t=(b_t^\alpha)_{\alpha\in\A}$ be the base quantile forecasts available
@@ -72,7 +74,7 @@ The original MultiQT procedure is
 Here $\tilde\theta_t$ is the hidden offset and $\theta_t$ is the played
 (projected) offset. Both have outcome units. 
 
-\subsection{Score-threshold tracking}
+\subsubsection{Score-threshold tracking}
 To make the connection explicit, first consider the scalar score-threshold
 update of Angelopoulos et al.~\cite{pid}. We then recover the MultiQT
 update using the signed residual as the score.
@@ -124,7 +126,7 @@ Thus $c_{t+1}=c_t-\eta g_\alpha(c_t;r_t)$ is
 \eqref{eq:pid-update}. The score's distance from the threshold affects the
 loss; the side of the threshold determines the update direction and size.
 
-\subsection{MultiQT in residual coordinates}
+\subsubsection{MultiQT in residual coordinates}
 For each level, define the score and its observed value by
 \begin{equation}
  S_t^{\std,\alpha}(y)=y-b_t^\alpha,
@@ -171,7 +173,7 @@ tracking. For multiple levels, MultiQT uses a joint projection: evaluate
 $g_\alpha$ at the played $\theta_t^\alpha$, but apply the increment to the
 hidden $\tilde\theta_t^\alpha$.
 
-\subsection{Studentized residuals and their update}
+\subsubsection{Studentized residuals and their update}
 Now replace the residual score by the studentized residual.
 
 Choose finite scales $\sigma_t^\alpha>0$ from information available at
@@ -241,7 +243,7 @@ Retaining MultiQT's lazy update therefore gives
 \end{equation}
 Initialize $\tilde u_1=0$. The score is compared with the \emph{played}
 threshold; the increment is applied to the \emph{hidden} threshold.
-The next subsection specifies the projection that produces $u_t$.
+The projection that produces $u_t$ is specified next.
 
 \begin{center}
 \renewcommand{\arraystretch}{1.25}
@@ -266,7 +268,7 @@ issued forecasts change. An unnormalized outcome-unit loss would instead
 have gradient $\sigma_t^\alpha(\cov_t^{\stu,\alpha}-\alpha)$ with respect
 to $u^\alpha$, and would define a different update.
 
-\subsection{Ordering constraints and projection}
+\subsubsection{Ordering constraints and projection}
 The constraint always concerns the outcome forecasts:
 $q_t^{\alpha_1}\le\cdots\le q_t^{\alpha_m}$.
 For the ordinary residual score, this requires
@@ -330,7 +332,7 @@ The ordinary residual case has forecast-space metric $I$;
 the studentized case has metric $A_t^{-2}$. These weights follow from the
 chosen Euclidean geometry of the tracked score coordinates.
 
-\subsection{Common and constant scales}
+\subsubsection{Common and constant scales}
 For $S_t^\alpha(y)=(y-b_t^\alpha)/\sigma_t$, we have $A_t=\sigma_t I$.
 Positive scalar multiplication preserves $\K$:
 \begin{equation}
@@ -350,13 +352,94 @@ is also equivalent after converting the state and learning rate:
  \label{eq:constant-common-scale}
 \end{equation}
 
-\section{Questions and ideas}
+\subsection{Questions and ideas}
 \begin{itemize}
   \item What other scores would be reasonable to consider, i.e. what property of the base forecast do I need to recalibrate? Instead of asking for 1d PIT calibration, could I ask for 1d hdr-calibration? With studentized scores, or in general strictly increasing and invertible scores, the coverage indicator and calibration target do not change
 
 \end{itemize}
 
-\begin{thebibliography}{2}
+\clearpage
+\section{Coding Updates}
+\subsection{9 November 2026}
+
+\subsubsection{Feedback handling: Stateful, re-run and delay}
+\label{sec:feedback-designs}
+\label{sec:delayed-feedback}
+The feedback design is independent of the recalibration method. For a fixed
+disease, location and horizon, $s,t$ index forecast reference weeks, ordered by
+\texttt{reference\_date} (Saturday); $q_s$ denotes the forecast for reference
+week $s$, with quantiles $q_s^\alpha$. Both report and forecast tables identify the target
+week by \texttt{target\_end\_date}. Reports additionally have a publication
+date, \texttt{version}: $y_s^{[v]}$ is the reported \texttt{value} for the
+target week of $q_s$ from the latest \texttt{version} on or before $v$. For forecast $q_t$, only
+reports available by the cutoff $\iota_t$ (\texttt{reference\_date} minus three days, the Wednesday of the reference week, with few exceptions) influence $q_t$. A valid report is finite and nonnegative;
+$d\ge0$ is extra delay in calendar weeks.
+
+
+
+
+\paragraph{Stateful (learn once).}
+Let $\nu_s$ be the \texttt{version} of the first valid report for the target
+week of $q_s$. Wait $d$ calendar weeks from that date. At the next forecast
+cutoff $\iota_t$ with $t>s$, look up the latest report. If it is invalid,
+wait for a later forecast; never substitute an older report.
+\begin{align}
+ m_s^{(d)}&=\nu_s+7d\text{ days},
+ \label{eq:feedback-maturity}\\
+ \tau_d(s)&=\min\{t>s:\iota_t\ge m_s^{(d)},\ y_s^{[\iota_t]}\text{ is valid}\},\qquad
+ \mathcal R_t^{(d)}=\{s:\tau_d(s)=t\}.
+ \label{eq:feedback-release-set}
+\end{align}
+Here $\tau_d(s)$ is the reference-week index $t$ when feedback for $q_s$ is
+used. The set $\mathcal R_t^{(d)}$ contains the earlier indices $s$ whose
+feedback is used before issuing $q_t$; an empty set means no update.
+For $s\in\mathcal R_t^{(d)}$, the update uses $y_s^{[\iota_t]}$, the latest
+report available by the cutoff of $q_t$. If a missing forecast postpones
+the update so that $\iota_t>m_s^{(d)}$, select the report at $\iota_t$, rather
+than fixing it at $m_s^{(d)}$. Feedback for each $q_s$ is used at most once;
+revisions after that update are ignored.
+
+For plain MultiQT on counts, start at $\tilde\theta_0=0$; when learning is
+active, update using previously issued $q_s^{\alpha}$, then issue $q_t$:
+\begin{align}
+ \tilde\theta_t^\alpha
+ &=\tilde\theta_{t-1}^\alpha
+ -\eta_t\sum_{s\in\mathcal R_t^{(d)}}
+ \bigl(\ind\{y_s^{[\iota_t]}\le q_s^{\alpha}\}-\alpha\bigr),
+ \label{eq:delayed-standard-update}\\
+ \theta_t&=\Pi_{\K-b_t}(\tilde\theta_t),\qquad q_t=b_t+\theta_t.
+ \label{eq:delayed-standard-issue}
+\end{align}
+Sum with $\eta_t$; keep the hidden state unprojected. By default, estimate
+$S_0$ in hindsight and run plain MultiQT from the start. Log tracking uses $\log(1+y)$.
+
+\paragraph{Weekly re-run.}
+At each reference-week index $t$, re-run MultiQT from the start using the
+latest reports $y_s^{[\iota_t]}$. Only the new forecast $q_t^{[t]}$ is issued;
+previously issued forecasts remain unchanged. Earlier forecasts $q_s^{[t]}$
+are reconstructed internally. Starting from $\tilde\theta_0^{[t]}=0$, replay
+$j=1,\ldots,t$ with feedback only at $j=\tau_d(s)$, retaining delay $d$;
+omit invalid reports:
+\begin{align}
+ \tilde\theta_j^{\alpha,[t]}
+ &=\tilde\theta_{j-1}^{\alpha,[t]}
+ -\eta_j^{[t]}\sum_{\substack{s\in\mathcal R_j^{(d)}\\
+                             y_s^{[\iota_t]}\text{ valid}}}
+ \bigl(\ind\{y_s^{[\iota_t]}\le q_s^{\alpha,[t]}\}-\alpha\bigr),
+ \label{eq:rerun-standard-update}\\
+ \theta_j^{[t]}&=\Pi_{\K-b_j}(\tilde\theta_j^{[t]}),\qquad
+ q_j^{[t]}=b_j+\theta_j^{[t]}.
+ \label{eq:rerun-standard-issue}
+\end{align}
+The stateful $S_0$ and expert loss-normalization scale, estimated from the
+first 20 released feedback items in hindsight, stay fixed across re-runs.
+
+Studentized methods use $\tilde u$, $q^\stu$ and projection \eqref{eq:student-projection},
+issuing the base until their scale is available; re-runs reconstruct the scale
+history. Evaluation uses a common latest-report truth, separate from learning.
+
+\clearpage
+\begin{thebibliography}{3}
 \bibitem{multiqt}
 Tiffany Ding, Isaac Gibbs, and Ryan J. Tibshirani.
 \emph{Calibrated Multi-Level Quantile Forecasting}.
@@ -368,5 +451,12 @@ Anastasios N. Angelopoulos, Emmanuel J. Cand\`es, and Ryan J. Tibshirani.
 \emph{Conformal PID Control for Time Series Prediction}.
 Advances in Neural Information Processing Systems 36, 2023.
 \href{https://proceedings.neurips.cc/paper_files/paper/2023/file/47f2fad8c1111d07f83c91be7870f8db-Paper-Conference.pdf}{NeurIPS paper}.
+
+\bibitem{delphi-calibration}
+CMU Delphi.
+\emph{Delphi hub forecasting: calibration experiments and tracker code}.
+Pinned source revision \texttt{9abebcfb}, inspected 9 November 2026.
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/calibration_experiments/e09_lr_delay.Rmd}{E09: constant learning rate and revision delay};
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/R/calibration/qt.R}{tracker implementation}.
 \end{thebibliography}
 \end{document}
