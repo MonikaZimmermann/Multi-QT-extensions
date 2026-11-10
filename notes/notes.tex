@@ -34,6 +34,105 @@
 \begin{document}
 \maketitle
 
+\section*{Notation}
+\label{sec:notation}
+ Unless stated otherwise, fix one disease, location and forecast
+horizon; their indices are suppressed.
+
+\paragraph{Forecasts and indices.}
+The indices $s,t$ order forecast reference weeks
+(\texttt{reference\_date}, Saturday); $j$ also denotes a historical step
+inside a re-run. The outcome $y_t$ belongs to the target week of forecast
+$q_t$, identified by \texttt{target\_end\_date}, rather than necessarily
+to its reference week. The quantile levels are
+$\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$, with $m=|\A|$.
+Write $b_t=(b_t^\alpha)_{\alpha\in\A}$ for the base forecasts and
+$q_t=(q_t^\alpha)_{\alpha\in\A}$ for the recalibrated forecasts.
+Unless a transformation is shown explicitly, forecasts and outcomes are
+in outcome units (hospital counts in the code).
+The methodological recursions first issue $q_t$, then observe $y_t$ and
+update for the next step. The coding section specifies when delayed or
+revised reports become available instead.
+
+\paragraph{Loss and projections.}
+The indicator is $\ind\{\cdot\}$ and $x_+=\max(x,0)$. Pinball loss takes
+the prediction as its first argument and the observation as its second:
+\begin{equation}
+ \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
+ \label{eq:pinball}
+\end{equation}
+The ordered-quantile cone and Euclidean projection are
+\[
+ \K=\{q\in\R^m:q^{\alpha_1}\le\cdots\le q^{\alpha_m}\},
+ \qquad
+ \Pi_C(x)=\argmin_{z\in C}\norm{z-x}^2,
+\]
+where $C$ is nonempty, closed and convex and $\norm{\cdot}$ is the
+Euclidean norm. Assume $b_t\in\K$. For a positive-definite matrix $W$,
+write
+\[
+ \Pi_\K^W(v)=\argmin_{q\in\K}(q-v)^\top W(q-v).
+\]
+$Q_p$ denotes an empirical $p$-quantile; $I$ denotes the identity matrix.
+
+\paragraph{Scores and tracker states.}
+$S_t(y)$ is a score function, $r_t=S_t(y_t)$ its observed value, and
+$c_t$ its issued threshold in score units. The target coverage is $\alpha$, with target
+miscoverage $\delta=1-\alpha$; empirical coverage at a step is
+$\cov_t^\alpha=\ind\{y_t\le q_t^\alpha\}$.
+The superscripts $\std$ and $\stu$ distinguish standard and studentized
+methods. A tilde marks hidden, accumulated state; the untilded state is
+played after projection. Thus $\tilde\theta_t,\theta_t$ are offsets in
+outcome units, while $\tilde u_t,u_t$ are thresholds in studentized units.
+The finite, positive scales are $\sigma_t^\alpha$, collected in
+\[
+ A_t=\diag(\sigma_t^{\alpha_1},\ldots,\sigma_t^{\alpha_m});
+\]
+$\sigma_t$ denotes a scale common to all levels and $\sigma$ a constant
+scale. The tracker step size is $\eta$ (or $\eta_t$ when varying), and
+$\kappa$ is a rate multiplier. The selected loss subgradient is written
+$g_\alpha$; its form is derived in~\eqref{eq:score-gradient}.
+
+\paragraph{Reports, feedback and re-runs.}
+The date $\iota_t$ is the information cutoff for forecast $q_t$: normally
+the Wednesday of its reference week, with actual generation dates used
+where known. The notation $y_s^{[v]}$ means the reported count for the
+target week of $q_s$ in the latest report dated on or before date $v$
+(the archive's \texttt{version} field). A valid report is finite and
+nonnegative. Its first valid publication date is $\nu_s$, and $d\ge0$
+is an additional delay in calendar weeks. The symbols $m_s^{(d)}$,
+$\tau_d(s)$ and $\mathcal R_t^{(d)}$ denote the maturity date, the index
+of the round that consumes feedback for $q_s$, and the set of rows
+consumed before issuing $q_t$, respectively; their scheduling rules are
+given in~\eqref{eq:feedback-maturity}--\eqref{eq:feedback-release-set}.
+The set $I_{20}^{(d)}$ contains the first 20 consumed forecast rows in
+release order, with their stateful report values
+\begin{equation}
+ \bar y_s^{(d)}=y_s^{[\iota_{\tau_d(s)}]},\qquad s\in I_{20}^{(d)}.
+ \label{eq:initial-feedback-values}
+\end{equation}
+For forecasts and states, a superscript $[t]$ instead identifies the
+re-run at reference-week index $t$: $q_s^{[t]}$ is the forecast for row
+$s$ reconstructed inside that re-run. Thus $v$ in $y_s^{[v]}$ is a
+report-cutoff date, while $t$ in $q_s^{[t]}$ is a re-run index.
+Feedback respects the cutoff convention, subject to the retrospective
+initialization described in Section~\ref{sec:tuning-initialization}.
+
+\paragraph{Implementation scales and expert weights.}
+The tracker transformation is $\psi(x)=x$ or $\psi(x)=\log(1+x)$.
+The count divisor $c_{\mathrm{scale}}>0$ is population divided by
+$100{,}000$ by default, so $y/c_{\mathrm{scale}}$ is a rate per
+$100{,}000$ residents. The fixed reference constants $S_0$ (initial
+error scale) and $L_0$ (expert loss normalization) are defined in
+\eqref{eq:initial-error-scale} and~\eqref{eq:expert-reference-loss};
+$S_0$ is separate from the time-indexed score function $S_t$.
+Their numerical floors are $\varepsilon_S$ and $\varepsilon_L$.
+For one expert-weight update, suppressing the time index, $f_k^\alpha$
+is expert $k$'s forecast, $w_k$ its mixture weight, and $\lambda$ the
+weight-learning rate. The normalized losses are $\ell_k^\alpha$ for
+one level and $\ell_k$ for their mean across levels.
+
+\clearpage
 \section{Methodological notes}
 
 \subsection{Studentized score}
@@ -52,17 +151,7 @@ projection, computable through weighted isotonic regression in forecast
 coordinates. The gradient steps use a weighted quantile loss. The coverage criterion and calibration target are unchanged (strictly increasing invertible transformation); calibration is not guaranteed.
 
 \subsubsection{Standard MultiQT}
-For standard MultiQT~\cite{multiqt}, let
-$\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$ and let
-$b_t=(b_t^\alpha)_{\alpha\in\A}$ be the base quantile forecasts available
-before observing $y_t$. Define
-\[
- \K=\{q\in\R^m:q^{\alpha_1}\le\cdots\le q^{\alpha_m}\},
- \qquad
- \Pi_C(x)=\argmin_{z\in C}\norm{z-x}^2,
-\]
-where $C$ is a nonempty closed convex set. Assume $b_t\in\K$.
-The original MultiQT procedure is
+The original MultiQT procedure~\cite{multiqt} is
 \begin{align}
  \theta_t&=\Pi_{\K-b_t}(\tilde\theta_t),
  &q_t^\std&=b_t+\theta_t,\label{eq:standard-projection}\\
@@ -71,23 +160,18 @@ The original MultiQT procedure is
  &=\tilde\theta_t^\alpha-\eta(\cov_t^{\std,\alpha}-\alpha).
  \label{eq:standard-update}
 \end{align}
-Here $\tilde\theta_t$ is the hidden offset and $\theta_t$ is the played
-(projected) offset. Both have outcome units. 
-
 \subsubsection{Score-threshold tracking}
 To make the connection explicit, first consider the scalar score-threshold
 update of Angelopoulos et al.~\cite{pid}. We then recover the MultiQT
 update using the signed residual as the score.
 
-A score function $S_t(y)$ maps a candidate outcome to a real number.
-Let $r_t=S_t(y_t)$ be the observed score and $c_t$ its issued threshold.
-The corresponding prediction set is
+The score and threshold determine the prediction set
 \begin{equation}
  \mathcal P_t=\{y:S_t(y)\le c_t\},
  \qquad \mathrm{err}_t=\ind\{r_t>c_t\}.
  \label{eq:score-set}
 \end{equation}
-For target miscoverage $\delta$, update according to
+Update according to
 \begin{align}
  c_{t+1}
  &=c_t+\eta(\mathrm{err}_t-\delta)\notag\\
@@ -95,18 +179,13 @@ For target miscoverage $\delta$, update according to
  \label{eq:pid-update}
 \end{align}
 The second line follows from
-$\mathrm{err}_t=1-\ind\{r_t\le c_t\}$ and setting $\delta=1-\alpha$.
-The threshold $c_t$ is measured in score units and determines a prediction
-set through score inversion.
+$\mathrm{err}_t=1-\ind\{r_t\le c_t\}$ and $\delta=1-\alpha$.
+The prediction set is obtained by score inversion.
 For the signed affine scores below, that set's endpoint is the outcome
 quantile forecast.
 
-Define the quantile loss by
-\begin{equation}
- \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
- \label{eq:pinball}
-\end{equation}
-Holding the observed score $r$ fixed, its subdifferential in the threshold is
+Holding the observed score $r$ fixed, the subdifferential of
+\eqref{eq:pinball} in the threshold is
 \begin{equation}
  \partial_z\rho_\alpha(z,r)=
  \begin{cases}
@@ -176,15 +255,14 @@ hidden $\tilde\theta_t^\alpha$.
 \subsubsection{Studentized residuals and their update}
 Now replace the residual score by the studentized residual.
 
-Choose finite scales $\sigma_t^\alpha>0$ from information available at
-issuance. They are fixed when the threshold is optimized. Define
+For this construction, choose the scales from information available at
+issuance and hold them fixed when optimizing the threshold. Define
 \begin{equation}
  S_t^{\stu,\alpha}(y)=\frac{y-b_t^\alpha}{\sigma_t^\alpha},
  \qquad r_t^{\stu,\alpha}=\frac{y_t-b_t^\alpha}{\sigma_t^\alpha}.
  \label{eq:student-score}
 \end{equation}
-Use $\tilde u_t$ and $u_t$ for hidden and played thresholds in studentized
-units. Inverting the score gives
+Inverting the score gives
 \begin{align}
  S_t^{\stu,\alpha}(y)\le u_t^\alpha
  &\quad\Longleftrightarrow\quad
@@ -280,12 +358,7 @@ For the ordinary residual score, this requires
  &\le b_t^{\alpha_{i+1}}-b_t^{\alpha_i},\qquad i=1,\ldots,m-1.
  \label{eq:standard-adjacent}
 \end{align}
-For studentization, set
-\[
- A_t=\diag(\sigma_t^{\alpha_1},\ldots,\sigma_t^{\alpha_m}),
- \qquad q_t^\stu=b_t+A_tu_t.
-\]
-Then
+For studentization, $q_t^\stu=b_t+A_tu_t$, so
 \begin{equation}
  \boxed{
  C_t^\stu=\{u\in\R^m:b_t+A_tu\in\K\}
@@ -315,8 +388,7 @@ Substituting $u=A_t^{-1}(q-b_t)$ into the projection objective yields
  {(\sigma_t^\alpha)^2}.
  \label{eq:weighted-projection}
 \end{align}
-Define $\Pi_\K^W(v)=\argmin_{q\in\K}(q-v)^\top W(q-v)$ for a
-positive-definite matrix $W$. The exact identity is
+In weighted-projection notation, the exact identity is
 \begin{equation}
  \boxed{
  b_t+A_t\Pi_{A_t^{-1}(\K-b_t)}(\tilde u_t)
@@ -326,7 +398,7 @@ positive-definite matrix $W$. The exact identity is
 \end{equation}
 Thus the implementation is weighted isotonic regression of
 $v_t^\alpha=b_t^\alpha+\sigma_t^\alpha\tilde u_t^\alpha$ with weights
-$w_t^\alpha=1/(\sigma_t^\alpha)^2$.
+$1/(\sigma_t^\alpha)^2$.
 
 The ordinary residual case has forecast-space metric $I$;
 the studentized case has metric $A_t^{-2}$. These weights follow from the
@@ -365,22 +437,11 @@ is also equivalent after converting the state and learning rate:
 \subsubsection{Feedback handling: Stateful, re-run and delay}
 \label{sec:feedback-designs}
 \label{sec:delayed-feedback}
-The feedback design is independent of the recalibration method. For a fixed
-disease, location and horizon, $s,t$ index forecast reference weeks, ordered by
-\texttt{reference\_date} (Saturday); $q_s$ denotes the forecast for reference
-week $s$, with quantiles $q_s^\alpha$. Both report and forecast tables identify the target
-week by \texttt{target\_end\_date}. Reports additionally have a publication
-date, \texttt{version}: $y_s^{[v]}$ is the reported \texttt{value} for the
-target week of $q_s$ from the latest \texttt{version} on or before $v$. For forecast $q_t$, only
-reports available by the cutoff $\iota_t$ (\texttt{reference\_date} minus three days, the Wednesday of the reference week, with few exceptions) influence $q_t$. A valid report is finite and nonnegative;
-$d\ge0$ is extra delay in calendar weeks.
-
-
-
+The feedback design is independent of the recalibration method and uses
+the report and cutoff conventions in \hyperref[sec:notation]{Notation}.
 
 \paragraph{Stateful (learn once).}
-Let $\nu_s$ be the \texttt{version} of the first valid report for the target
-week of $q_s$. Wait $d$ calendar weeks from that date. At the next forecast
+Wait $d$ calendar weeks from the first valid report. At the next forecast
 cutoff $\iota_t$ with $t>s$, look up the latest report. If it is invalid,
 wait for a later forecast; never substitute an older report.
 \begin{align}
@@ -390,11 +451,8 @@ wait for a later forecast; never substitute an older report.
  \mathcal R_t^{(d)}=\{s:\tau_d(s)=t\}.
  \label{eq:feedback-release-set}
 \end{align}
-Here $\tau_d(s)$ is the reference-week index $t$ when feedback for $q_s$ is
-used. The set $\mathcal R_t^{(d)}$ contains the earlier indices $s$ whose
-feedback is used before issuing $q_t$; an empty set means no update.
-For $s\in\mathcal R_t^{(d)}$, the update uses $y_s^{[\iota_t]}$, the latest
-report available by the cutoff of $q_t$. If a missing forecast postpones
+An empty $\mathcal R_t^{(d)}$ means no update. For each released row, use
+$y_s^{[\iota_t]}$. If a missing forecast postpones
 the update so that $\iota_t>m_s^{(d)}$, select the report at $\iota_t$, rather
 than fixing it at $m_s^{(d)}$. Feedback for each $q_s$ is used at most once;
 revisions after that update are ignored.
@@ -410,14 +468,15 @@ active, update using previously issued $q_s^{\alpha}$, then issue $q_t$:
  \theta_t&=\Pi_{\K-b_t}(\tilde\theta_t),\qquad q_t=b_t+\theta_t.
  \label{eq:delayed-standard-issue}
 \end{align}
-Sum with $\eta_t$; keep the hidden state unprojected. By default, estimate
-$S_0$ in hindsight and run plain MultiQT from the start. Log tracking uses $\log(1+y)$.
+Sum with $\eta_t$; keep the hidden state unprojected. For log tracking,
+apply the same update in $\psi$ coordinates. The default retrospective initialization of $S_0$ is described
+in Section~\ref{sec:tuning-initialization}.
 
 \paragraph{Weekly re-run.}
 At each reference-week index $t$, re-run MultiQT from the start using the
 latest reports $y_s^{[\iota_t]}$. Only the new forecast $q_t^{[t]}$ is issued;
-previously issued forecasts remain unchanged. Earlier forecasts $q_s^{[t]}$
-are reconstructed internally. Starting from $\tilde\theta_0^{[t]}=0$, replay
+previously issued forecasts remain unchanged. Starting from
+$\tilde\theta_0^{[t]}=0$, replay
 $j=1,\ldots,t$ with feedback only at $j=\tau_d(s)$, retaining delay $d$;
 omit invalid reports:
 \begin{align}
@@ -431,12 +490,104 @@ omit invalid reports:
  q_j^{[t]}=b_j+\theta_j^{[t]}.
  \label{eq:rerun-standard-issue}
 \end{align}
-The stateful $S_0$ and expert loss-normalization scale, estimated from the
-first 20 released feedback items in hindsight, stay fixed across re-runs.
+For each case and feedback delay, estimate $S_0$ and the reference expert
+loss $L_0$ once from the first 20 feedback rows consumed by the stateful
+run. Every weekly re-run reuses these constants. With warmup replay enabled, the constants are
+applied before the 20th feedback row is released, making initialization retrospective; see
+Section~\ref{sec:tuning-initialization} for the formulas and timing.
 
 Studentized methods use $\tilde u$, $q^\stu$ and projection \eqref{eq:student-projection},
 issuing the base until their scale is available; re-runs reconstruct the scale
 history. Evaluation uses a common latest-report truth, separate from learning.
+
+\subsubsection{Tuning, initialization and loss normalization}
+\label{sec:tuning-initialization}
+The reference scales are estimated from $I_{20}^{(d)}$ and its stateful
+feedback values $\bar y_s^{(d)}$; these 20 rows need not span 20 calendar
+weeks. Method parameters, such as a rate multiplier or an expert-weighting
+lookback, are selected on a tuning period. These are distinct steps in
+the implementation.
+
+\paragraph{Initial error scale $S_0$.}
+Pool absolute base errors across the reference rows and all quantile
+levels, and take their empirical 90th percentile:
+\begin{equation}
+ S_0=\max\!\left\{\varepsilon_S,
+ Q_{0.9}\!\left(\left\{
+ |\psi(b_s^\alpha)-\psi(\bar y_s^{(d)})|:
+ s\in I_{20}^{(d)},\ \alpha\in\A
+ \right\}\right)\right\}.
+ \label{eq:initial-error-scale}
+\end{equation}
+Here $\varepsilon_S=10^{-6}$ is a numerical floor. The fixed-rate tracker
+uses $\eta=\kappa S_0$, measured in tracker units. The studentized rate is instead chosen directly
+in standardized units. In the code, $S_0$ also sets the studentized-scale
+bounds $[0.05S_0,S_0]$.
+
+\paragraph{Expert loss normalization (new).}
+Using the pinball loss in~\eqref{eq:pinball}, define one reference loss
+per case and delay:
+\begin{equation}
+ L_0=\max\!\left\{\varepsilon_L,
+ \frac{1}{20|\A|}\sum_{s\in I_{20}^{(d)}}\sum_{\alpha\in\A}
+ \rho_\alpha\!\left(\frac{b_s^\alpha}{c_{\mathrm{scale}}},
+                    \frac{\bar y_s^{(d)}}{c_{\mathrm{scale}}}\right)\right\},
+ \qquad\varepsilon_L=10^{-6}.
+ \label{eq:expert-reference-loss}
+\end{equation}
+The losses supplied to exponential weighting are
+\begin{equation}
+ \ell_k^\alpha=\frac{\rho_\alpha(f_k^\alpha/c_{\mathrm{scale}},
+                               y/c_{\mathrm{scale}})}{L_0},
+ \qquad
+ \ell_k=\frac{1}{|\A|}\sum_{\alpha\in\A}\ell_k^\alpha
+ .
+ \label{eq:normalized-expert-loss}
+\end{equation}
+Per-level weighting uses $\ell_k^\alpha$; common weighting uses $\ell_k$.
+Both divide by the same scalar $L_0$. For example, the common-weight
+exponential step, before optional sharing, is
+\begin{equation}
+ w_k^{\mathrm{new}}
+ =\frac{w_k\exp(-\lambda\ell_k)}
+        {\sum_j w_j\exp(-\lambda\ell_j)}.
+ \label{eq:normalized-expert-weight-step}
+\end{equation}
+Previously, expert weighting used the unnormalized pinball losses. The
+new division makes $\lambda$ unit-free: changing $c_{\mathrm{scale}}$ rescales the numerator
+and denominator equally, provided the numerical floor is inactive.
+These weighting losses remain on the natural count scale even for a log
+tracker. During a re-run, the numerator uses the current report and the
+reconstructed expert forecast, while $L_0$ stays at its stateful value.
+
+\paragraph{Retrospective initialization.}
+The default \texttt{replay\_warmup = TRUE} computes both constants from
+the eventual first 20 releases, then applies them from the start. Forecasts
+before the 20th release can therefore depend on information unavailable at
+their issue time through these constants. This initialization is
+retrospective even though feedback updates follow the schedule above.
+With replay disabled, learning waits until the warmup is complete; if
+fewer than 20 rows are released, learning remains inactive. Once estimated,
+$S_0$ and $L_0$ remain fixed across weekly re-runs. Corrections, expert
+weights and time-varying studentized scales are still reconstructed in
+each re-run. The reference scales are computed by
+\texttt{error\_scale()} and \texttt{weighting\_loss\_scale()} in
+\texttt{R/03\_functions.R}.
+
+\paragraph{Parameter tuning.}
+\texttt{R/05\_tuning.R} selects parameters separately for each disease,
+tracker and feedback design (delay 0, delay 1 and weekly re-run). For the
+active hub design, tuning uses target weeks through 31 May 2025 and
+evaluation starts in June 2025. Each candidate is scored against the
+latest-report truth, averaging pinball loss over tuning weeks and quantile
+levels within each location--horizon case, then equally over the valid
+cases. All prepared locations and horizons $-1,\ldots,3$ enter the hub
+design's tuning. Count trackers minimize loss per $100{,}000$ residents;
+log trackers minimize loss of $\log(1+y)$. This tuning criterion is not
+divided by $L_0$, and calibration error is reported but not optimized.
+The smallest-loss grid value is selected, with the smaller value at ties.
+Soft-switch settings are selected sequentially, followed by the outer
+correction rates.
 
 \clearpage
 \subsubsection{Effect of increasing feedback delay}
