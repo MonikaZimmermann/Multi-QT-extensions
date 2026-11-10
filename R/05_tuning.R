@@ -1,7 +1,7 @@
 # Purpose: tune one setting per recalibration method on the tuning period of the
 # design prepared by R/01_data_overview.R and save the choice for R/04_methods.R.
 # Run from the project root after R/01_data_overview.R: Rscript R/05_tuning.R
-# (about an hour on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04.
+# (about 2.5 hours on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
 # Every method runs online from the first round on, exactly as in 04; only the rows of
 # the tuning period are scored (phase_weeks(..., period = "tuning")).
 source("R/03_functions.R")
@@ -11,7 +11,9 @@ settings <- multiqt_settings()
 prepared <- readRDS("output/data/peak_aligned.rds")
 design <- prepared$settings$design
 diseases <- c("covid", "flu")
-# Pooled over locations and these horizons. "seasons" design: horizon -1 uses the values
+# Pooled over the locations except the US (settings$summary_exclude, as in the summaries of
+# 02, 04 and 06; the US uses the values tuned on the others) and these horizons.
+# "seasons" design: horizon -1 uses the values
 # tuned on 0-3 (the windowed_seasonal base has zero width there, and its 2023/24 forecasts
 # used final counts); "hub_first_months": CMU's horizon -1 nowcasts are tuned as well.
 tuning_horizons <- if (design == "seasons") 0:3 else settings$horizons
@@ -82,7 +84,8 @@ run_stage <- function(disease, transform, feedback, stage, by_method = list()) {
   run_settings <- settings
   run_settings$transform <- transform
   keys <- Filter(function(key) prepared$cases[[key]]$disease == disease &&
-    prepared$cases[[key]]$horizon %in% tuning_horizons, names(prepared$cases))
+    prepared$cases[[key]]$horizon %in% tuning_horizons &&
+    !prepared$cases[[key]]$location %in% settings$summary_exclude, names(prepared$cases))
   rows <- parallel::mclapply(keys, function(key) {
     prepared_case <- prepared$cases[[key]]
     case <- get_case(prepared, disease, prepared_case$location, prepared_case$horizon,
@@ -222,7 +225,8 @@ for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tunin
   mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
     feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
     prepared$settings$tuning_label, "| horizons",
-    paste(range(tuning_horizons), collapse = " to "), "| all locations"),
+    paste(range(tuning_horizons), collapse = " to "), "|",
+    pooled_label(length(unique(scored$location[scored$disease == disease])), settings)),
     side = 3, outer = TRUE, line = 1.2, font = 2)
   mtext(paste("Mean pinball loss relative to the original forecasts (mean over locations",
     "and horizons), on each tracker's scale"), side = 1, outer = TRUE, line = 1)
