@@ -1,8 +1,8 @@
 # Functions for scripts 02 and 04. Sourcing this file only defines functions:
 #   source("R/03_functions.R")
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
-# Forecasts are tracked in tracker units (log1p(counts) or counts; Delphi's REF-op
-# always sqrt(counts)); predictions
+# Forecasts are tracked in tracker units (log1p(counts) or counts; Delphi's production
+# trackers always on the sqrt scale); predictions
 # and scores use counts / count_scale (per 100k residents by default); the expert
 # weights learn from losses relative to the base's (weighting_loss_scale()).
 
@@ -1011,6 +1011,10 @@ method_parameters <- function() list(
   # the fast offsets shrink by ref_op_fast_decay every week, the slow ones never.
   ref_op_transform = "sqrt", ref_op_multiplier = .03, ref_op_window = 20L,
   ref_op_floor = 1e-3, ref_op_slow_multiplier = .003, ref_op_fast_decay = .1,
+  # Delphi's flu prod since 2026-10-07 (pipelines/flu_hosp_prod.R, "sqrt constant 0.018 per
+  # 100k", cold), not tuned: Fixed MultiQT on sqrt(counts per 100k residents) for either
+  # tracker, with this constant rate in those units (Delphi chose it on flu 2024/25-2025/26).
+  sqrt_constant_rate = .018,
   # Slope rate: eta_t = min(cap * S0, min * S0 + |weekly slope of the base median|).
   slope_min_multiplier = .004, slope_cap_multiplier = .08,
   H = 8L, lambda_start = 2.72,           # Learned lambda (exp_weights()); sharing uses 1/(2H).
@@ -1081,7 +1085,7 @@ tuned_setting <- c(fixed = "fixed_multiplier", absolute_slope = "slope_min_multi
   shared_outer = "outer_multiplier", shared_common_outer = "outer_multiplier",
   restart_uniform_outer = "outer_multiplier", restart_weighted_outer = "outer_multiplier",
   restart_grid_outer = "outer_multiplier")
-method_names <- c("original", "fixed", "ref_op", "absolute_slope", "studentized",
+method_names <- c("original", "fixed", "ref_op", "sqrt_constant", "absolute_slope", "studentized",
   "studentized_base",
   "median_constant", "studentized_full", "studentized_levels", "studentized_level_rms",
   "oracle_target", "uniform", "weighted", "weighted_common", "shared", "shared_common",
@@ -1144,6 +1148,17 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
         par("ref_op", "ref_op_floor")), 0L, tracker,
       eta_slow = rate("ref_op_slow_multiplier", Inf, 0),
       fast_decay = par("ref_op", "ref_op_fast_decay")) / count_scale
+  }
+  # Delphi's flu prod (method_parameters()): Fixed MultiQT on sqrt(counts per 100k) with a
+  # constant rate; no S0 and no warmup. Unchanged forecasts keep the exact base.
+  if (want("sqrt_constant")) {
+    per_100k <- choose_count_scale(case, "population")$scale
+    tracked <- multiqt(case$base / per_100k, case$feedback_observed / per_100k,
+      case$feedback_by_week, case$alpha, par("sqrt_constant", "sqrt_constant_rate"), 0L, "sqrt")
+    q <- tracked * per_100k
+    unchanged <- tracked == case$base / per_100k
+    q[unchanged] <- case$base[unchanged]
+    predictions$sqrt_constant <- q / count_scale
   }
   # Slope rate: only the current base forecast's weekly slope in tracker units, never
   # future counts, with a floor and a cap relative to S0.
