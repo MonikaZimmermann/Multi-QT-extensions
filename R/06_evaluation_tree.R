@@ -34,14 +34,17 @@ min_cases <- 5L                    # Nodes with fewer cases show no share of imp
 loss_column <- if (settings$transform == "log1p") "log_quantile_loss" else "quantile_loss"
 loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
   paste("loss in", count_scale_label(settings$scale_method))
-# Methods drawn, one or two per family (the csv has every method), in this order.
-tree_methods <- c(fixed = "Fixed MultiQT", studentized = "Studentized median",
+# Methods drawn, one or two per family (the csv has every method), in this order; Delphi's
+# REF-op (covid prod's tracker, Delphi's constants) as the production benchmark.
+tree_methods <- c(fixed = "Fixed MultiQT", ref_op = "Delphi REF-op (prod)",
+  studentized = "Studentized median",
   studentized_levels = "Studentized full base (level scales)",
   weighted_common = "Rate grid: learned, common weights",
   shared_common = "Rate grid: learned + sharing, common weights",
   restart_weighted = "Weekly starts: learned", diverse_uniform = "Diverse experts: equal",
   diverse_soft_switch = "Diverse experts: soft switching")
-method_colours <- c(fixed = "#0072B2", studentized = "#D55E00", studentized_levels = "#009E73",
+method_colours <- c(fixed = "#0072B2", ref_op = "#B2182B", studentized = "#D55E00",
+  studentized_levels = "#009E73",
   weighted_common = "#56B4E9", shared_common = "#882255", restart_weighted = "#999933",
   diverse_uniform = "#E69F00", diverse_soft_switch = "#7B3294")
 window_titles <- c(overall = "Overall",

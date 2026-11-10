@@ -1,7 +1,8 @@
 # Functions for scripts 02 and 04. Sourcing this file only defines functions:
 #   source("R/03_functions.R")
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
-# Forecasts are tracked in tracker units (log1p(counts) or counts); predictions
+# Forecasts are tracked in tracker units (log1p(counts) or counts; Delphi's REF-op
+# always sqrt(counts)); predictions
 # and scores use counts / count_scale (per 100k residents by default); the expert
 # weights learn from losses relative to the base's (weighting_loss_scale()).
 
@@ -291,13 +292,15 @@ transition_gate <- function(case, strength = 1, width = .05, threshold = .05,
     gate, n_available = rowSums(is.finite(signals)))
 }
 
+# Tracker units: "log1p", "identity" (counts) or "sqrt" (Delphi's REF-op; negative
+# tracker values map back to 0, as in Delphi's calibration code).
 to_tracker <- function(x, transform) {
-  stopifnot(transform %in% c("log1p", "identity"))
-  if (transform == "log1p") log1p(x) else x
+  stopifnot(transform %in% c("log1p", "identity", "sqrt"))
+  switch(transform, log1p = log1p(x), identity = x, sqrt = sqrt(x))
 }
 from_tracker <- function(x, transform) {
-  stopifnot(transform %in% c("log1p", "identity"))
-  if (transform == "log1p") expm1(x) else x
+  stopifnot(transform %in% c("log1p", "identity", "sqrt"))
+  switch(transform, log1p = expm1(x), identity = x, sqrt = pmax(x, 0)^2)
 }
 
 # Count scale for scores and plots; MultiQT never tracks it, and the expert weights
@@ -352,9 +355,7 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
   rows <- head(released, rounds)
   raw_scale <- scale <- NA_real_
   if (initialized) {
-    residuals <- sweep(to_tracker(case$base[rows, , drop = FALSE], transform), 1,
-      to_tracker(case$feedback_observed[rows], transform), "-")
-    raw_scale <- as.numeric(quantile(abs(residuals), .9, names = FALSE))
+    raw_scale <- abs_error_q90(case, rows, transform)
     scale <- max(floor, raw_scale)
   }
   warmup_weeks <- if (replay && initialized) 0L else freeze_week
@@ -362,6 +363,29 @@ error_scale <- function(case, rounds = 20L, floor = 1e-6, transform = "log1p",
     date = if (initialized) case$reference_date[freeze_week] else as.Date(NA),
     rows = rows, consumed_rows = if (warmup_weeks > 0L) released else integer(),
     raw_scale = raw_scale, scale = scale, rounds = rounds, floor = floor)
+}
+# Q90 of the absolute base errors in tracker units, pooled over all quantile levels of
+# the given rows, against the reports learned from: S0 above, Delphi's adaptive rate below.
+abs_error_q90 <- function(case, rows, transform) {
+  residuals <- sweep(to_tracker(case$base[rows, , drop = FALSE], transform), 1,
+    to_tracker(case$feedback_observed[rows], transform), "-")
+  as.numeric(quantile(abs(residuals), .9, names = FALSE))
+}
+
+# Delphi's adaptive rate ("adaptive+" in their calibration code, used by REF-op): at each
+# issue week, mult * abs_error_q90() of the last `rounds` rows learned by then (Inf: all
+# of them), at least floor. The statistic of S0, but rolling with the feedback instead of
+# frozen, so it needs no warmup and no hindsight. 0 before the first learned row (no
+# update then). In the re-run design it uses the reports current at the issue week.
+adaptive_rate <- function(case, mult, rounds = 20L, floor = 0, transform = "sqrt") {
+  released <- integer()
+  eta <- numeric(nrow(case$base))
+  for (week in seq_along(eta)) {
+    released <- c(released, case$feedback_by_week[[week]])
+    if (length(released)) eta[week] <- max(floor, mult * abs_error_q90(case,
+      if (is.finite(rounds)) tail(released, rounds) else released, transform))
+  }
+  eta
 }
 
 # Reference loss that makes the expert weights unit-free: the base's mean pinball loss
@@ -607,16 +631,24 @@ weighted_isoreg <- function(v, w) {
 # [week x level] gives each level its own scale; the projection is then weighted
 # isotonic regression with weights 1 / sigma^2 (Euclidean in units of sigma).
 # start: the offsets before the first update, one value or one per level.
+# Optional slow term and leaky offsets (Delphi's REF-op; eta_slow = 0, fast_decay = 0:
+# standard MultiQT): week w issues base + sigma[w] * (offsets + slow), both terms take the
+# same steps, the slow one with eta_slow (one rate, or one per week), and the offsets are
+# multiplied by 1 - fast_decay at every issue week after the first, before its update;
+# the slow term never decays.
 # Returns the adjusted forecasts in counts.
 multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
                     warmup_weeks = 0L, transform = "log1p",
-                    leak = 0, decay = .5, leak_bound = .2, sigma = 1, start = 0) {
+                    leak = 0, decay = .5, leak_bound = .2, sigma = 1, start = 0,
+                    eta_slow = 0, fast_decay = 0) {
   n <- nrow(base)
   # Only warmup weeks (e.g. S0 never initialized), or nothing to learn and start = 0:
   # keep the exact base.
-  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && leak == 0 && isTRUE(all(start == 0))))
+  if (warmup_weeks >= n || (isTRUE(all(eta == 0)) && isTRUE(all(eta_slow == 0)) &&
+    leak == 0 && isTRUE(all(start == 0))))
     return(base)
   if (length(eta) == 1L) eta <- rep(eta, n)
+  if (length(eta_slow) == 1L) eta_slow <- rep(eta_slow, n)
   if (length(decay) == 1L) decay <- rep(decay, n)
   if (length(sigma) == 1L) sigma <- rep(sigma, n)
   by_level <- is.matrix(sigma)              # One scale per level: weighted projection.
@@ -626,11 +658,14 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
   issued_sigma <- if (by_level) sigma[!warmup, , drop = FALSE] else sigma[!warmup]
   stopifnot(ncol(base) == length(alpha), length(feedback) == n,
     length(feedback_by_week) == n, length(eta) == n, all(is.finite(eta)), all(eta >= 0),
+    length(eta_slow) == n, all(is.finite(eta_slow)), all(eta_slow >= 0),
+    length(fast_decay) == 1L, fast_decay >= 0, fast_decay < 1,
     NROW(sigma) == n, !by_level || ncol(sigma) == length(alpha),
     all(is.finite(issued_sigma) & issued_sigma > 0),
     length(start) %in% c(1L, length(alpha)), all(is.finite(start)),
     all(is.finite(base_tracker)), all(is.finite(feedback_tracker[unlist(feedback_by_week)])))
   offsets <- rep_len(start, length(alpha))
+  slow <- rep(0, length(alpha))
   shift <- 0
   # The leaky shift on the log1p scale: inside the projection for log1p, after it for
   # identity (isoreg commutes with a constant shift, so log1p stays exactly as before).
@@ -640,11 +675,13 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
   for (week in seq_len(n)) {
     if (week <= warmup_weeks) next
     shift <- shift * decay[week]
+    if (fast_decay > 0 && week > warmup_weeks + 1L) offsets <- offsets * (1 - fast_decay)
     for (past_week in feedback_by_week[[week]]) {
       # Compare with the HISTORICAL ISSUED forecast in tracker units.
       # At alpha=.9, eta=.01, a miss adds .009; coverage subtracts .001.
       covered <- feedback_tracker[past_week] <= q_tracker[past_week, ]
       offsets <- offsets + eta[week] * (alpha - covered)
+      slow <- slow + eta_slow[week] * (alpha - covered)
       shift <- shift + leak * mean(alpha - covered)
     }
     shift <- min(leak_bound, max(-leak_bound, shift))
@@ -652,12 +689,15 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     # isoreg restores quantile order: e.g., (12,10) becomes (11,11).
     # Weights (min sigma / sigma)^2: the same projection as 1 / sigma^2, without overflow.
     q_tracker[week, ] <- if (by_level) weighted_isoreg(base_tracker[week, ] +
-      sigma[week, ] * offsets + inner_shift(), (min(sigma[week, ]) / sigma[week, ])^2) else
-      isoreg(base_tracker[week, ] + sigma[week] * offsets + inner_shift())$yf
-    if (transform != "log1p") q_tracker[week, ] <- to_tracker(log_shift(from_tracker(
-      q_tracker[week, ], transform)), transform)
+      sigma[week, ] * (offsets + slow) + inner_shift(),
+      (min(sigma[week, ]) / sigma[week, ])^2) else
+      isoreg(base_tracker[week, ] + sigma[week] * (offsets + slow) + inner_shift())$yf
+    if (transform != "log1p" && shift != 0) q_tracker[week, ] <- to_tracker(log_shift(
+      from_tracker(q_tracker[week, ], transform)), transform)
   }
   # Do not clip negative predictions: that would change the issued coverage indicators.
+  # (The sqrt tracker maps negative values back to 0 counts, as Delphi's code does; its
+  # coverage indicators above stay those of the unclipped tracker values.)
   q <- from_tracker(q_tracker, transform)
   # Keep unchanged bases exact, so transformation roundoff cannot flip ties.
   unchanged <- q_tracker == base_tracker
@@ -956,12 +996,21 @@ soft_switch_weights <- function(experts, base, feedback, feedback_by_week, alpha
 
 # 7. THE RECALIBRATION METHODS OF SCRIPTS 04 AND 05 ----------------------------
 # Settings of the methods. Rates are multiples m of S0 (eta = m * S0, so they act alike
-# for both trackers and every location), except median_rate (in units of sigma_t) and
-# the diverse leak and damping (log1p units for either tracker). by_method overrides a
+# for both trackers and every location), except median_rate (in units of sigma_t), the
+# diverse leak and damping (log1p units for either tracker) and REF-op's rates (Delphi's
+# rolling adaptive rate, adaptive_rate()). by_method overrides a
 # setting for one method, e.g. list(shared = list(H = 4L)); R/05_tuning.R tunes one
 # setting per method (tuned_setting) on the tuning season.
 method_parameters <- function() list(
   fixed_multiplier = .05,                # Fixed MultiQT: eta = m * S0.
+  # Delphi's REF-op as in covid prod, cold (no burn-in season), with Delphi's constants,
+  # not tuned (pipelines/covid_hosp_prod.R, cal_ref_args("op") in R/calibration/views.R of
+  # cmu-delphi/delphi-hub-forecasting): MultiQT on sqrt(counts) for either tracker, with
+  # the fast rate ref_op_multiplier * Q90 of the last ref_op_window learned rows (at least
+  # ref_op_floor) and a slow term with ref_op_slow_multiplier * Q90 of all learned rows;
+  # the fast offsets shrink by ref_op_fast_decay every week, the slow ones never.
+  ref_op_transform = "sqrt", ref_op_multiplier = .03, ref_op_window = 20L,
+  ref_op_floor = 1e-3, ref_op_slow_multiplier = .003, ref_op_fast_decay = .1,
   # Slope rate: eta_t = min(cap * S0, min * S0 + |weekly slope of the base median|).
   slope_min_multiplier = .004, slope_cap_multiplier = .08,
   H = 8L, lambda_start = 2.72,           # Learned lambda (exp_weights()); sharing uses 1/(2H).
@@ -1032,7 +1081,8 @@ tuned_setting <- c(fixed = "fixed_multiplier", absolute_slope = "slope_min_multi
   shared_outer = "outer_multiplier", shared_common_outer = "outer_multiplier",
   restart_uniform_outer = "outer_multiplier", restart_weighted_outer = "outer_multiplier",
   restart_grid_outer = "outer_multiplier")
-method_names <- c("original", "fixed", "absolute_slope", "studentized", "studentized_base",
+method_names <- c("original", "fixed", "ref_op", "absolute_slope", "studentized",
+  "studentized_base",
   "median_constant", "studentized_full", "studentized_levels", "studentized_level_rms",
   "oracle_target", "uniform", "weighted", "weighted_common", "shared", "shared_common",
   "restart_uniform", "restart_weighted", "restart_grid", "diverse_uniform", "diverse_shared",
@@ -1081,6 +1131,20 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   if (want("fixed", "oracle_target"))
     predictions$fixed <- adjust(case$base, par("fixed", "fixed_multiplier") * s0$scale,
       s0$warmup_weeks)
+  # Delphi's REF-op (method_parameters()): Fixed MultiQT's update on its own sqrt tracker,
+  # with Delphi's rolling rates from the rows learned so far instead of S0 (re-run: as
+  # known at the issue week, as Delphi's prod re-runs), the slow term and the leak; no
+  # warmup and no hindsight.
+  if (want("ref_op")) {
+    tracker <- par("ref_op", "ref_op_transform")
+    rate <- function(multiplier, rounds, floor) adaptive_rate(case,
+      par("ref_op", multiplier), rounds, floor, tracker)
+    predictions$ref_op <- multiqt(case$base, case$feedback_observed, case$feedback_by_week,
+      case$alpha, rate("ref_op_multiplier", par("ref_op", "ref_op_window"),
+        par("ref_op", "ref_op_floor")), 0L, tracker,
+      eta_slow = rate("ref_op_slow_multiplier", Inf, 0),
+      fast_decay = par("ref_op", "ref_op_fast_decay")) / count_scale
+  }
   # Slope rate: only the current base forecast's weekly slope in tracker units, never
   # future counts, with a floor and a cap relative to S0.
   if (want("absolute_slope")) {

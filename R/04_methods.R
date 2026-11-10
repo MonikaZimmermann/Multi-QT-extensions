@@ -193,6 +193,9 @@ lambda_of <- function(method) paste0("lambda=", value(method))
 slow <- function(method) paste0("slow m=", value(method))
 labels <- c(original = "Original",
   fixed = paste0("Fixed MultiQT (eta=", value("fixed"), "*S0)"),
+  ref_op = paste0("Delphi REF-op (sqrt, eta=", par_of("ref_op", "ref_op_multiplier"), "*Q90 of ",
+    par_of("ref_op", "ref_op_window"), ", slow ", par_of("ref_op", "ref_op_slow_multiplier"),
+    ", leak ", par_of("ref_op", "ref_op_fast_decay"), ")"),
   absolute_slope = paste0(if (transform == "log1p") "Log-slope rate" else "Count-slope rate",
     " (min m=", value("absolute_slope"), ")"),
   oracle_target = "Target oracle (hindsight)",
@@ -233,7 +236,7 @@ labels <- c(original = "Original",
     ", ", eta("studentized_level_rms"), ")"),
   median_constant = paste0("Median, constant sigma (", residual_label, ", ", params$median_start,
     " start, ", eta("median_constant"), ")"))
-colours <- c(original = "gray40", fixed = "#0072B2", absolute_slope = "#009E73",
+colours <- c(original = "gray40", fixed = "#0072B2", ref_op = "#B2182B", absolute_slope = "#009E73",
   oracle_target = "#CC79A7", uniform = "#E69F00", weighted = "#56B4E9",
   weighted_common = "#56B4E9", shared = "#882255", shared_common = "#882255",
   shared_outer = "#D55E00", shared_common_outer = "#D55E00",
@@ -250,7 +253,7 @@ common["diverse_soft_switch"] <- TRUE
 line_types <- ifelse(common, 2, 1)
 point_shapes <- ifelse(common, 17, 16)
 method_groups <- list(
-  "Single trackers" = c("original", "fixed", "absolute_slope", "oracle_target"),
+  "Single trackers" = c("original", "fixed", "ref_op", "absolute_slope", "oracle_target"),
   "Rate-grid experts" = c("original", "fixed", "uniform", "weighted", "weighted_common",
     "shared", "shared_common", "shared_outer", "shared_common_outer"),
   "Weekly starts: immediate admission" = c("original", "restart_persistent", "restart_uniform",
