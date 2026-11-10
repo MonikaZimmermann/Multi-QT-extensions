@@ -7,9 +7,10 @@
 # weights learn from losses relative to the base's (weighting_loss_scale()).
 
 # 1. SHARED SETTINGS -----------------------------------------------------
-# Scripts 02 and 04 read these settings, so a change here applies to both.
+# Scripts 02, 04 and 06 read these settings, so a change here applies to all three.
 multiqt_settings <- function() list(
-  location_ids = c("US", "06", "48", "36", "42", "17"),  # US, California, Texas, New York, Pennsylvania, Illinois.
+  location_ids = c("US", "06", "48", "36", "42"),  # US, California, Texas, New York, Pennsylvania.
+  summary_exclude = "US",           # Left out of the pooled all-location summaries (02, 04, 06).
   horizons = -1:3,
   transform = "identity",           # MultiQT tracks raw counts; "log1p": log1p(counts).
   scale_method = "population",      # Scores/plots: per 100k residents ("population"), or "max", "median" or "none".
@@ -334,6 +335,14 @@ count_scale_label <- function(method) switch(method,
   population = "counts per 100k residents",
   none = "counts",
   paste0("counts / historical ", method))
+# The pooled all-location summaries of 02, 04 and 06 leave out settings$summary_exclude
+# (the US: a sum over the states, which would count them twice). pooled_rows() keeps the
+# other rows of a score table; pooled_label() names the pooled set, e.g. in titles.
+pooled_rows <- function(rows, settings) rows[!rows$location %in% settings$summary_exclude, ,
+  drop = FALSE]
+pooled_label <- function(n, settings) paste0(n, " locations",
+  if (length(settings$summary_exclude)) paste0(" (without ",
+    paste(settings$summary_exclude, collapse = ", "), ")"))
 
 # Frozen error scale S0: Q90 of the absolute base errors in tracker units, pooled
 # over all quantile levels of the first `rounds` released rows. eta = m * S0.

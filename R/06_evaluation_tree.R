@@ -3,7 +3,8 @@
 # horizons, feedback designs and locations, the next levels split by feedback design and
 # then by horizon. Every node shows three bar charts, overall, up to peak and after peak:
 # the loss reduction against the original forecasts. First page per disease: all
-# locations pooled; next pages: the US and the largest states, one location each.
+# locations except the US pooled (pooled_rows()); next pages: the locations of
+# multiqt_settings() (US, California, Texas, New York, Pennsylvania), one location each.
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R
 # Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
@@ -28,7 +29,6 @@ diseases <- setdiff(diseases, missing)
 splits <- c("feedback", "horizon")
 split_titles <- c(feedback = "feedback design", horizon = "horizon")
 phases <- c("overall", "before", "after")
-n_largest <- 5L                    # Location pages: the US and the n largest states.
 min_cases <- 5L                    # Nodes with fewer cases show no share of improved cases.
 # Scored on the tracker's scale, as the tuning and the trade-off pages of R/04.
 loss_column <- if (settings$transform == "log1p") "log_quantile_loss" else "quantile_loss"
@@ -112,19 +112,15 @@ tree_nodes <- function(rows) {
   }
   nodes
 }
-largest_states <- function(disease) {
-  populations <- unique(do.call(rbind, lapply(prepared$cases, function(case)
-    if (case$disease == disease && case$location != "US")
-      data.frame(location = case$location, population = case$population))))
-  populations$location[order(-populations$population)][seq_len(n_largest)]
-}
+# Pages: NA = the pooled locations, then each location of settings$location_ids.
 pages <- do.call(rbind, lapply(diseases, function(disease)
-  data.frame(disease, location = c(NA, "US", largest_states(disease)))))
+  data.frame(disease, location = c(NA, settings$location_ids))))
 pages <- pages[is.na(pages$location) |                # Locations without scores: no page.
   paste(pages$disease, pages$location) %in% paste(scores$disease, scores$location), ]
 trees <- lapply(seq_len(nrow(pages)), function(p) {
   rows <- scores[scores$disease == pages$disease[p], ]
-  if (!is.na(pages$location[p])) rows <- rows[rows$location == pages$location[p], ]
+  rows <- if (is.na(pages$location[p])) pooled_rows(rows, settings) else
+    rows[rows$location == pages$location[p], ]
   tree_nodes(rows)
 })
 write.csv(do.call(rbind, lapply(seq_len(nrow(pages)), function(p)
@@ -172,8 +168,8 @@ draw_panel <- function(s, xlim, show_share) {
     las = 1, line = .15, cex = .42, col = "gray25")
 }
 page_title <- function(disease, location) {
-  where <- if (is.na(location)) paste("all", length(unique(scores$location[scores$disease ==
-    disease])), "locations pooled") else {
+  where <- if (is.na(location)) paste("all", pooled_label(length(unique(pooled_rows(
+    scores[scores$disease == disease, ], settings)$location)), settings), "pooled") else {
     name <- unique(scores$location_name[scores$location == location])[1]
     paste0(name, " (", location, ")")
   }

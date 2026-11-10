@@ -300,7 +300,7 @@ draw_tradeoff_points <- function(rows, alpha = 1, size = 1, shade = FALSE, halo 
       col = colour, cex = 2 * size, lwd = if (shade) size else 2 * size)
   }
 }
-# All prepared locations in one panel: small, light symbols for single locations and the
+# All pooled locations (without the US) in one panel: small, light symbols for single locations and the
 # usual symbols for the unweighted means over locations. Axes: 1st to 99th percentile.
 plot_all_locations_panel <- function(rows, title) {
   rows <- rows[rows$multiplier %in% c(0, dot_multipliers) & is.finite(rows$quantile_loss) &
@@ -317,7 +317,7 @@ plot_all_locations_panel <- function(rows, title) {
 n_rows <- length(settings$location_ids)
 n_columns <- length(settings$horizons)
 page_height <- 3.1 * n_rows + 1.5   # 17 inches for 5 locations.
-# all_rows: scores of every prepared location; if given, they fill a first row.
+# all_rows: scores of every pooled location (pooled_rows()); if given, they fill a first row.
 plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
   page_rows <- n_rows + !is.null(all_rows)
   panels <- page_rows * n_columns
@@ -326,7 +326,8 @@ plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
   par(oma = c(1, 0, 4, 0), mar = c(3.6, 3.6, 2.6, .8), mgp = c(2.2, .6, 0), cex = .8)
   if (!is.null(all_rows)) for (horizon in settings$horizons)
     plot_all_locations_panel(all_rows[all_rows$horizon == horizon, ],
-      paste("All", length(unique(all_rows$location)), "locations | horizon", horizon))
+      paste("All", pooled_label(length(unique(all_rows$location)), settings), "| horizon",
+        horizon))
   for (location in settings$location_ids) for (horizon in settings$horizons)
     plot_tradeoff_panel(rows[rows$location == location & rows$horizon == horizon, ],
       paste(location_names[location], "| horizon", horizon))
@@ -341,12 +342,12 @@ plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
   mtext(paste(settings_label, "| Lower left is better."), side = 3, outer = TRUE, line = .7, cex = .85)
 }
 # Calibration error = mean over levels of |coverage - alpha|; loss = mean over levels.
-# First row: every prepared location (all_scores).
+# First row: every prepared location except the US (all_scores, pooled_rows()).
 cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = page_height + 3.1, family = "DejaVu Sans")
 for (disease in diseases)
   plot_tradeoff_page(scores[scores$disease == disease, ], disease,
     "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels",
-    all_scores[all_scores$disease == disease, ])
+    pooled_rows(all_scores[all_scores$disease == disease, ], settings))
 dev.off()
 
 # The same comparison for each quantile level: one page per disease and level.

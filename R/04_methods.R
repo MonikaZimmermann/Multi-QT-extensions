@@ -108,7 +108,7 @@ saveRDS(runs, file.path(result_dir, "issued_forecasts.rds"))
 # evaluation weeks. The runs above are reused.
 locations_of <- function(disease) unique(unlist(lapply(prepared$cases, function(case)
   if (case$disease == disease) case$location)))
-all_locations <- locations_of(disease_name)
+all_locations <- setdiff(locations_of(disease_name), settings$summary_exclude)  # Pooled page.
 tradeoff_params <- lapply(setNames(score_diseases, score_diseases), function(disease)
   Map(tuned_for, tradeoff_feedback$delay, tradeoff_feedback$revisions, disease))
 tradeoff_cases <- do.call(rbind, lapply(score_diseases, function(disease)
@@ -430,17 +430,18 @@ feedback_names <- with(tradeoff_feedback, ifelse(revisions,
 panel_height <- 2.6                         # Inches per row of panels.
 legend_height <- 2.6
 tradeoff_title <- function(location = NULL) paste(disease_name, "|",
-  if (is.null(location)) paste("all", length(all_locations), "locations") else
+  if (is.null(location)) paste("all", pooled_label(length(all_locations), settings)) else
     paste0(tradeoff_scores$location_name[match(location, tradeoff_scores$location)],
       " (", location, ")"), "| evaluation:", evaluation_label, "|",
   if (transform == "log1p") "log1p(counts) updates, loss of log(counts + 1)" else
     paste("raw-count updates, loss in", score_units))
-# One page; location NULL: all prepared locations. Every panel has its own axis ranges;
-# a loss beyond the axis is drawn at its edge as ">".
+# One page; location NULL: all prepared locations except the US (pooled_rows()). Every
+# panel has its own axis ranges; a loss beyond the axis is drawn at its edge as ">".
 draw_tradeoff_page <- function(location = NULL) {
   all_page <- is.null(location)
-  page <- tradeoff_scores[if (all_page) !tradeoff_scores$method %in% hidden_everywhere else
-    tradeoff_scores$location == location & !tradeoff_scores$hidden, ]
+  page <- if (all_page) pooled_rows(tradeoff_scores[!tradeoff_scores$method %in%
+    hidden_everywhere, ], settings) else
+    tradeoff_scores[tradeoff_scores$location == location & !tradeoff_scores$hidden, ]
   page <- page[order(page$method == "original"), ]   # Original last, on top of the others.
   n_panels <- nrow(panel_rows) * length(settings$horizons)
   layout(rbind(matrix(seq_len(n_panels), nrow(panel_rows), byrow = TRUE), n_panels + 1L),
