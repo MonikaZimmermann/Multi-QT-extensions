@@ -560,20 +560,113 @@ each re-run. The reference scales are computed by
 \texttt{error\_scale()} and \texttt{weighting\_loss\_scale()} in
 \texttt{R/03\_functions.R}.
 
-\paragraph{Parameter tuning.}
-\texttt{R/05\_tuning.R} selects parameters separately for each disease,
-tracker and feedback design (delay 0, delay 1 and weekly re-run). For the
-active hub design, tuning uses target weeks through 31 May 2025 and
-evaluation starts in June 2025. Each candidate is scored against the
-latest-report truth, averaging quantile loss over tuning weeks and quantile
-levels within each location--horizon case, then equally over the valid
-cases. All prepared locations and horizons $-1,\ldots,3$ enter the hub
-design's tuning. Count trackers minimize loss per $100{,}000$ residents;
-log trackers minimize loss of $\log(1+y)$. This tuning criterion is not
-divided by $L_0$, and calibration error is reported but not optimized.
-The smallest-loss grid value is selected, with the smaller value at ties.
-Soft-switch settings are selected sequentially, followed by the outer
-correction rates.
+\paragraph{Tuning procedure.}
+\texttt{R/05\_tuning.R} runs COVID--\texttt{log1p},
+COVID--\texttt{identity}, flu--\texttt{log1p}, then
+flu--\texttt{identity}. For each pair, it completes stateful delay 0,
+stateful delay 1, then weekly re-run with delay 0. Parameters are chosen
+independently for these 12 configurations, with eight stages each
+(96 stages in the full schedule).
+
+The \texttt{log1p} tracker updates on $\log(1+\text{counts})$ and
+minimizes quantile loss on that scale. The \texttt{identity} tracker
+updates on raw counts and minimizes quantile loss per $100{,}000$
+residents. For each candidate setting, forecasts run online under the
+chosen feedback design; only tuning weeks are scored, against the latest
+reports. Mean losses are pooled equally over location--horizon cases to
+select one value per method and configuration. Choose the smallest loss,
+with the smaller parameter value at ties. The criterion is not divided
+by $L_0$; calibration error is reported separately.
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.16}
+\begin{tabularx}{\textwidth}{@{}r>{\raggedright\arraybackslash}X@{}}
+\toprule
+Stage & What is tuned, and what happens next\\
+\midrule
+1 & Tune the ordinary trackers and expert mixtures: tracker rates,
+    weighting lookback $H$, fixed restart-weighting rate, and diverse
+    experts' slow rate. Search one setting at a time for each method,
+    then retain its best value.\\[3pt]
+2--7 & Tune the soft switch in order: strength, threshold, width, then
+       the forecast-path, nowcast and revision signal weights. Keep each
+       selected value when moving to the next setting, using the expert
+       bank tuned in stage 1.\\[3pt]
+8 & Tune the outer MultiQT correction rate on each already tuned inner
+    mixture. Then reset to defaults for the next
+    disease--tracker--feedback configuration.\\
+\bottomrule
+\end{tabularx}
+\end{center}
+All prepared locations contribute. The hub design tunes on horizons
+$-1,\ldots,3$ through
+31 May 2025; the seasons design uses horizons $0,\ldots,3$, with $-1$
+reusing those choices. Configurations without usable tuning data skip
+the remaining stages.
+
+\clearpage
+\paragraph{Candidate grids.}
+The following grids are used in \texttt{R/05\_tuning.R} for each
+disease--tracker--feedback configuration. Setting names match the code.
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.22}
+\begin{tabularx}{\textwidth}{@{}rl>{\raggedright\arraybackslash}X@{}}
+\toprule
+Stage & Setting & Candidate values\\
+\midrule
+1 & \texttt{fixed\_multiplier}
+  & 0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4\\
+1 & \texttt{slope\_min\_multiplier}
+  & 0.002, 0.004, 0.01, 0.02, 0.05, 0.1\\
+1 & \texttt{median\_rate} & 0.003, 0.01, 0.03, 0.1, 0.3, 1\\
+1 & \texttt{H} & 2, 4, 8, 16, 32\\
+1 & \texttt{restart\_lambda} & 0.25, 0.5, 1, 2.72, 7, 20\\
+1 & \texttt{diverse\_slow\_multiplier}
+  & 0.001, 0.002, 0.004, 0.008, 0.02, 0.05, 0.1, 0.2\\
+\midrule
+2 & \texttt{switch\_strength} & 0, 0.25, 0.5, 0.75, 1\\
+3 & \texttt{switch\_threshold} & 0.02, 0.05, 0.1, 0.2\\
+4 & \texttt{switch\_width} & 0.02, 0.05, 0.1, 0.2\\
+5 & \texttt{switch\_weight\_path} & 0, 0.5, 1\\
+6 & \texttt{switch\_weight\_nowcast} & 0, 0.5, 1\\
+7 & \texttt{switch\_weight\_revision} & 0, 0.5, 1\\
+\midrule
+8 & \texttt{outer\_multiplier}
+  & 0.001, 0.002, 0.004, 0.01, 0.02, 0.05, 0.1, 0.2\\
+\bottomrule
+\end{tabularx}
+\end{center}
+The four \texttt{multiplier} grids scale $S_0$; the slope multiplier
+controls only the floor term of its capped, slope-dependent rate.
+\texttt{median\_rate} is a step in standardized units, $H$ counts
+weight updates, and \texttt{restart\_lambda} is a dimensionless rate
+for losses normalized by $L_0$. The switch settings control the gate.
+
+\paragraph{Single-pass sequential grid search.}
+At each search, vary one setting and select its lowest-loss candidate,
+holding all other settings fixed. Retain choices from earlier stages;
+settings not yet tuned keep their defaults. Stage 1 searches the
+different methods separately; stages 2--7 successively tune the six
+settings of the same soft-switch method; stage 8 tunes each outer
+correction on its already tuned inner mixture.
+
+For the six soft-switch settings, a full Cartesian search would evaluate
+\[
+ 5\times4\times4\times3\times3\times3=2160
+\]
+joint combinations. The sequential search instead makes
+\[
+ 5+4+4+3+3+3=22
+\]
+candidate evaluations per location--horizon case, with some configurations
+possibly evaluated again. These counts cover only stages 2--7; all
+12 disease--tracker--feedback configurations are still tuned separately.
+This is one pass: earlier choices are not revisited after later settings
+change. It is cheaper, but parameter interactions can make the result
+depend on the search order, and the best joint combination is not
+guaranteed.
 
 \clearpage
 \subsubsection{Effect of increasing feedback delay}
