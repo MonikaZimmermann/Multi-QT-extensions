@@ -7,6 +7,7 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{graphicx,booktabs,tabularx,enumitem}
+\usepackage{longtable}
 \usepackage[colorlinks=true,allcolors=blue]{hyperref}
 
 % Shortcuts you can change or extend.
@@ -55,11 +56,11 @@ update for the next step. The coding section specifies when delayed or
 revised reports become available instead.
 
 \paragraph{Loss and projections.}
-The indicator is $\ind\{\cdot\}$ and $x_+=\max(x,0)$. Pinball loss takes
+The indicator is $\ind\{\cdot\}$ and $x_+=\max(x,0)$. Quantile loss takes
 the prediction as its first argument and the observation as its second:
 \begin{equation}
  \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
- \label{eq:pinball}
+ \label{eq:quantile-loss}
 \end{equation}
 The ordered-quantile cone and Euclidean projection are
 \[
@@ -118,7 +119,7 @@ report-cutoff date, while $t$ in $q_s^{[t]}$ is a re-run index.
 Feedback respects the cutoff convention, subject to the retrospective
 initialization described in Section~\ref{sec:tuning-initialization}.
 
-\paragraph{Implementation scales and expert weights.}
+\paragraph{Implementation scales.}
 The tracker transformation is $\psi(x)=x$ or $\psi(x)=\log(1+x)$.
 The count divisor $c_{\mathrm{scale}}>0$ is population divided by
 $100{,}000$ by default, so $y/c_{\mathrm{scale}}$ is a rate per
@@ -127,10 +128,29 @@ error scale) and $L_0$ (expert loss normalization) are defined in
 \eqref{eq:initial-error-scale} and~\eqref{eq:expert-reference-loss};
 $S_0$ is separate from the time-indexed score function $S_t$.
 Their numerical floors are $\varepsilon_S$ and $\varepsilon_L$.
-For one expert-weight update, suppressing the time index, $f_k^\alpha$
-is expert $k$'s forecast, $w_k$ its mixture weight, and $\lambda$ the
-weight-learning rate. The normalized losses are $\ell_k^\alpha$ for
-one level and $\ell_k$ for their mean across levels.
+
+\paragraph{Experts and weighting.}
+Expert $k$ issues $f_{k,t}^\alpha$ at level $\alpha$ in forecast round $t$.
+The index $n$ counts processed expert-weight updates, not calendar weeks;
+$s(n)$ is the forecast row whose feedback is consumed, and $Y_n$ is the
+report used in that update. For a fixed bank of $K$ experts,
+$w_{k,n}^\alpha$ is the weight immediately before update $n$ and
+$\lambda_n^\alpha$ its learning rate; $\bar w_{k,n+1}^\alpha$ is the
+weight after the exponential step but before optional sharing. Common weights and rates omit
+$\alpha$: $w_{k,n}$ and $\lambda_n$. Suppress time indices when only
+one forecast or update is considered; $\hat q$ is the mixture before
+any crossing repair. The unnormalized expert losses are $L_{k,n}^\alpha$;
+$\ell_{k,n}^\alpha$ are their normalized versions, and $L_{k,n}$ and
+$\ell_{k,n}$ are the corresponding means over levels.
+The second moments are $M_n^\alpha$ or $M_n$, the lookback is $H$,
+the starting rate is $\lambda_{\mathrm{start}}$, and $\gamma$ is the
+optional fraction of weight shared uniformly among experts.
+Superscripts $\mathrm{raw}$ and $\mathrm{norm}$ distinguish calculations
+without and with $L_0$ normalization.
+For the soft switch, $G_t\in[0.05,0.95]$ is the declining-context gate
+at issuance; $w_{k,t}^{B}$ and $w_{k,t}^{D}$ are the current weights
+in its baseline and declining banks, and $w_{k,t}^{\mathrm{mix}}$
+are the combined weights used for that forecast.
 
 \clearpage
 \section{Methodological notes}
@@ -185,7 +205,7 @@ For the signed affine scores below, that set's endpoint is the outcome
 quantile forecast.
 
 Holding the observed score $r$ fixed, the subdifferential of
-\eqref{eq:pinball} in the threshold is
+\eqref{eq:quantile-loss} in the threshold is
 \begin{equation}
  \partial_z\rho_\alpha(z,r)=
  \begin{cases}
@@ -493,20 +513,22 @@ omit invalid reports:
 For each case and feedback delay, estimate $S_0$ and the reference expert
 loss $L_0$ once from the first 20 feedback rows consumed by the stateful
 run. Every weekly re-run reuses these constants. With warmup replay enabled, the constants are
-applied before the 20th feedback row is released, making initialization retrospective; see
-Section~\ref{sec:tuning-initialization} for the formulas and timing.
+applied before the 20th feedback row is released, making initialization retrospective.
+See Section~\ref{sec:tuning-initialization} for $S_0$ and initialization timing,
+and Section~\ref{sec:expert-loss-normalization} for $L_0$.
 
 Studentized methods use $\tilde u$, $q^\stu$ and projection \eqref{eq:student-projection},
 issuing the base until their scale is available; re-runs reconstruct the scale
 history. Evaluation uses a common latest-report truth, separate from learning.
 
-\subsubsection{Tuning, initialization and loss normalization}
+\subsubsection{Tuning and initialization}
 \label{sec:tuning-initialization}
 The reference scales are estimated from $I_{20}^{(d)}$ and its stateful
 feedback values $\bar y_s^{(d)}$; these 20 rows need not span 20 calendar
 weeks. Method parameters, such as a rate multiplier or an expert-weighting
 lookback, are selected on a tuning period. These are distinct steps in
-the implementation.
+the implementation. The expert reference loss $L_0$ and its effect on
+weight updates are described in Section~\ref{sec:expert-loss-normalization}.
 
 \paragraph{Initial error scale $S_0$.}
 Pool absolute base errors across the reference rows and all quantile
@@ -523,42 +545,6 @@ Here $\varepsilon_S=10^{-6}$ is a numerical floor. The fixed-rate tracker
 uses $\eta=\kappa S_0$, measured in tracker units. The studentized rate is instead chosen directly
 in standardized units. In the code, $S_0$ also sets the studentized-scale
 bounds $[0.05S_0,S_0]$.
-
-\paragraph{Expert loss normalization (new).}
-Using the pinball loss in~\eqref{eq:pinball}, define one reference loss
-per case and delay:
-\begin{equation}
- L_0=\max\!\left\{\varepsilon_L,
- \frac{1}{20|\A|}\sum_{s\in I_{20}^{(d)}}\sum_{\alpha\in\A}
- \rho_\alpha\!\left(\frac{b_s^\alpha}{c_{\mathrm{scale}}},
-                    \frac{\bar y_s^{(d)}}{c_{\mathrm{scale}}}\right)\right\},
- \qquad\varepsilon_L=10^{-6}.
- \label{eq:expert-reference-loss}
-\end{equation}
-The losses supplied to exponential weighting are
-\begin{equation}
- \ell_k^\alpha=\frac{\rho_\alpha(f_k^\alpha/c_{\mathrm{scale}},
-                               y/c_{\mathrm{scale}})}{L_0},
- \qquad
- \ell_k=\frac{1}{|\A|}\sum_{\alpha\in\A}\ell_k^\alpha
- .
- \label{eq:normalized-expert-loss}
-\end{equation}
-Per-level weighting uses $\ell_k^\alpha$; common weighting uses $\ell_k$.
-Both divide by the same scalar $L_0$. For example, the common-weight
-exponential step, before optional sharing, is
-\begin{equation}
- w_k^{\mathrm{new}}
- =\frac{w_k\exp(-\lambda\ell_k)}
-        {\sum_j w_j\exp(-\lambda\ell_j)}.
- \label{eq:normalized-expert-weight-step}
-\end{equation}
-Previously, expert weighting used the unnormalized pinball losses. The
-new division makes $\lambda$ unit-free: changing $c_{\mathrm{scale}}$ rescales the numerator
-and denominator equally, provided the numerical floor is inactive.
-These weighting losses remain on the natural count scale even for a log
-tracker. During a re-run, the numerator uses the current report and the
-reconstructed expert forecast, while $L_0$ stays at its stateful value.
 
 \paragraph{Retrospective initialization.}
 The default \texttt{replay\_warmup = TRUE} computes both constants from
@@ -579,7 +565,7 @@ each re-run. The reference scales are computed by
 tracker and feedback design (delay 0, delay 1 and weekly re-run). For the
 active hub design, tuning uses target weeks through 31 May 2025 and
 evaluation starts in June 2025. Each candidate is scored against the
-latest-report truth, averaging pinball loss over tuning weeks and quantile
+latest-report truth, averaging quantile loss over tuning weeks and quantile
 levels within each location--horizon case, then equally over the valid
 cases. All prepared locations and horizons $-1,\ldots,3$ enter the hub
 design's tuning. Count trackers minimize loss per $100{,}000$ residents;
@@ -605,11 +591,348 @@ correction rates.
 \subsubsection{Studentized scores and non-additive updates}
 \label{sec:studentized-code-updates}
 
-\subsubsection{A small set of phase-specific experts}
-\label{sec:phase-specific-experts}
+\clearpage
+\subsection{Weighting and adaptive weighting of experts}
+\label{sec:expert-weighting}
+An expert is a complete forecasting procedure, such as MultiQT with a
+particular rate or a restarted tracker. The mixture learns which experts
+to trust from their losses on released outcomes. Even a fixed learning
+rate gives changing weights; adaptive weighting additionally changes
+the learning rate. Each location--horizon case is learned separately.
+The formulas below first consider a fixed bank whose experts are all
+eligible for every update.
 
-\subsubsection{Learned weights shared across quantile levels}
+\subsubsection{Mixtures and feedback losses}
+With weights specific to each quantile level, issue
+\begin{equation}
+ \hat q^\alpha=\sum_{k=1}^K w_k^\alpha f_k^\alpha,
+ \qquad w_k^\alpha\ge0,\quad \sum_{k=1}^K w_k^\alpha=1,
+ \qquad q=\Pi_\K(\hat q).
+ \label{eq:expert-mixture}
+\end{equation}
+Different levels can favor different experts. This can introduce
+crossings, so the code repairs the mixture by isotonic projection.
+With common weights, replace $w_k^\alpha$ by $w_k$ at every level.
+If every expert's quantiles are ordered, this common-weight mixture is
+already ordered and needs no repair.
+
+On receiving feedback, score the expert forecasts for the released row:
+\begin{align}
+ L_{k,n}^\alpha
+ &=\rho_\alpha\!\left(f_{k,s(n)}^\alpha/c_{\mathrm{scale}},
+                      Y_n/c_{\mathrm{scale}}\right),
+ &L_{k,n}&=\frac{1}{m}\sum_{\alpha\in\A}L_{k,n}^\alpha,
+ \label{eq:expert-feedback-loss}\\
+ \ell_{k,n}^\alpha&=L_{k,n}^\alpha/L_0,
+ &\ell_{k,n}&=\frac{1}{m}\sum_{\alpha\in\A}\ell_{k,n}^\alpha.
+ \label{eq:normalized-expert-loss}
+\end{align}
+The reference $L_0$ is estimated as in
+Section~\ref{sec:expert-loss-normalization} and is common to all experts
+and levels within the case and feedback design. In stateful learning,
+score forecasts actually issued for that row; a re-run instead scores
+the forecasts reconstructed inside that re-run. Feedback timing follows
+Section~\ref{sec:feedback-designs}.
+
+\subsubsection{Exponential updates and optional sharing}
+Before optional sharing, update separately at each level:
+\begin{equation}
+ \bar w_{k,n+1}^\alpha
+ =\frac{w_{k,n}^\alpha\exp(-\lambda_n^\alpha\ell_{k,n}^\alpha)}
+        {\sum_{j=1}^K w_{j,n}^\alpha
+         \exp(-\lambda_n^\alpha\ell_{j,n}^\alpha)}.
+ \label{eq:level-expert-weight-step}
+\end{equation}
+With common weights, there is one update using the mean loss:
+\begin{equation}
+ \bar w_{k,n+1}
+ =\frac{w_{k,n}\exp(-\lambda_n\ell_{k,n})}
+        {\sum_{j=1}^K w_{j,n}\exp(-\lambda_n\ell_{j,n})}.
+ \label{eq:normalized-expert-weight-step}
+\end{equation}
+An expert with lower loss gains weight relative to one with higher loss.
+A larger learning rate gives a stronger response to the same loss gap.
+The initial weights are uniform. The option $\lambda=0$ keeps a uniform
+average of the active experts.
+
+When sharing is enabled, follow the exponential step by
+\begin{equation}
+ w_{k,n+1}^\alpha
+ =(1-\gamma)\bar w_{k,n+1}^\alpha+\gamma/K.
+ \label{eq:expert-fixed-share}
+\end{equation}
+The common-weight version again omits $\alpha$. This gives previously
+downweighted experts a chance to recover when conditions change.
+The default is $\gamma=1/(2H)$; without sharing, $\gamma=0$.
+This sharing among experts is separate from choosing whether a weight
+vector is shared across quantile levels.
+
+\subsubsection{Adaptive learning rates}
+\label{sec:adaptive-expert-weighting}
+The first $H$ processed updates use $\lambda_{\mathrm{start}}$.
+Record each update's second moment using its weights before the
+exponential step and sharing:
+\begin{equation}
+ M_n^\alpha=\sum_{k=1}^K w_{k,n}^\alpha(\ell_{k,n}^\alpha)^2,
+ \qquad
+ M_n=\sum_{k=1}^K w_{k,n}\ell_{k,n}^{\,2}.
+ \label{eq:expert-loss-moments}
+\end{equation}
+For per-level weighting, the rate is
+\begin{equation}
+ \lambda_n^\alpha=
+ \begin{cases}
+  \lambda_{\mathrm{start}},&1\le n\le H,\\[3pt]
+  \displaystyle\sqrt{\frac{\log(2KH)+1}
+                    {\sum_{r=n-H}^{n-1}M_r^\alpha}},&n>H.
+ \end{cases}
+ \label{eq:adaptive-expert-rate}
+\end{equation}
+Thus update $H+1$ is the first to use an adaptive rate. Only the previous
+$H$ moments enter, excluding the loss being processed now. If their sum
+is zero, retain the previous finite rate. Larger recent second moments
+give a smaller rate, moderating the response to large losses.
+
+With common weights, use~\eqref{eq:adaptive-expert-rate} without
+$\alpha$ and with $M_r$. Each expert's loss is averaged over levels
+\emph{before} it is squared in~\eqref{eq:expert-loss-moments}; the result
+is not the mean of the per-level second moments. Per-level weighting
+maintains a separate weight vector, moment history and adaptive rate
+for each $\alpha$. Common weighting maintains one of each and learns a
+compromise across levels; its weights are not an average of separately
+learned per-level weights.
+
+\paragraph{Later starts and implementation.}
+For restart banks, only experts that issued the released forecast are
+eligible for its update. Apply the formulas to their weights normalized
+to sum to one, then restore their original total mass; other experts
+keep their mass. Use the number of eligible experts in the rate formula.
+Each newly admitted expert receives $1/K$ of the enlarged active bank's
+mass, preserving the relative weights of incumbents. Updates with fewer
+than two eligible experts do not count toward $H$. These rules are
+implemented in \texttt{exp\_weights()} in \texttt{R/03\_functions.R}.
+The formulas describe ordinary weighting. The phase-specific extension
+can also multiply losses by an issuance-time context weight; its
+second moments use those multiplied losses, zero-weight feedback is
+skipped, and its sharing fraction is adjusted to the same exposure.
+
+\subsubsection{Expert loss normalization}
+\label{sec:expert-loss-normalization}
+Using the quantile loss in~\eqref{eq:quantile-loss}, define one reference loss
+per case and delay:
+\begin{equation}
+ L_0=\max\!\left\{\varepsilon_L,
+ \frac{1}{20|\A|}\sum_{s\in I_{20}^{(d)}}\sum_{\alpha\in\A}
+ \rho_\alpha\!\left(\frac{b_s^\alpha}{c_{\mathrm{scale}}},
+                    \frac{\bar y_s^{(d)}}{c_{\mathrm{scale}}}\right)\right\},
+ \qquad\varepsilon_L=10^{-6}.
+ \label{eq:expert-reference-loss}
+\end{equation}
+Previously, expert weighting used unnormalized quantile losses. Now
+\eqref{eq:normalized-expert-loss} expresses every expert's loss relative
+to this initial base loss. A value of $0.8$ means 80\% of the base's
+initial mean loss, not necessarily a 20\% improvement over the base in
+the current week. Normalized losses can exceed one. These weighting
+losses remain on the natural count scale even for a log tracker.
+
+\paragraph{Initial and fixed-rate weight updates.}
+The exponent in an update is $-\lambda L_{k,n}^\alpha/L_0$ for
+per-level weights, or $-\lambda L_{k,n}/L_0$ for common weights.
+The common divisor preserves expert rankings but makes the response
+depend on loss gaps relative to initial base performance. Quantile loss
+scales linearly with a positive change of units; the current loss and
+$L_0$ therefore scale together. The normalized losses and weight path
+are unchanged, provided the numerical floor is inactive.
+
+This matters throughout a fixed-rate run and during the first $H$
+updates of a learned-rate run, which use $\lambda_{\mathrm{start}}$.
+Those $H$ updates are distinct from the 20 feedback rows used to
+estimate $L_0$. For example, two equally weighted experts with losses
+$80$ and $100$, $L_0=100$ and $\lambda_{\mathrm{start}}=1$ receive
+weights about $0.55$ and $0.45$ before sharing. Using those raw losses
+with the same numerical starting rate would put almost all weight on
+the first expert after one update.
+
+\paragraph{Effect on adaptive learning rates.}
+After $H$ updates, the rule in~\eqref{eq:adaptive-expert-rate} already
+adapts to loss magnitude. Conditional on identical previous weights and
+a positive moment sum, normalization gives, separately at each level,
+\begin{align}
+ M_r^{\alpha,\mathrm{norm}}
+ &=M_r^{\alpha,\mathrm{raw}}/L_0^2,
+ &\lambda_n^{\alpha,\mathrm{norm}}
+ &=L_0\lambda_n^{\alpha,\mathrm{raw}},\notag\\
+ \lambda_n^{\alpha,\mathrm{norm}}\ell_{k,n}^\alpha
+ &=\lambda_n^{\alpha,\mathrm{raw}}L_{k,n}^\alpha.
+ \label{eq:expert-normalization-cancellation}
+\end{align}
+The same identity holds for common weights after omitting $\alpha$.
+The reciprocal changes in the adaptive rate and loss cancel, so the
+exponential update is the same under that comparison. If $L_0<1$,
+normalization increases losses and decreases the adaptive rate;
+if $L_0>1$, it does the reverse. This does not
+make two runs with the same numerical starting rate identical:
+normalization can change their first $H$ weight updates, and those
+weights affect both later second moments and subsequent updates.
+Equivalent raw and normalized runs require
+$\lambda_{\mathrm{start}}^{\mathrm{raw}}
+=\lambda_{\mathrm{start}}^{\mathrm{norm}}/L_0$ and otherwise matching
+settings. If a moment sum is zero, the code retains the previous rate;
+equivalence then also requires those retained rates to be scaled alike.
+
+We keep $L_0$ normalization throughout learned-rate runs. It standardizes
+initialization and keeps stored moments and incoming losses in the same
+units. Switching it off after $H$ updates without converting the stored
+moments and rates would make those units inconsistent. For learned
+rates, it is not an additional reduction in update strength once the
+adaptive rule compensates for it.
+
+\paragraph{Effect across quantile levels and re-runs.}
+The single $L_0$ is pooled across levels; it is not a separate baseline
+for each $\alpha$ and does not equalize their typical losses. With
+per-level weights, $\ell_{k,n}^\alpha$ drives that level's own update,
+and its own second moments determine $\lambda_n^\alpha$ after
+initialization. With common weights, the mean $\ell_{k,n}$ drives one
+update and one adaptive rate, as described in
+Section~\ref{sec:adaptive-expert-weighting}.
+During a re-run, losses use the current reports and reconstructed
+expert forecasts, while $L_0$ stays at its stateful value. Normalization
+sets the scale of learning; it does not guarantee better accuracy or
+calibration, and evaluation losses are not divided by $L_0$.
+
+\clearpage
+\subsubsection{Expert combinations implemented in the code}
+\label{sec:expert-combinations}
+\label{sec:phase-specific-experts}
 \label{sec:shared-quantile-weights}
+Table~\ref{tab:expert-combinations} collects the 12 mixtures and five
+outer-MultiQT variants selected by \texttt{apply\_methods()} in
+\texttt{R/03\_functions.R} for scripts 04 and 05. Adaptive rates follow
+\eqref{eq:adaptive-expert-rate}; fixed rates are tuned before evaluation
+and then held constant within a run. Both update the expert weights.
+Equal averaging uses $\lambda=0$, so weight learning and sharing are
+inactive. ``Per quantile'' means a separate weight vector at each level;
+``common'' means the same learned vector at every level.
+
+\begingroup
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.18}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{.31\textwidth}
+ >{\raggedright\arraybackslash}p{.14\textwidth}
+ >{\raggedright\arraybackslash}p{.19\textwidth}
+ >{\raggedright\arraybackslash}p{.10\textwidth}
+ >{\raggedright\arraybackslash}p{.15\textwidth}@{}}
+\caption{Current expert combinations. Bank names and outer corrections
+are described below. ``Sharing'' redistributes mass among experts.}
+\label{tab:expert-combinations}\\
+\toprule
+Method ID & Expert bank & Weighting rate & Sharing & Level weights\\
+\midrule
+\endfirsthead
+\multicolumn{5}{l}{\tablename\ \thetable\ (continued)}\\
+\toprule
+Method ID & Expert bank & Weighting rate & Sharing & Level weights\\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+\multicolumn{5}{@{}l}{\textbf{Persistent rate bank}}\\
+\texttt{uniform} & Rate & Equal & -- & Identical\\
+\texttt{weighted} & Rate & Adaptive & No & Per quantile\\
+\texttt{weighted\_common} & Rate & Adaptive & No & Common\\
+\texttt{shared} & Rate & Adaptive & Yes & Per quantile\\
+\texttt{shared\_common} & Rate & Adaptive & Yes & Common\\
+\addlinespace
+\multicolumn{5}{@{}l}{\textbf{Weekly restart banks}}\\
+\texttt{restart\_uniform} & Restart--1 & Equal & -- & Identical\\
+\texttt{restart\_weighted} & Restart--1 & Fixed, tuned & Yes & Per quantile\\
+\texttt{restart\_grid} & Restart grid & Fixed, tuned & Yes & Per quantile\\
+\addlinespace
+\multicolumn{5}{@{}l}{\textbf{Diverse bank and context-dependent combination}}\\
+\texttt{diverse\_uniform} & Diverse & Equal & -- & Identical\\
+\texttt{diverse\_shared} & Diverse & Adaptive & Yes & Per quantile\\
+\texttt{diverse\_shared\_common} & Diverse & Adaptive & Yes & Common\\
+\texttt{diverse\_soft\_switch} & Diverse & Adaptive in each context & Yes & Common in each context\\
+\addlinespace
+\multicolumn{5}{@{}l}{\textbf{Mixtures followed by an outer MultiQT}}\\
+\texttt{shared\_outer} & Rate & Adaptive & Yes & Per quantile\\
+\texttt{shared\_common\_outer} & Rate & Adaptive & Yes & Common\\
+\texttt{restart\_uniform\_outer} & Restart--1 & Equal & -- & Identical\\
+\texttt{restart\_weighted\_outer} & Restart--1 & Fixed, tuned & Yes & Per quantile\\
+\texttt{restart\_grid\_outer} & Restart grid & Fixed, tuned & Yes & Per quantile\\
+\end{longtable}
+\endgroup
+
+\paragraph{Expert banks.}
+The following bank sizes and numerical values are the current defaults
+in \texttt{multiqt\_settings()} and \texttt{method\_parameters()}.
+Tuned values can differ by method, disease, tracker and feedback design.
+\begin{itemize}[leftmargin=*,itemsep=4pt]
+ \item \textbf{Rate:} 11 persistent MultiQT experts, all starting in
+ the first round, with $\eta=\kappa S_0$ and
+ $\kappa\in\{0,.01,.015,.02,.03,.05,.075,.1,.15,.2,.3\}$.
+ The zero-rate expert reproduces the base forecast.
+ \item \textbf{Restart--1 and restart grid:} fresh MultiQT copies start
+ at every issue week after warmup; with successful initialization and
+ warmup replay, starts begin in the first round. Restart--1 uses $\kappa=.05$;
+ the grid uses $\kappa\in\{.01,.05,.2\}$ at every start. Each copy
+ starts from the base and learns only from feedback on its own forecasts.
+ These banks grow over time and have no permanent zero-rate base expert.
+ \item \textbf{Diverse:} eight experts: the base; slow MultiQT; slow
+ MultiQT with a leaky shift; three growth-adjusted starting forecasts
+ with damping coefficients $-.5,.5,1$; and two width-adjusted forecasts
+ with factors $.75,1.5$ around the base median. Every non-base expert
+ has its own slow MultiQT correction, with default $\eta=.008S_0$.
+ Growth adjustments use $\log(1+x)$ and the latest released report;
+ the negative damping coefficient extends the implied growth.
+ Width adjustments use tracker units. The three ordinary diverse
+ mixtures can have different tuned slow rates.
+\end{itemize}
+
+\paragraph{How phase information enters.}
+\texttt{diverse\_soft\_switch} learns two common-weight distributions
+over the same diverse experts. At issuance, it combines them as
+\begin{equation}
+ w_{k,t}^{\mathrm{mix}}
+ =(1-G_t)w_{k,t}^{B}+G_t w_{k,t}^{D}.
+ \label{eq:soft-switch-expert-combination}
+\end{equation}
+The gate uses information available at that issue cutoff: the shape of
+the base forecast path, changes in nowcasts, and changes between
+forecasts for the same target. It describes declining context rather
+than a known peak date or a probability of having passed the peak.
+When feedback for row $s(n)$ arrives, the baseline and declining banks
+use losses multiplied by $2(1-G_{s(n)})$ and $2G_{s(n)}$, respectively.
+The saved issuance-time gate determines this update; each bank has its
+own adaptive rate and context-scaled moments. With switch strength
+zero, $G_t=.5$ and the method equals
+\texttt{diverse\_shared\_common} when their settings match. By default,
+the soft switch inherits that comparator's tuned expert bank.
+
+\paragraph{Outer corrections and the restart control.}
+Each \texttt{\_outer} method takes the mixture with the same name
+without that suffix and adds a further MultiQT correction. The table
+describes its inner mixture. The outer tracker learns from its own
+final forecasts, with continuous offsets even when new restart experts
+join. Its default rate is $.004S_0$, tuned after the inner mixture.
+The related \texttt{restart\_persistent} control keeps only the first
+Restart--1 expert; it is a single tracker, not an expert combination.
+
+\paragraph{Which settings are tuned.}
+The four learned rate-bank mixtures tune $H$. The two learned restart
+mixtures tune their fixed \texttt{restart\_lambda}; the default is
+$2.72$. The ordinary diverse mixtures tune their slow tracker rate.
+Soft-switch tuning selects gate strength, threshold, width and three
+signal weights in sequence. Outer methods tune their added correction
+rate. Adaptive weighting starts at $\lambda_{\mathrm{start}}=2.72$
+with default $H=8$ unless overridden; sharing uses $\gamma=1/(2H)$.
+Equal weights remain identical across levels even though the code stores
+them in per-level columns. All combinations use the same loss and
+feedback conventions described above.
 
 \clearpage
 \begin{thebibliography}{3}
