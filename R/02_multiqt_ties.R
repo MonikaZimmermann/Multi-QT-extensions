@@ -7,11 +7,7 @@ source("R/03_functions.R")
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
 # The plots go through every disease, horizon and feedback design (designs), the locations
-# of multiqt_settings() and, where a plot can pool them, all locations except the US. The
-# single files multiqt_by_level.pdf and multiqt_season_forecasts.pdf show one combination
-# (the pages the notes load): the design of multiqt_settings() and, for the season forecasts,
-season_disease <- "covid"                 # this disease ("covid" or "flu")
-season_horizon <- 2                       # and horizon (-1, 0, 1, 2 or 3).
+# of multiqt_settings() and, where a plot can pool them, all locations except the US.
 # Descriptive CMU path page only: each location's largest peak in the selected season
 # and half season (winter: October to March, summer: April to September).
 path_season <- c(covid = "2024/25", flu = "2024/25")
@@ -24,8 +20,6 @@ diseases <- c("covid", "flu")
 designs <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
 design_names <- with(designs, ifelse(revisions, "re-run", paste("delay", delay)))
 design_files <- gsub("[ -]", "", design_names)          # File names: "delay0", "rerun".
-default_design <- which(designs$delay == settings$feedback_delay &
-  designs$revisions == settings$feedback_revisions)
 design_of <- function(rows) ifelse(rows$feedback_revisions, "re-run",
   paste("delay", rows$feedback_delay))
 cores <- max(1L, parallel::detectCores() - 2L)
@@ -184,10 +178,6 @@ all_scores$design <- design_of(all_scores)
 all_scores_by_level$design <- design_of(all_scores_by_level)
 write.csv(all_scores, file.path(result_dir, "multiqt_phase_rate_tradeoffs_all_locations.csv"),
   row.names = FALSE)
-print(scores[scores$disease == season_disease & scores$horizon == season_horizon &
-  scores$design == design_names[default_design] & scores$phase == "overall" &
-  scores$multiplier %in% display_multipliers,
-  c("location", "multiplier", "n_weeks", "quantile_loss", "coverage_error")], row.names = FALSE)
 
 # 3. PLOT SETTINGS ---------------------------------------------------
 score_units <- count_scale_label(settings$scale_method)
@@ -422,8 +412,7 @@ for (disease in diseases) for (k in seq_len(nrow(designs)))
 dev.off()
 
 # The same comparison for each quantile level: one PDF per feedback design in
-# multiqt_by_level/, one page per disease and level, first row every location except the US;
-# multiqt_by_level.pdf: the design of multiqt_settings().
+# multiqt_by_level/, one page per disease and level, first row every location except the US.
 # Averaging levels hides which quantiles struggle; CE here is |coverage - alpha| itself.
 dir.create(file.path(figure_dir, "multiqt_by_level"), showWarnings = FALSE)
 for (k in seq_len(nrow(designs))) {
@@ -437,8 +426,6 @@ for (k in seq_len(nrow(designs))) {
   }
   dev.off()
 }
-file.copy(file.path(figure_dir, "multiqt_by_level", paste0(design_files[default_design], ".pdf")),
-  file.path(figure_dir, "multiqt_by_level.pdf"), overwrite = TRUE)
 
 # 6. LOSS AND CALIBRATION ALONG THE GRID: ONE PAGE PER LOCATION ----------
 # Per feedback design: first all locations except the US pooled (on the multipliers drawn
@@ -543,8 +530,7 @@ plot_season_diagnostic <- function(case, values, limits, y_label, title, ticks,
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
 # One PDF per disease, horizon and feedback design in multiqt_season_forecasts/, one page
-# per location; multiqt_season_forecasts.pdf: season_disease, season_horizon and the design
-# of multiqt_settings().
+# per location.
 draw_season_pages <- function(disease, horizon, k) {
   cairo_pdf(file.path(figure_dir, "multiqt_season_forecasts", paste0(disease, "_horizon",
     horizon, "_", design_files[k], ".pdf")), width = 18, height = 15, family = "DejaVu Sans")
@@ -608,8 +594,5 @@ draw_season_pages <- function(disease, horizon, k) {
 dir.create(file.path(figure_dir, "multiqt_season_forecasts"), showWarnings = FALSE)
 for (k in seq_len(nrow(designs))) for (disease in diseases) for (horizon in settings$horizons)
   draw_season_pages(disease, horizon, k)
-file.copy(file.path(figure_dir, "multiqt_season_forecasts", paste0(season_disease, "_horizon",
-  season_horizon, "_", design_files[default_design], ".pdf")),
-  file.path(figure_dir, "multiqt_season_forecasts.pdf"), overwrite = TRUE)
 # Compare loss/coverage with these curves: do larger multipliers leave forecasts too high,
 # too low, or unstable after the peak? This motivates future adaptive rates.

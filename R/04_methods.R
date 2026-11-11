@@ -607,11 +607,6 @@ if (any(failed)) stop("Plots of ", paste(unlist(combinations[which(failed)[1], ]
   collapse = " "), " failed: ", if (is.null(plotted[[which(failed)[1]]])) "no result (memory?)"
   else plotted[[which(failed)[1]]])
 saveRDS(plotted[[saved]]$runs, file.path(result_dir, "issued_forecasts.rds"))
-# The saved combination also keeps the single files (multiqt_method_forecasts.pdf, ...),
-# whose pages notes/ loads.
-for (folder in plot_folders) if (file.exists(file.path(figure_dir, folder, combination_file(saved))))
-  file.copy(file.path(figure_dir, folder, combination_file(saved)),
-    file.path(figure_dir, paste0(folder, ".pdf")), overwrite = TRUE)
 results <- lapply(setNames(names(plotted[[1]]$results), names(plotted[[1]]$results)),
   function(table) do.call(rbind, lapply(plotted, function(p) p$results[[table]])))
 
