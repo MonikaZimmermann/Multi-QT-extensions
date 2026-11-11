@@ -200,8 +200,7 @@ plot_title <- function(run) paste(run$case$disease, "| horizon", run$case$horizo
   run$case$location_name, paste0("(", run$case$location, ")"), "| evaluation:",
   evaluation_label, "|",
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
-  "| feedback", feedback_label(run$case$feedback_delay, run$case$feedback_revised),
-  paste0("(", feedback_protocol()$id, ")"))
+  "| feedback", feedback_label(run$case$feedback_delay, run$case$feedback_revised))
 # Plots leave out a method whose identical twin is drawn in the same plot.
 shown_methods <- function(run, methods) {
   twins <- run$duplicate_of[names(run$duplicate_of) %in% methods]
@@ -743,7 +742,7 @@ draw_tradeoff_pages <- function(disease) {
       paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
         "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
         " (all: output/results/tuning)."),
-      paste0("Feedback protocol ", feedback_protocol()$id, ": Wednesday issue cutoffs (actual ",
+      paste0("Feedback: Wednesday issue cutoffs (actual ",
         "generation dates where known); S0 and the weighting loss scale from the first ",
         settings$warmup_rounds, " released rows in hindsight, frozen for the re-runs."),
       # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
@@ -823,7 +822,7 @@ draw_tradeoff_pages <- function(disease) {
       side = 3, outer = TRUE, line = .5, at = (j - .5) / length(settings$horizons), font = 2,
       cex = 1.2)
     mtext(tradeoff_title(location), side = 3, outer = TRUE, line = 5.9, font = 2, cex = 1.45)
-    mtext(paste0("Rows: feedback design (protocol ", feedback_protocol()$id, "; delay d: learn ",
+    mtext(paste0("Rows: feedback design (delay d: learn ",
       "once, d weeks after the first report, from the report current then; re-run: re-run ",
       "every week on the reports known then) and window; columns: horizon."), side = 3,
       outer = TRUE, line = 3.9, cex = 1.05)

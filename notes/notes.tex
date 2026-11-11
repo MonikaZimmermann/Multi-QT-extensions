@@ -37,141 +37,45 @@
 
 \section{Notation}
 \label{sec:notation}
-\begingroup\fontsize{9.5}{11.2}\selectfont
 Unless stated otherwise, fix one disease, location and forecast horizon.
 
-\paragraph{Forecasts, loss and projection.}
-Indices $s,t$ order reference weeks (\texttt{reference\_date}, Saturday);
-$j$ can denote a historical step in a re-run. Outcome $y_t$ belongs to
-the target week of $q_t$, identified by \texttt{target\_end\_date} in
-the forecasts and \texttt{target\_date} in prepared cases.
-For levels $\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$, let
-$b_t=(b_t^\alpha)_{\alpha\in\A}$ and $q_t=(q_t^\alpha)_{\alpha\in\A}$
-be the base and recalibrated forecasts. Values are in outcome units
-(hospital counts) unless a transformation is shown.
-The methodological recursions forecast, observe $y_t$, then update;
-the coding section replaces this timing by delayed or revised feedback.
-With $x_+=\max(x,0)$ and indicator $\ind\{\cdot\}$, quantile loss is
+\paragraph{Forecasts.}
+The index $t$ labels a forecast round (reference week), and $y_t$ is
+the outcome for its target week. Use $s$ for an earlier round.
+At quantile levels $\A=\{\alpha_1<\cdots<\alpha_m\}\subset(0,1)$,
+$b_t^\alpha$ is the base forecast and $q_t^\alpha$ the recalibrated
+forecast. The vectors $b_t,q_t\in\R^m$ collect all levels. Values are
+hospital counts unless a transformation is shown.
+
+\paragraph{Coverage and loss.}
+Write $\ind\{\cdot\}$ for an indicator and $x_+=\max(x,0)$.
+Coverage at level $\alpha$ is
+$\cov_t^\alpha=\ind\{y_t\le q_t^\alpha\}$, with target $\alpha$.
+Quantile loss, with prediction $z$ first and observation $r$ second, is
 \begin{equation}
- \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+,
+ \rho_\alpha(z,r)=\alpha(r-z)_++(1-\alpha)(z-r)_+.
  \label{eq:quantile-loss}
 \end{equation}
-with prediction first and observation second. Assume $b_t\in\K$, where
+
+\paragraph{Ordering and states.}
+Forecasts must be nondecreasing across levels. Write
 \[
- \K=\{q\in\R^m:q^{\alpha_1}\le\cdots\le q^{\alpha_m}\},\qquad
+ \K=\{q\in\R^m:q^{\alpha_1}\le\cdots\le q^{\alpha_m}\},
+\]
+and assume $b_t\in\K$. Projection onto a nonempty closed convex set
+$C$ means the nearest point in Euclidean distance:
+\[
  \Pi_C(x)=\argmin_{z\in C}\norm{z-x}^2.
 \]
-Here $C$ is nonempty, closed and convex, and $\norm{\cdot}$ is Euclidean.
-For positive-definite $W$,
-$\Pi_\K^W(v)=\argmin_{q\in\K}(q-v)^\top W(q-v)$.
-$Q_p$ is an empirical $p$-quantile, $I$ the identity matrix, and
-$\operatorname{clip}_{[a,b]}(x)=\min\{b,\max\{a,x\}\}$.
+A tilde marks hidden accumulated state; the untilded state is its
+projected version. Standard offsets use $\tilde\theta_t,\theta_t$;
+studentized offsets use $\tilde u_t,u_t$. Superscripts $\std,\stu$
+distinguish these methods, and $\eta$ or $\eta_t$ is the step size.
 
-\paragraph{Scores and states.}
-$S_t(y)$ is a score, $r_t=S_t(y_t)$ its observed value and $c_t$ its
-threshold. Target coverage is $\alpha$, target miscoverage is
-$\delta=1-\alpha$, and $\cov_t^\alpha=\ind\{y_t\le q_t^\alpha\}$.
-Superscripts $\std,\stu$ distinguish standard and studentized methods.
-A tilde marks hidden accumulated state; the untilded state is used
-after projection. Offsets $\tilde\theta_t,\theta_t$ are in outcome
-units in the theory and in the selected tracker units in the code;
-$\tilde u_t,u_t$ are in studentized units. Positive finite scales form
-$A_t=\diag(\sigma_t^{\alpha_1},\ldots,\sigma_t^{\alpha_m})$;
-$\sigma_t$ is common to levels and $\sigma$ is constant.
-The step is $\eta$ or $\eta_t$, and $\kappa$ is a rate multiplier
-(\texttt{multiplier}, labelled $m$ in script 02, distinct from $m=|\A|$).
-$g_\alpha$ is the selected subgradient in~\eqref{eq:score-gradient}.
-
-\paragraph{Reports and feedback.}
-$\iota_t$ is the information cutoff: normally the Wednesday of the
-reference week, or the actual generation date where known.
-$y_s^{[v]}$ is the latest report for the target week of $q_s$ dated on
-or before cutoff date $v$ (archive field \texttt{version}). A valid
-report is finite and nonnegative; $\nu_s$ is its first valid publication
-date and $d$ the additional delay in calendar weeks.
-$m_s^{(d)},\tau_d(s),\mathcal R_t^{(d)}$ are the maturity date,
-consuming-round index and rows consumed before forecasting at $t$;
-see~\eqref{eq:feedback-maturity}--\eqref{eq:feedback-release-set}.
-$I_{20}^{(d)}$ contains the first 20 consumed rows in release order, with
-\begin{equation}
- \bar y_s^{(d)}=y_s^{[\iota_{\tau_d(s)}]},\qquad \tau_d(s)\text{ exists}.
- \label{eq:initial-feedback-values}
-\end{equation}
-For forecasts and states, $[t]$ instead identifies the re-run at
-reference-week index $t$: $q_s^{[t]}$ is its reconstructed forecast for
-row $s$. Feedback follows the cutoff convention, with the retrospective
-initialization qualification in Section~\ref{sec:tuning-initialization}.
-$\mathcal F_t^{(d)}=\bigcup_{j\le t}\mathcal R_j^{(d)}$ contains all
-consumed rows; $\mathcal F_{t,20}^{(d)}$ and $\mathcal H_t^{(d)}$
-contain the last 20 and five, respectively, or fewer if unavailable.
-
-\paragraph{Implementation.}
-The tracker transform is $\psi(x)=x$ or $\log(1+x)$, with
-$\beta_t^\alpha=\psi(b_t^\alpha)$ and centre $a_t^\alpha$ equal to
-the full base or its median. $\Phi$ is the standard normal distribution
-function. Base residuals are
-$e_s^\alpha=\psi(\bar y_s^{(d)})-\beta_s^\alpha$; raw scale estimates
-have a hat and bounded scales do not. The earlier paired-width method
-uses $a_\alpha=\min(\alpha,1-\alpha)$, with the nearest lower grid
-level at $.5$.
-The count divisor $c_{\mathrm{scale}}$ is population/$100{,}000$ by
-default; $c_{\mathrm{pop}}$ always uses that divisor.
-$S_0$ (initial error scale) and $L_0$ (expert loss normalization), with
-floors $\varepsilon_S,\varepsilon_L$, are defined in
-\eqref{eq:initial-error-scale} and~\eqref{eq:expert-reference-loss}.
-$S_0$ is distinct from the score function $S_t$.
-Square-root benchmarks use transform $\chi$, projected forecast
-$\xi_t$, fast/slow states $\tilde\theta_t^F,\tilde\theta_t^S$ and
-released coverage-error sum $\epsilon_t^\alpha$.
-The leaky expert has common log-scale shift $v_t$; $\Delta_t$ is elapsed
-calendar weeks since the previous reference date, at least one.
-
-\paragraph{Experts and weighting.}
-$f_{k,t}^\alpha$ is the forecast of expert $k$. Update index $n$ counts
-processed feedback, with forecast row $s(n)$ and report $Y_n$.
-For $K$ experts, $w_{k,n}^\alpha$ and $\lambda_n^\alpha$ are the
-pre-update weight and rate; $\bar w_{k,n+1}^\alpha$ is the weight after
-the exponential step and before sharing. Common weights omit $\alpha$.
-$\hat q$ is the mixture before crossing repair; time indices may be
-suppressed for one update. Losses $L_{k,n}^\alpha$ are unnormalized,
-$\ell_{k,n}^\alpha$ normalized; omitting $\alpha$ denotes their mean
-over levels. Weighted variances are $M_n^\alpha$ or $M_n$, lookback is
-$H$, starting rate is $\lambda_{\mathrm{start}}$, and sharing fraction
-is $\gamma$. Superscripts $\mathrm{raw},\mathrm{norm}$ distinguish
-calculations without and with $L_0$ normalization.
-$K_{\mathrm{recent}}$ is the number of recent weekly starts in the
-equal mixture, and $\mathcal B_t$ their set.
-$S_{k,t}^\alpha(y)$ is the residual score of bank member $k$.
-
-For the target signal, $Z(t,h;v)$ is $\log(1+\text{base median})$ at
-reference date $t$ and horizon $h$, if finite, nonnegative, available
-by $v$ and not filled; otherwise it is missing. Write
-$Z_{t,h}=Z(t,h;\iota_t)$. Signal $D_{t,h}$ gives context
-$c_{t,h}^{\mathrm{ctx}}\in\{0,1\}$ and gate $G_{t,h}^T\in[0,1]$,
-the weight of the original in \texttt{score\_gated}. Its threshold
-$\delta_G$ and width $w_T$ are distinct from miscoverage $\delta$.
-
-\paragraph{Diagnostics and evaluation.}
-For the report screen only, $u$ indexes target weeks,
-$z_u^{[v]}=\log(1+y_u^{[v]})$, and
-$d_u^{[v]}=z_u^{[v]}-z_{u-1}^{[v]}$; historical median, scaled MAD
-and predicted log count are $\mu_u^{[v]},s_u^{[v]},\widehat z_u^{[v]}$.
-For evaluation, $y_t^\star$ is the latest archived count, $T_t$ the
-target date, $p(t)$ the nearest retained peak date (earlier at a tie),
-and $u_t^{\mathrm{peak}}=(T_t-p(t))/7$.
-$E$ contains evaluation rows with finite truth; $W$ is a selected
-window and $N=|W|$. $\mathcal L_{j,c}$ and $\mathrm{CE}_{j,c}$ are
-mean quantile loss and calibration error for method $j$ in case $c$;
-$j=0$ is the original. A case fixes location, horizon and feedback
-design within a disease; $\mathcal C$ is a set of $J$ cases.
-Tuning candidate $\vartheta$ has mean loss
-$\overline{\mathcal L}_j(\vartheta)$ over tuning cases, with
-$\overline{\mathcal L}_0$ for the original.
-For peak detection, $x_i$ are retained latest counts in date order,
-$z_i$ their smoothed values, $P_i$ prominence, and $l_i,r_i$ the
-nearest strictly higher smoothed positions (or series ends).
-$X$ is the largest retained count on a forecast target date.
-\endgroup
+The methodological recursions forecast, observe $y_t$, then update.
+Delayed reports and revisions are introduced in
+Section~\ref{sec:feedback-designs}; implementation, weighting and
+evaluation symbols are defined where they are used.
 
 \clearpage
 \section{Methodological notes}
@@ -194,6 +98,8 @@ forecast but updates the unprojected state:
  &=\tilde\theta_t^\alpha-\eta(\cov_t^{\std,\alpha}-\alpha).
  \label{eq:standard-update}
 \end{align}
+For a score $S_t(y)$, let $r_t=S_t(y_t)$ be its observed value,
+$c_t$ its threshold and $\delta=1-\alpha$ the target miscoverage.
 The scalar score tracker of Angelopoulos et al.~\cite{pid} uses
 \begin{equation}
  \mathcal P_t=\{y:S_t(y)\le c_t\},\qquad
@@ -259,8 +165,10 @@ quantile tracking. For several levels, evaluate the subgradient at the
 projected state and apply it to the hidden state.
 
 \subsubsection{Studentized residuals and their objective}
-Choose positive scales from information available at the forecast
-cutoff and hold them fixed when differentiating:
+Choose finite, positive scales $\sigma_t^\alpha$ from information
+available at the forecast cutoff and hold them fixed when differentiating.
+Offsets $u_t^\alpha$ are in studentized units, whereas $\theta_t^\alpha$
+is in outcome units. Define
 \begin{equation}
  S_t^{\stu,\alpha}(y)=\frac{y-b_t^\alpha}{\sigma_t^\alpha},\qquad
  r_t^{\stu,\alpha}=\frac{y_t-b_t^\alpha}{\sigma_t^\alpha}.
@@ -317,7 +225,8 @@ Ordering always concerns the returned forecasts. For standard residuals,
  &\le b_t^{\alpha_{i+1}}-b_t^{\alpha_i},\qquad i=1,\ldots,m-1.
  \label{eq:standard-adjacent}
 \end{align}
-For studentized residuals,
+For studentized residuals, collect the scales in
+$A_t=\diag(\sigma_t^{\alpha_1},\ldots,\sigma_t^{\alpha_m})$. Then
 \begin{equation}
  C_t^\stu=\{u:b_t+A_tu\in\K\}=A_t^{-1}(\K-b_t).
  \label{eq:student-constraint}
@@ -336,7 +245,9 @@ Changing variables to $q=b_t+A_tu$ yields weighted isotonic regression:
  {(\sigma_t^\alpha)^2},
  \label{eq:weighted-projection}
 \end{equation}
-or equivalently,
+For positive-definite $W$, write
+$\Pi_\K^W(v)=\argmin_{q\in\K}(q-v)^\top W(q-v)$ for weighted
+projection. Then the equivalent projection identity is
 \begin{equation}
  b_t+A_t\Pi_{A_t^{-1}(\K-b_t)}(\tilde u_t)
  =\Pi_\K^{A_t^{-2}}(b_t+A_t\tilde u_t).
@@ -346,7 +257,8 @@ Weights $1/(\sigma_t^\alpha)^2$ follow from Euclidean projection in
 score coordinates; ordinary residual coordinates give equal weights.
 
 \subsubsection{Common and constant scales}
-For $A_t=\sigma_t I$, positive scalar multiplication preserves $\K$:
+For a scale $\sigma_t$ common to all levels, $A_t=\sigma_t I$, where
+$I$ is the identity matrix. Positive scalar multiplication preserves $\K$:
 \begin{equation}
  C_t^\stu=\K-b_t/\sigma_t,\qquad
  q_t^\stu=\Pi_\K(b_t+\sigma_t\tilde u_t).
@@ -374,43 +286,97 @@ require a separate formulation.
 \clearpage
 
 \section{Coding Updates}
+The tracker transform is $\psi(x)=x$ or $\log(1+x)$, with transformed
+base $\beta_t^\alpha=\psi(b_t^\alpha)$. Offsets $\theta_t$ are in these
+tracker units. The count divisor $c_{\mathrm{scale}}$ used for scoring
+is population/$100{,}000$ by default.
+
 \subsection{Data}
 \label{sec:data-preparation}
-Script 00 downloads and generates base forecasts; script 01 prepares
-cases from the CMU--TimeSeries hub quantiles and dated NHSN reports.
+Script 00 downloads CMU--TimeSeries hub forecasts and dated NHSN reports,
+and generates our own base forecasts where the required inputs are available.
+Script 01 prepares cases (one disease, location and forecast horizon)
+from the selected base forecasts and reports.
 Cases retain generation cutoffs, revisions, feedback schedules for
-delays 0--4, populations and filled-forecast flags. New data, tuned
-settings and scores carry \texttt{latest-at-use-v2}; readers reject
-missing or mismatched protocol tags.
+delays 0--4, populations and filled-forecast flags.
 
-\paragraph{Data designs.}
-The active \texttt{hub\_first\_months} design uses both diseases from
-23 November 2024. Target dates determine periods: tuning through
-31 May 2025, then evaluation within the October--September seasons
-2024/25 and 2025/26. Plotted weeks outside these seasons are not scored.
-``Latest'' means the latest archived report, through 30 October 2026;
-it does not imply that further revisions are impossible.
+Reference weeks are Saturdays (\texttt{reference\_date}); the target
+week of $y_t$ is \texttt{target\_end\_date} in forecasts and
+\texttt{target\_date} in prepared cases. The information cutoff
+$\iota_t$ is normally the Wednesday of the reference week, or the actual
+generation date where known. Write $y_s^{[v]}$ for the latest report
+for the target week of row $s$, dated on or before cutoff $v$
+(archive field \texttt{version}). A valid report is finite and nonnegative.
+``Latest counts'' means the latest reports in the downloaded archive,
+through 30 October 2026; further revisions remain possible.
 
-The \texttt{seasons} alternative starts on 14 October 2023, tunes on
-2023/24 and evaluates on 2024/25 and 2025/26. Own COVID forecasts have
-been generated with unchanged, pinned Delphi
-\texttt{windowed\_\allowbreak seasonal} code and packages, using solver
-\texttt{fn}. Flu still uses hub forecasts because own earlier forecasts
-require non-public Delphi auxiliary data. This extended design has not
-supplied the results below.
+\paragraph{Hub forecasts: the active design.}
+The \texttt{hub\_first\_months} design uses submitted CMU--TimeSeries
+forecasts for both diseases from reference date 23 November 2024.
+The stored quantiles are used subject to the cleaning and filling below;
+we do not refit them using latest counts. Feedback uses the report
+available at the relevant cutoff, while evaluation uses latest counts.
 
-Report versions begin with a retrospective bulk load on 19 November 2024.
-The earlier experiment therefore uses latest counts restricted to dates
-then observable. Feedback through target week 27 April 2024 also uses
-latest counts, with a synthetic Wednesday release after the target week
-and flag \texttt{synthetic\_final}; historical revisions are unavailable.
-Own horizon $-1$ forecasts have zero width because the target is already
-a predictor. No forecasts span the May--November 2024 reporting gap;
-stateful methods retain their state across it.
+Target dates determine the split: tuning through 31 May 2025, then
+evaluation from June 2025 through September 2026. A season means the
+\emph{full October--September year}, including summer. Overall scores
+use all available evaluation weeks; before/after-peak scores restrict
+these to the corresponding peak windows. Flu has long summer gaps in
+submitted forecasts, rather than an explicit winter-only evaluation rule.
+The flu winter 2024/25 peak belongs to tuning. Plotted target weeks after
+September 2026 are outside the evaluation period and are not scored.
+
+\paragraph{Own \texttt{windowed\_\allowbreak seasonal} forecasts: the longer-history alternative.}
+The \texttt{seasons} design starts on reference date 14 October 2023,
+tunes on 2023/24 and evaluates on 2024/25 and 2025/26, using the same
+October--September definition. Our COVID forecasts have been generated
+with unchanged, pinned Delphi code and packages. Flu still uses hub
+forecasts: we have not generated the corresponding own flu series.
+Earlier flu hub coverage is incomplete, especially at horizon $-1$;
+this is not a matched comparison of two locally generated base models.
+This alternative has not supplied the performance results below.
+
+\subparagraph{Why own flu forecasts are blocked.}
+The COVID training archive uses NHSN counts alone. Flu adds historical
+ILI+ and adjusted FluSurv-NET training rows, requiring eight missing CSVs
+from the non-public Delphi \path{aux_data/flusion_data/} folder:
+\path{flu_burden.csv}, \path{us_pop.csv}, and six WHO/NREVSS laboratory
+files (national, HHS-region and state series, before 2015/16 and from
+clinical laboratories). The first two support adjustments to FluSurv-NET
+hospitalization rates; the laboratory series support ILI+, combining
+influenza-like illness with influenza test positivity. Script 00 skips
+flu when these files are absent. This is a missing-input blocker, not an
+observed failure of the flu model. COVID does not require these inputs;
+the underlying surveillance data are not necessarily all private.
+
+\subparagraph{How earlier reports are reconstructed.}
+Report versions start with a retrospective bulk load on 19 November 2024,
+so the original reports available during 2023/24 cannot be recovered.
+For our earlier forecasts, we keep only past target weeks eligible at the
+generation date, but use their latest revised counts. Future target weeks
+are excluded; later revisions of past weeks are used in hindsight.
+Feedback for target weeks through 27 April 2024 likewise uses latest
+counts, assigned an assumed release on the following Wednesday and
+flagged \texttt{synthetic\_final}. This is not an exact replay of real-time
+information, and cannot assess the benefit of waiting for revisions in
+that earlier period. From 20 November 2024, our base forecasts use reports
+available at their generation dates. The active hub design does not use
+this synthetic earlier feedback.
+
+\subparagraph{Other limitations of the longer-history experiment.}
+These are not flu-specific. The generated COVID base has zero width at
+horizon $-1$: its target is already a predictor, so all quantiles coincide
+before recalibration. The default regression solver could stall in this
+case; using the production solver \texttt{fn} resolved that problem.
+Target weeks 4 May--2 November 2024 have incomplete reporting and are
+excluded from learning and scoring; our forecast schedule pauses across
+this gap. Stateful methods carry accumulated corrections and weights
+forward when rounds resume, rather than restarting. The missing report
+versions and this reporting gap also affect COVID, despite its available
+training inputs.
 
 \paragraph{Cleaning and filling.}
 \label{sec:data-issues}
-Forecast cleaning removes submissions, without correcting reported counts.
 \begin{enumerate}[leftmargin=*,itemsep=2pt]
 \item \textbf{Missing forecasts.} Fill gaps of at most six rounds from
 the most recent earlier forecast for the same target: horizon $h$ at
@@ -421,8 +387,7 @@ unfillable rounds remain absent.
 COVID 23 November 2024; COVID $h=-1$ on 25 April 2026; US flu 14 and
 21 December 2024 and 4 January 2025. Also remove all-zero submissions
 across every location and quantile of a disease--round--horizon
-(flu $h=-1$, 22 November 2025), then apply the same filling rule.
-There is no general magnitude-based forecast filter.
+(flu $h=-1$, 22 November 2025).
 \item \textbf{Missing reports.} If unpublished or currently invalid,
 stateful feedback waits and re-runs omit it; neither substitutes an
 older valid report. The active cohort has no stored missing values,
@@ -470,7 +435,10 @@ parameters. Forecasts are never averaged across locations.
 The experiment is in \path{agent/scripts/lib/report_screen.R}, with
 corrected results in \path{agent/outputs/report_screen_notes_audit/README.md}.
 At cutoff $v$, select the latest version before checking validity.
-For target week $u$, use up to eight preceding consecutive-week changes,
+In this screen, $u$ indexes target weeks. Write
+$z_u^{[v]}=\log(1+y_u^{[v]})$ and
+$d_u^{[v]}=z_u^{[v]}-z_{u-1}^{[v]}$.
+Use up to eight preceding consecutive-week changes,
 without bridging missing weeks. Given at least six valid changes and
 a valid previous target week,
 \begin{align}
@@ -495,12 +463,17 @@ errors; they do not change scoring truth.
 \subsection{Feedback}
 \label{sec:feedback-designs}
 \label{sec:delayed-feedback}
-Feedback follows the report and cutoff conventions in
-\hyperref[sec:notation]{Notation}, independently of the recalibration method.
+Feedback uses the latest report at each cutoff as defined in
+Section~\ref{sec:data-preparation}, independently of the recalibration
+method. Retrospective initialization is described in
+Section~\ref{sec:tuning-initialization}.
 
 \paragraph{Stateful learning.}
-Wait $d$ calendar weeks after the first valid report, then consume the
-newest report when valid at the next retained forecast cutoff with $t>s$:
+Let $\nu_s$ be the first valid publication date for row $s$.
+Wait $d$ calendar weeks, giving maturity date $m_s^{(d)}$, then consume
+the newest report when valid at the next retained forecast cutoff with
+$t>s$. Write $\tau_d(s)$ for that round and $\mathcal R_t^{(d)}$ for
+the rows consumed before forecasting at $t$:
 \begin{align}
  m_s^{(d)}&=\nu_s+7d\text{ days},
  \label{eq:feedback-maturity}\\
@@ -512,6 +485,11 @@ An invalid newest report postpones learning; an older version is never
 substituted. Use the report at actual consumption time $\iota_t$, even
 if a missing forecast delayed it beyond maturity. Each row is learned
 at most once; subsequent revisions are ignored.
+The report used for a consumed row is
+\begin{equation}
+ \bar y_s^{(d)}=y_s^{[\iota_{\tau_d(s)}]},\qquad \tau_d(s)\text{ exists}.
+ \label{eq:initial-feedback-values}
+\end{equation}
 Plain MultiQT on counts starts at $\tilde\theta_0=0$ and, once active,
 updates against previously returned forecasts before computing $q_t$:
 \begin{align}
@@ -527,6 +505,9 @@ The hidden state is unprojected; an empty release set gives no update.
 The \texttt{log1p} tracker applies the same rule in $\psi$ coordinates.
 
 \paragraph{Weekly re-run.}
+For forecasts and states, a superscript $[t]$ identifies the re-run at
+reference week $t$: $q_s^{[t]}$ is its reconstructed forecast for row $s$.
+This differs from the report cutoff date $v$ in $y_s^{[v]}$.
 At reference week $t$, reconstruct plain MultiQT from zero using reports
 current at $\iota_t$, retaining the release positions $j=\tau_d(s)$ and
 delay $d$, but omitting invalid current reports:
@@ -563,12 +544,14 @@ postponed updates with changed initialization.
 
 \subsection{Tuning}
 \label{sec:tuning-initialization}
-Reference scales use the first 20 consumed rows $I_{20}^{(d)}$, which
-need not span 20 calendar weeks. Parameter selection uses the tuning
-period; these are separate operations.
+Reference scales use the first 20 consumed rows in release order,
+$I_{20}^{(d)}$, which need not span 20 calendar weeks. Parameter selection
+uses the tuning period; these are separate operations.
 
 \paragraph{Reference scales and retrospective initialization.}
-The initial error scale pools absolute base errors in tracker units:
+Write $Q_p$ for an empirical $p$-quantile. The initial error scale
+$S_0$, distinct from the score function $S_t$, pools absolute base errors
+in tracker units:
 \begin{equation}
  S_0=\max\!\left\{\varepsilon_S,
  Q_{0.9}\!\left(\left\{
@@ -577,8 +560,10 @@ The initial error scale pools absolute base errors in tracker units:
  \right\}\right)\right\},\qquad\varepsilon_S=10^{-6}.
  \label{eq:initial-error-scale}
 \end{equation}
-It sets rates $\eta=\kappa S_0$ and studentized scale bounds
-$[.05S_0,S_0]$; studentized step sizes are selected in standardized units.
+It sets rates $\eta=\kappa S_0$, with rate multiplier $\kappa$, and
+studentized scale bounds $[.05S_0,S_0]$; studentized step sizes are
+selected in standardized units.
+Script 02 labels the multiplier $m$, distinct from $m=|\A|$ here.
 The reference loss $L_0$ is defined in
 Section~\ref{sec:expert-loss-normalization}.
 
@@ -613,7 +598,9 @@ Stage 1 selects tracker rates separately for \texttt{fixed},
 \texttt{leaky}, \texttt{absolute\_slope}, \texttt{studentized},
 \texttt{studentized\_base}, \texttt{median\_constant},
 \texttt{studentized\_full} and \texttt{studentized\_level\_rms}.
-Retain candidates satisfying
+Let $\overline{\mathcal L}_j(\vartheta)$ be the mean loss of method $j$
+at candidate $\vartheta$ over tuning cases, and
+$\overline{\mathcal L}_0$ the original's mean loss. Retain candidates satisfying
 \[
  \overline{\mathcal L}_j(\vartheta)
  \le\min_{\vartheta'}\overline{\mathcal L}_j(\vartheta')
@@ -674,13 +661,18 @@ page~\pageref{plot:tuning} retain their recorded earlier procedure.
 \subsection{Evaluation}
 \label{sec:evaluation-design}
 \paragraph{Peaks and evaluation windows.}
+Let $y_t^\star$ be the latest archived count for the target of row $t$.
 \texttt{find\_peaks()} removes nonfinite counts and the incomplete-reporting
-interval, then smooths latest counts:
+interval. Write $x_i$ for the retained latest counts in date order,
+$z_i$ for their smoothed values and $P_i$ for peak prominence:
 \[
  z_i=(x_{i-1}+x_i+x_{i+1})/3,\qquad
  P_i=z_i-\max\!\left\{\min_{l_i\le j\le i}z_j,
                          \min_{i\le j\le r_i}z_j\right\}.
 \]
+Here $l_i,r_i$ are the nearest strictly higher smoothed positions on
+either side, or the series ends; $X$ below is the largest retained count
+on a forecast target date.
 Endpoints retain the unsmoothed value. Candidates are maxima within
 eight retained observations on each side, earliest at ties, satisfying
 \[
@@ -691,7 +683,9 @@ of its candidate, earliest at ties; keep dates within the forecast target
 range. These windows count observations, not calendar weeks across gaps.
 Peaks are hindsight labels, used for prediction only by the target oracle.
 
-Assign each target to its nearest peak (earlier at ties), then score
+Let $T_t$ be the target date, $p(t)$ its nearest retained peak date
+(earlier at ties), and $u_t^{\mathrm{peak}}=(T_t-p(t))/7$ the distance
+in weeks. For evaluation rows $E$ with finite truth, score the windows
 \begin{align}
  W_{\mathrm{overall}}&=E,\notag\\
  W_{\mathrm{before}}&=\{t\in E:-7\le u_t^{\mathrm{peak}}\le0\},\notag\\
@@ -705,7 +699,9 @@ target date; its nearest peak may lie in another period. Seasonal scores
 restrict these sets; the main plots combine both evaluation seasons.
 
 \paragraph{Loss and calibration error.}
-For each case, average over selected rows and all 23 quantile levels:
+A case fixes location, horizon and feedback design within a disease.
+For a selected window $W$ of $N=|W|$ rows, average over rows and all
+23 quantile levels:
 \begin{align}
  \mathcal L^{\mathrm{nat}}(W)
  &=\frac1{mN}\sum_{t\in W}\sum_{\alpha\in\A}
@@ -743,6 +739,9 @@ phase symbols. There are 23 COVID pages then 23 flu pages, in increasing
 $\alpha$ order; $.1,.5,.9$ are loaded at page~\pageref{plot:by-level}.
 
 \paragraph{All-location trade-offs.}
+Write $\mathcal L_{j,c}$ and $\mathrm{CE}_{j,c}$ for the mean quantile
+loss and calibration error of method $j$ in case $c$; $j=0$ is the
+original. A set $\mathcal C$ contains $J$ cases.
 In \path{multiqt_peak_reasoning_tradeoff.pdf}, columns are horizons
 $-1,\ldots,3$; blocks are delay 0, delay 1 and re-run, each showing
 overall, up to peak and after peak. Lower left is better. The first
@@ -787,9 +786,10 @@ $100(\mathcal L_j/\mathcal L_0-1)$, where negative is better.
 weekly loss per $100{,}000$ at a fixed horizon; gray marks tuning,
 dotted lines peaks. \path{multiqt_season_forecasts.pdf} adds coverage
 and loss trajectories for selected fixed rates.
-\path{multiqt_base_forecast_paths.pdf} instead shows each submission
-across horizons $-1$ to 3, with later reference dates darker. Its flu
-winter 2024/25 peak is within tuning, not held-out evidence.
+\path{multiqt_base_forecast_paths.pdf} shows full count timelines, median
+paths around all retained peaks and the three earlier indicators
+(Section~\ref{sec:forecast-path-indicators}). It spans tuning and evaluation;
+its flu winter 2024/25 peak is within tuning, not held-out evidence.
 Weight timelines and archived A--E soft-switch timelines explain
 mixtures, rather than providing additional performance scores.
 Gap dates are listed in Section~\ref{sec:data-issues}.
@@ -816,7 +816,8 @@ Add a common decaying shift to persistent MultiQT offsets, as in
 method also belongs to the score bank.
 
 \paragraph{Slope-dependent rate: \texttt{absolute\_slope}.}
-Use the delayed MultiQT update with rate
+Let $\Delta_t$ be elapsed calendar weeks since the previous reference
+date, at least one. Use the delayed MultiQT update with rate
 \begin{equation}
  \eta_t=\min\!\left\{
  \kappa_{\max}S_0,\ \kappa_{\min}S_0+
@@ -838,8 +839,9 @@ for restart mixtures need not reproduce \texttt{fixed}.
 \subsubsection{Studentized scores}
 \label{sec:studentized-code-updates}
 \paragraph{Studentized variants and median initialization.}
-In tracker units, use the full base or its median as the centre. After
-processing available feedback, return
+In tracker units, use centre $a_t^\alpha=\beta_t^\alpha$ for the full
+base or $a_t^\alpha=\beta_t^{.5}$ for its median. After processing
+available feedback, return
 \begin{equation}
  q_t=\psi^{-1}\!\left[
    \Pi_\K^{A_t^{-2}}\bigl(a_t+A_t\tilde u_t\bigr)
@@ -862,8 +864,11 @@ default $\eta=.1$ and is tuned for each normal-start or full-base method.
 Zero-start variants inherit the corresponding normal-start rate.
 
 \paragraph{Scales from recent errors or the current forecast.}
-The residual window contains five consumed reports, not necessarily
-five consecutive calendar weeks. The default scales are
+Let $\mathcal H_t^{(d)}$ contain the last five consumed rows, or fewer
+if unavailable, and set $e_s^\alpha=\psi(\bar y_s^{(d)})-\beta_s^\alpha$.
+These need not be consecutive calendar weeks. A hat marks a raw scale
+estimate, and $\Phi$ is the standard normal distribution function.
+The default scales are
 \begin{align}
  \widehat\sigma_{t,\mathrm{med}}
  &=\left[\frac{1}{|\mathcal H_t^{(d)}|}
@@ -893,6 +898,8 @@ The denominator is approximately $2.563$. The earlier
         {\Phi^{-1}(1-a_\alpha)-\Phi^{-1}(a_\alpha)}.
  \label{eq:studentized-paired-width}
 \end{equation}
+Here $a_\alpha=\min(\alpha,1-\alpha)$, replacing $a_{.5}$ by the
+nearest lower grid level.
 This construction requires a quantile grid symmetric about $.5$.
 Base-width scales respond immediately to changes in the current forecast;
 residual scales respond only after the corresponding reports arrive.
@@ -994,7 +1001,9 @@ an adaptive rate changes their responsiveness. The formulas first
 assume a fixed bank with all experts eligible.
 
 \paragraph{Mixtures and feedback losses}
-With weights specific to each quantile level, compute
+For $K$ experts, let $f_{k,t}^\alpha$ be expert $k$'s forecast and
+$w_k^\alpha$ its weight. Suppressing time indices for one forecast,
+form the mixture $\hat q$ and repair any crossings:
 \begin{equation}
  \hat q^\alpha=\sum_{k=1}^K w_k^\alpha f_k^\alpha,
  \qquad w_k^\alpha\ge0,\quad \sum_{k=1}^K w_k^\alpha=1,
@@ -1006,7 +1015,9 @@ projection. Common weights replace $w_k^\alpha$ by $w_k$ and preserve
 order when every expert is ordered. All mixtures average counts,
 including for \texttt{log1p} trackers.
 
-On receiving feedback, score the expert forecasts for the released row:
+Let $n$ count processed feedback updates, with forecast row $s(n)$ and
+report $Y_n$. Score the expert forecasts for that row, using $L$ for
+unnormalized losses and $\ell$ for losses normalized by $L_0$:
 \begin{align}
  L_{k,n}^\alpha
  &=\rho_\alpha\!\left(f_{k,s(n)}^\alpha/c_{\mathrm{scale}},
@@ -1023,7 +1034,9 @@ originally computed forecasts in stateful learning and the reconstructed
 forecasts in a re-run.
 
 \paragraph{Exponential updates and optional sharing}
-Before optional sharing, update separately at each level:
+Let $w_{k,n}^\alpha$ and $\lambda_n^\alpha$ be the weight and rate
+before update $n$. Before optional sharing, update separately at each
+level to obtain $\bar w_{k,n+1}^\alpha$:
 \begin{equation}
  \bar w_{k,n+1}^\alpha
  =\frac{w_{k,n}^\alpha\exp(-\lambda_n^\alpha\ell_{k,n}^\alpha)}
@@ -1041,7 +1054,8 @@ With common weights, there is one update using the mean loss:
 Lower loss increases relative weight; larger $\lambda$ strengthens the
 response. Weights start uniformly, and $\lambda=0$ keeps equal weights.
 
-When sharing is enabled, follow the exponential step by
+When sharing is enabled with fraction $\gamma$, follow the exponential
+step by
 \begin{equation}
  w_{k,n+1}^\alpha
  =(1-\gamma)\bar w_{k,n+1}^\alpha+\gamma/K.
@@ -1054,7 +1068,8 @@ weights across levels.
 
 \paragraph{Adaptive learning rates}
 \label{sec:adaptive-expert-weighting}
-The first $H$ processed updates use $\lambda_{\mathrm{start}}$.
+The lookback $H$ counts processed updates. The first $H$ updates use
+starting rate $\lambda_{\mathrm{start}}$.
 Record the weighted variance of each update using its weights before the
 exponential step and sharing:
 \begin{align}
@@ -1130,7 +1145,9 @@ weight on the first expert.
 
 \subparagraph{Effect on adaptive learning rates.}
 After $H$ updates, the rule in~\eqref{eq:adaptive-expert-rate} already
-adapts to the variation between expert losses. Conditional on the same
+adapts to the variation between expert losses. Use superscripts
+$\mathrm{raw},\mathrm{norm}$ for calculations without and with $L_0$
+normalization. Conditional on the same
 pre-update weight vectors at updates $n-H,\ldots,n$ and a positive
 variance sum, normalization gives, separately at each level,
 \begin{align}
@@ -1223,7 +1240,8 @@ before feedback, so a new color band alone does not show lower loss.
 \subparagraph{The six score-based experts and fixed membership.}
 \label{sec:score-expert-bank}
 The bank compares ways to retain or rebuild the base and correct its
-errors. For the scores below, $r=\psi(y)$; project and invert as in
+errors. Write $S_{k,t}^\alpha(y)$ for member $k$'s residual score.
+For the scores below, $r=\psi(y)$; project and invert as in
 \eqref{eq:studentized-implementation}. Fixed, leaky and studentized
 experts use separately selected rates; Decline uses $.05S_0$ and the
 original does not update. This compares complete procedures, not
@@ -1261,7 +1279,9 @@ method; \path{studentized_levels} appears only in earlier results.
 
 \subparagraph{The leaky expert.}
 Besides its persistent MultiQT offsets, this expert has one common
-shift on the log scale, initially zero. After warmup, its update is
+shift $v_t$ on the log scale, initially zero. Write
+$\operatorname{clip}_{[a,b]}(x)=\min\{b,\max\{a,x\}\}$.
+After warmup, its update is
 \begin{equation}
  v_t=\operatorname{clip}_{[-.2,.2]}\!\left[
   2^{-\Delta_t}v_{t-1}+
@@ -1289,8 +1309,13 @@ negative forecasts. These trackers do not clip final forecasts at zero.
 
 
 \subparagraph{Target-specific signal and Decline.}
+Let $Z(t,h;v)$ be $\log(1+\text{base median})$ at reference date $t$
+and horizon $h$, if the median is finite, nonnegative, available by $v$
+and not filled; otherwise it is missing. Write $Z_{t,h}=Z(t,h;\iota_t)$.
 The signal compares the target horizon with the largest available
-earlier median in the same forecast path:
+earlier median in the same forecast path. It defines context
+$c_{t,h}^{\mathrm{ctx}}\in\{0,1\}$ and gate $G_{t,h}^T\in[0,1]$,
+the weight of the original in \texttt{score\_gated}:
 \begin{align}
  D_{t,h}&=\max_{\substack{r=-1,\ldots,h-1\\Z_{t,r}\ \mathrm{available}}}
                Z_{t,r}-Z_{t,h},\notag\\
@@ -1303,6 +1328,8 @@ The target median and at least one earlier median must be available
 by the cutoff at the exact reference date, excluding filled forecasts.
 Without this information, including at $h=-1$, set the context and
 gate to zero. The fixed settings are $\delta_G=0$ and $w_T=.05$.
+The signal threshold $\delta_G$ is distinct from miscoverage $\delta$;
+$w_T$ controls the gate's transition width.
 When $D_{t,h}=0$, the hard context is zero but the gate is $.5$.
 The signal describes a decline in the base forecast path; it is not
 a calibrated probability of being after the true peak.
@@ -1392,17 +1419,22 @@ the offset, giving a different control.
 
 \paragraph{Delphi benchmarks: separate scales and initialization.}
 Both run for both diseases and all feedback designs, independently of
-the identity/log tracker setting. States start at zero without $S_0$
-or a 20-row warmup; constants are not tuned. In their own units, use
+the identity/log setting. States start at zero without $S_0$ or warmup;
+constants are untuned. For transform $\chi$ and projected forecast
+$\xi_t$ in those units, the released coverage-error sum is
 \begin{equation}
  \epsilon_t^\alpha=
  \sum_{s\in\mathcal R_t^{(d)}}
  \left(\alpha-\ind\{\chi(\bar y_s^{(d)})\le\xi_s^\alpha\}\right).
  \label{eq:sqrt-feedback-errors}
 \end{equation}
-In a weekly re-run, use the reports and reconstructed historical forecasts of that re-run in this expression, as in the feedback section.
+In a weekly re-run, use its current reports and reconstructed forecasts,
+as in Section~\ref{sec:feedback-designs}.
 
 \paragraph{Adaptive fast and slow offsets: \texttt{ref\_op}.}
+Let $\mathcal F_t^{(d)}=\bigcup_{j\le t}\mathcal R_j^{(d)}$ contain
+all consumed rows, and $\mathcal F_{t,20}^{(d)}$ the last 20 in release
+order, or fewer if unavailable.
 The COVID production configuration uses $\chi(x)=\sqrt{x}$ on raw counts,
 with rates
 \begin{align}
@@ -1415,10 +1447,10 @@ with rates
  s\in\mathcal F_t^{(d)},\ \alpha\in\A\right\}\right).
  \label{eq:ref-op-rates}
 \end{align}
-Both are zero before the first release. The fast rate uses up to 20
-recent consumed rows; the slow rate uses all consumed rows. Both pool
-absolute base errors over levels and are recomputed as feedback arrives.
-The hidden states and forecast are
+Both rates are zero before the first release, pool absolute base errors
+over levels, and are recomputed as feedback arrives.
+The fast and slow hidden states $\tilde\theta_t^F,\tilde\theta_t^S$
+and forecast are
 \begin{align}
  \tilde\theta_t^{F,\alpha}
  &=.9\tilde\theta_{t-1}^{F,\alpha}+\eta_t^F\epsilon_t^\alpha,
@@ -1435,8 +1467,9 @@ Re-runs reconstruct both rates and states. These rolling scales are
 separate from the frozen $S_0$.
 
 \paragraph{Constant square-root rate: \texttt{sqrt\_constant}.}
-The flu production benchmark of Delphi uses
-$\chi(x)=\sqrt{x/c_{\mathrm{pop}}}$, with
+The flu production benchmark uses $\chi(x)=\sqrt{x/c_{\mathrm{pop}}}$,
+where $c_{\mathrm{pop}}$ always equals population/$100{,}000$.
+Its update and forecast are
 \begin{align}
  \tilde\theta_t^\alpha
  &=\tilde\theta_{t-1}^\alpha+.018\epsilon_t^\alpha,
@@ -1457,16 +1490,15 @@ untruncated $\xi_s^\alpha$. At zero outcomes, learning coverage can
 differ from coverage of the returned forecast. Both appear under
 ``Single trackers'' in script 04 and in the evaluation tree of script 06.
 
-\clearpage
 \section{Results and where to see them}
 \label{sec:results}
-\emph{These results describe the archived run of 10--11 November 2026:}
+\emph{The performance comparisons describe the archived run of 10--11 November 2026:}
 the seven-member score bank and A--E, before the six-member bank,
 variance-based weighting, simplified tuning and fixed-membership
-correction. The revised methods require new scores and plots.
+correction. The revised methods require new scores and plots. The updated
+forecast-path diagnostic is separate (Section~\ref{sec:forecast-path-indicators}).
 
-The run uses \texttt{hub\_first\_months}, protocol
-\texttt{latest-at-use-v2}, identity tracking and evaluation target weeks
+The run uses \texttt{hub\_first\_months}, identity tracking and evaluation target weeks
 from June 2025 through September 2026. Unless specified otherwise,
 reductions pool 52 non-US locations, horizons $-1,\ldots,3$ and three
 feedback designs, with week-weighted pooling as in~\eqref{eq:tree-reduction}.
@@ -1616,9 +1648,98 @@ per-quantile weighting. Equal weighting of all or recent starts changes
 the weighting rule too. \emph{Plots:} COVID weight p.~2 (A--E) and
 p.~3 (starts), with forecast/loss pp.~4 and~3.
 
+\subsection{Base forecast paths and the three indicators}
+\label{sec:forecast-path-indicators}
+This diagnostic was updated on 11 November 2026; it does not rerun the
+method comparisons above. \path{multiqt_base_forecast_paths.pdf},
+pp.~1--2, is loaded immediately below: COVID at
+page~\pageref{plot:base-paths}, flu at page~\pageref{plot:base-paths-flu}.
+Each location has a full latest-count timeline, all peaks retained by
+script 01, and blue median curves for horizons $-1,\ldots,3$.
+Curves use reference weeks $-7,\ldots,8$ around each peak and are trimmed
+to the same target-date windows. The three rows underneath show the
+earlier indicators at their reference dates, using information available
+by the corresponding cutoff. Peaks and latest counts are retrospective;
+neither enters these indicators.
+
+\paragraph{How the indicators are computed.}
+Use $Z(t,h;v)$ from the target-signal definition in
+\eqref{eq:target-context-signal}, and threshold $\varepsilon=\log(1.05)$.
+Here date differences are calendar days: $t-7$ means exactly one week
+earlier, not the previous retained round. Blue cells mean indicator 1,
+white 0 and gray unavailable. Each indicator is computed separately.
+
+\begin{enumerate}[leftmargin=*,itemsep=4pt]
+\item \textbf{Path: a decline within the current forecast curve.}
+The indicator is
+\[
+ I_t^{\mathrm{path}}=
+ \ind\!\left\{\max_{\substack{h=-1,\ldots,2\\Z_{t,h},\,Z_{t,h+1}\ \text{available}}}
+ (Z_{t,h}-Z_{t,h+1})>\varepsilon\right\}.
+\]
+Horizons $0,1,2,3$ must be available; include the $-1$ to $0$ comparison
+only when the nowcast exists. This detects any sufficiently large
+adjacent decline, rather than comparing one target with all earlier horizons.
+
+\item \textbf{Nowcast: a decline or slowing positive growth.}
+Set $z_0=Z(t,-1;\iota_t)$, $z_1=Z(t-7,-1;\iota_{t-7})$ and
+$z_2=Z(t-14,-1;\iota_{t-7})$, and let $g=z_0-z_1$ and
+$g_{\mathrm{prev}}=z_1-z_2$. Then
+\[
+ I_t^{\mathrm{nowcast}}=\ind\{g<-\varepsilon\ \text{or}\
+ (g_{\mathrm{prev}}>\varepsilon\ \text{and}\ g_{\mathrm{prev}}-g>\varepsilon)\}.
+\]
+Thus slowing growth can trigger the indicator before the nowcast falls.
+It requires three consecutive reference weeks with usable nowcasts.
+
+\item \textbf{Revision: downward forecast revisions that become more negative.}
+For older horizons $j=0,\ldots,3$, compare each nowcast with forecasts
+for the \emph{same target week}:
+\begin{align*}
+ r_j&=z_0-Z(t-7(j+1),j;\iota_t),\\
+ r_j^{\mathrm{prev}}&=z_1-Z(t-7(j+2),j;\iota_{t-7}).
+\end{align*}
+Let $J$ contain horizons with both comparisons available; require
+$|J|\ge2$. The indicator is
+\[
+ I_t^{\mathrm{revision}}=\ind\!\left\{
+ \operatorname{median}_{j\in J}r_j<-\varepsilon\ \text{and}\
+ \operatorname{median}_{j\in J}(r_j-r_j^{\mathrm{prev}})<-\varepsilon
+ \right\}.
+\]
+The prior comparison uses its prior cutoff. These are revisions between
+\emph{forecasts}, not revisions of reported hospital counts.
+\end{enumerate}
+The logarithm is unnecessary for the current zero-threshold binary
+$c_{t,h}^{\mathrm{ctx}}$, but it defines the relative-change scale of
+these three indicators and their nonzero threshold. They are diagnostic
+warnings, not probabilities of having passed a true peak; the current
+expert methods are unchanged.
+
+\paragraph{Why indicators are unavailable.}
+A required median must exist at the exact reference date and horizon,
+be finite and nonnegative, be available by the cutoff and not be filled
+from an earlier forecast. Flu has no submitted forecasts for long summer
+intervals, although reported counts continue. Missing or removed rounds
+also interrupt the history: the nowcast indicator needs three consecutive
+nowcasts, and revision needs at least two matched older-horizon comparisons
+in both the current and prior round. Consequently, these two indicators
+can remain gray after forecasts resume, while Path is already available.
+For example, the unusable COVID reference weeks 25 January and 1 February
+2025 leave Nowcast unavailable through 15 February and Revision through
+22 February. Insufficient history at the start also gives gray cells.
+At the right edge, longer horizons can be absent from the prepared data
+because their finalized outcomes are not yet available; the indicators
+themselves do not use these outcomes. A gray cell does not mean indicator 0.
+
+\includepdf[pages=1,fitpaper=true,pagecommand={\thispagestyle{empty}},
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:base-paths}}]{../agent/outputs/notes/plots_diagnostics_20261111/multiqt_base_forecast_paths.pdf}
+\includepdf[pages=2,fitpaper=true,pagecommand={\thispagestyle{empty}},
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:base-paths-flu}}]{../agent/outputs/notes/plots_diagnostics_20261111/multiqt_base_forecast_paths.pdf}
+
 \paragraph{Reading the plot references.}
-Filenames and page numbers refer to the earlier \path{output/pdf/}
-outputs, preserved under
+Except for the updated forecast-path diagnostic above, filenames and
+page numbers refer to the earlier \path{output/pdf/} outputs, preserved under
 \path{agent/outputs/notes/plots_history_20261111/} with a source manifest.
 Forecast and weight files use the \path{multiqt_method_forecasts/} and
 \path{multiqt_weight_timelines/} subdirectories. The all-location
@@ -1633,7 +1754,7 @@ results.
 \toprule
 Original source PDF & Source pages & Notes start\\
 \midrule
-\path{multiqt_base_forecast_paths.pdf} & 1 & \pageref{plot:base-paths}\\
+\path{multiqt_base_forecast_paths.pdf} (updated) & 1--2 & \pageref{plot:base-paths}\\
 \path{multiqt_error_tradeoff.pdf} & 1, 4 & \pageref{plot:initial-tradeoff}\\
 \path{multiqt_phase_rate_tradeoffs.pdf} & 1--7, 13 & \pageref{plot:phase-rates}\\
 \path{multiqt_season_forecasts.pdf} & 1 & \pageref{plot:season-curves}\\
@@ -1659,8 +1780,12 @@ subdirectory. Tuning pages show COVID delay 0, delay 1 and re-run,
 then the same flu designs, under the earlier procedure. The season
 and by-level pages are exact extracts from \path{notes_before_update.pdf}
 in the archive. These frozen figures are not replaced by new workflow
-outputs; updating the results requires replacing scores, figures and
-page references together. Notes-only copies change wording, not data.
+outputs; updating the performance comparisons requires replacing scores,
+figures and page references together. The updated forecast-path figure is
+stored separately in \path{agent/outputs/notes/plots_diagnostics_20261111/}.
+The figures displayed here use copies in
+\path{agent/outputs/notes/plots_display_20261111/}; only captions are
+edited, and the archived figures and plotted data are preserved.
 
 \begin{thebibliography}{7}
 \bibitem{multiqt}
@@ -1722,39 +1847,38 @@ These are historical exploratory records, not the current evaluation protocol.
 \label{sec:loaded-plots}
 
 
-\includepdf[pages=1,fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:base-paths}}]{../agent/outputs/notes/plots_history_20261111/multiqt_base_forecast_paths.pdf}
+
 \includepdf[pages={1,4},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:initial-tradeoff}}]{../agent/outputs/notes/plots_history_20261111/multiqt_error_tradeoff.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:initial-tradeoff}}]{../agent/outputs/notes/plots_display_20261111/multiqt_error_tradeoff.pdf}
 \includepdf[pages={1-7,13},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:phase-rates}}]{../agent/outputs/notes/plots_history_20261111/multiqt_phase_rate_tradeoffs.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:phase-rates}}]{../agent/outputs/notes/plots_display_20261111/multiqt_phase_rate_tradeoffs.pdf}
 \includepdf[pages=1,fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:season-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_season_forecasts_selected.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:season-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_season_forecasts_selected.pdf}
 \includepdf[pages={1-6},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:by-level}}]{../agent/outputs/notes/plots_history_20261111/multiqt_by_level_selected.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:by-level}}]{../agent/outputs/notes/plots_display_20261111/multiqt_by_level_selected.pdf}
 \includepdf[pages={1-6},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:tuning}}]{../agent/outputs/notes/plots_history_20261111/multiqt_tuning.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:tuning}}]{../agent/outputs/notes/plots_display_20261111/multiqt_tuning.pdf}
 \includepdf[pages={1-12},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:tradeoff}}]{../agent/outputs/notes/plots_history_20261111/multiqt_peak_reasoning_tradeoff.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:tradeoff}}]{../agent/outputs/notes/plots_display_20261111/multiqt_peak_reasoning_tradeoff.pdf}
 \includepdf[pages={1-12},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:trees}}]{../agent/outputs/notes/plots_history_20261111/multiqt_evaluation_tree.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:trees}}]{../agent/outputs/notes/plots_display_20261111/multiqt_evaluation_tree.pdf}
 \includepdf[pages={2,4},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:method-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_method_forecasts.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:method-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_method_forecasts.pdf}
 \includepdf[pages={6,7},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:covid-studentized-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_method_forecasts.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:covid-studentized-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_method_forecasts.pdf}
 \includepdf[pages={6,7,13,14},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-studentized-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_method_forecasts/flu_horizon2_delay0.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-studentized-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_method_forecasts/flu_horizon2_delay0.pdf}
 \includepdf[pages={1,2},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:weights}}]{../agent/outputs/notes/plots_history_20261111/multiqt_weight_timelines.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:weights}}]{../agent/outputs/notes/plots_display_20261111/multiqt_weight_timelines.pdf}
 \includepdf[pages={3,6,9},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:restart-weights}}]{../agent/outputs/notes/plots_history_20261111/multiqt_weight_timelines.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:restart-weights}}]{../agent/outputs/notes/plots_display_20261111/multiqt_weight_timelines.pdf}
 \includepdf[pages={3,10,17},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:restart-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_method_forecasts.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:restart-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_method_forecasts.pdf}
 \includepdf[pages={3,6,9},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-restart-weights}}]{../agent/outputs/notes/plots_history_20261111/multiqt_weight_timelines/flu_horizon2_delay0.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-restart-weights}}]{../agent/outputs/notes/plots_display_20261111/multiqt_weight_timelines/flu_horizon2_delay0.pdf}
 \includepdf[pages={3,10,17},fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-restart-curves}}]{../agent/outputs/notes/plots_history_20261111/multiqt_method_forecasts/flu_horizon2_delay0.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:flu-restart-curves}}]{../agent/outputs/notes/plots_display_20261111/multiqt_method_forecasts/flu_horizon2_delay0.pdf}
 \includepdf[pages=1,fitpaper=true,pagecommand={\thispagestyle{empty}},
- pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:switch}}]{../agent/outputs/notes/plots_history_20261111/multiqt_soft_switch_timelines.pdf}
+ pagecommand*={\thispagestyle{empty}\phantomsection\label{plot:switch}}]{../agent/outputs/notes/plots_display_20261111/multiqt_soft_switch_timelines.pdf}
 
 \end{document}

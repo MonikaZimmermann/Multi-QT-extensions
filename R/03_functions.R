@@ -277,6 +277,49 @@ target_signal <- function(case, delta = .05, width = .05) {
     gate = plogis((signal - log1p(delta)) / log1p(width)), n_earlier = earlier)
 }
 
+# Plotting-only signals from the former transition_gate() (commit db1262d), in
+# log1p(counts). Path: largest adjacent decrease in the current forecast curve;
+# nowcast: max(-growth, min(previous growth, previous growth - growth)); revision:
+# min(-median revisions, -median paired revision changes). Each revision compares
+# forecasts for the same target. Prior revisions use the prior reference-week cutoff.
+# Indicators exceed log1p(threshold); missing evidence stays NA, not FALSE.
+forecast_path_indicators <- function(case, threshold = .05) {
+  stopifnot(length(threshold) == 1L, is.finite(threshold), threshold >= 0)
+  dates <- case$reference_date
+  signals <- matrix(NA_real_, length(dates), 3L,
+    dimnames = list(NULL, c("path", "nowcast", "revision")))
+  history <- case$context_forecasts
+  if (!is.null(history) && nrow(history)) {
+    lookup <- forecast_lookup(history)
+    keys <- paste(history$reference_date, history$horizon)
+    for (i in seq_along(dates)) {
+      t <- dates[i]; cutoff <- case$as_of[i]
+      current <- lookup(t, -1:3, cutoff)
+      # Horizons 0:3 are required; include the -1 to 0 edge only when available.
+      if (all(is.finite(current[2:5]))) signals[i, "path"] <-
+        max(-diff(current), na.rm = TRUE)
+      previous_row <- match(paste(t - 7, -1), keys)
+      previous_cutoff <- if (is.na(previous_row)) as.Date(NA) else history$as_of[previous_row]
+      if (is.na(cutoff) || is.na(previous_cutoff) || previous_cutoff > cutoff) next
+      previous <- lookup(t - 7, -1, previous_cutoff)
+      before_previous <- lookup(t - 14, -1, previous_cutoff)
+      growth <- current[1] - previous
+      previous_growth <- previous - before_previous
+      if (is.finite(growth) && is.finite(previous_growth))
+        signals[i, "nowcast"] <- max(-growth, min(previous_growth, previous_growth - growth))
+      revision <- current[1] - lookup(t - 7 * (1:4), 0:3, cutoff)
+      previous_revision <- previous - lookup(t - 7 * (2:5), 0:3, previous_cutoff)
+      common <- is.finite(revision) & is.finite(previous_revision)
+      if (sum(common) >= 2L) signals[i, "revision"] <- min(-median(revision[common]),
+        -median(revision[common] - previous_revision[common]))
+    }
+  }
+  data.frame(reference_date = dates, signals,
+    path_indicator = signals[, "path"] > log1p(threshold),
+    nowcast_indicator = signals[, "nowcast"] > log1p(threshold),
+    revision_indicator = signals[, "revision"] > log1p(threshold))
+}
+
 # Tracker units: "log1p", "identity" (counts) or "sqrt" (Delphi's REF-op; negative
 # tracker values map back to 0, as in Delphi's calibration code).
 to_tracker <- function(x, transform) {
