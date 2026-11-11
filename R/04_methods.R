@@ -362,9 +362,9 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
 }
 # One level's forecasts in a mixture's column: the latest reported counts, every expert in
 # its weight colour and the issued mixture (thick; dashed: its common-weight variant). key:
-# name the mixture's lines in the panel.
+# name the mixture's lines in the panel; title: the column title (first row of a page).
 plot_mixture_forecasts <- function(run, method, common_method, level, fills, ylim,
-                                   first_column, key) {
+                                   first_column, key, title = "") {
   dates <- run$case$target_date
   times <- as.numeric(dates)
   a <- match(level, run$case$alpha)
@@ -373,10 +373,10 @@ plot_mixture_forecasts <- function(run, method, common_method, level, fills, yli
   mixtures <- c(method, if (!is.na(common_method) && common_method != method) common_method)
   issued <- sapply(mixtures, function(m) run$predictions[[m]][, a])
   truth <- run$case$truth_latest / run$scaling$scale
-  par(mar = c(2.2, if (first_column) 3.7 else 2.2, .5, .6))
+  par(mar = c(2.2, if (first_column) 3.7 else 2.2, if (nzchar(title)) 1.5 else .5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = ylim, xaxs = "i", xaxt = "n",
     xlab = "", ylab = if (first_column) paste0("Forecast, alpha = ", level, "\n(",
-      score_units, ")") else "", las = 1, cex.axis = .75)
+      score_units, ")") else "", las = 1, cex.axis = .75, main = title)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
   broken <- break_gaps(dates, experts, issued, truth)    # Lines break at gaps.
   many <- ncol(experts) > 40L
@@ -410,20 +410,64 @@ draw_start_ramps <- function(run, fills, single) {
       format(max(starts$start_date), "%b %Y"), "(light)"), adj = 0, cex = .85)
   }
 }
-# Rows of a page: each level's weights, below 0.2, 0.5 and 0.8 its forecasts; last: common.
-weight_rows <- data.frame(kind = c(unlist(lapply(plot_levels, function(level)
-  c("weights", if (level %in% weight_forecast_levels) "forecasts"))), "common"),
-  level = c(unlist(lapply(plot_levels, function(level)
-    rep(level, 1L + (level %in% weight_forecast_levels)))), NA))
-row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25)[weight_rows$kind]
-weight_page_height <- sum(row_inches) + 1.2 + 3.7     # Inches.
+# Rows of a page: each level's weights (only if a mixture of the page has one weight vector
+# per level; empty for the others), below 0.2, 0.5 and 0.8 the forecasts at that level, then
+# the weights that are not quantile specific: the vector for all levels of each mixture (or
+# of its common-weight variant), and for the two-vector mixtures (run$switches) the baseline
+# and declining vectors and the context (G or the gate; c: points), E's context too.
+row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25, baseline = 1.25,
+  declining = 1.25, context = .9)
+row_titles <- c(common = "All levels:\nweights", baseline = "All levels:\nbaseline",
+  declining = "All levels:\ndeclining", context = "Context\n(G, gate; c)")
+weight_page_height <- sum(row_inches[c(rep("weights", length(plot_levels)),
+  rep("forecasts", length(weight_forecast_levels)), "common", "baseline", "declining",
+  "context")]) + 1.2 + 3.7                              # Inches; shorter pages leave space.
+per_level <- function(run, method) dim(run$weights[[method]])[3] > 1L
+# E's context: the target signal with its threshold (not tuned) and width.
+context_params <- method_parameters()
+page_rows <- function(run, columns) {
+  common <- !vapply(columns$method, function(m) per_level(run, m), logical(1))
+  kind <- level <- NULL
+  for (a in plot_levels) {
+    shown <- c(if (!all(common)) "weights", if (a %in% weight_forecast_levels) "forecasts")
+    kind <- c(kind, shown)
+    level <- c(level, rep(a, length(shown)))
+  }
+  extra <- c(if (any(common) || any(!is.na(columns$common_method))) "common",
+    if (any(columns$method %in% names(run$switches))) c("baseline", "declining"),
+    if (any(columns$method %in% c(names(run$switches), "score_fast_decline"))) "context")
+  data.frame(kind = c(kind, extra), level = c(level, rep(NA, length(extra))))
+}
+# The context of a mixture at each target: G or the mixed gate (line) and c (points).
+plot_context <- function(run, method, first_column, last_row) {
+  signal <- if (method %in% names(run$switches)) run$switches[[method]]$gate else
+    if (method == "score_fast_decline") target_signal(run$case,
+      context_params$context_delta, context_params$context_width)
+  if (is.null(signal)) return(plot.new())
+  dates <- run$case$target_date
+  times <- as.numeric(dates)
+  par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, .5, .6))
+  plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1.05), xaxs = "i", yaxs = "i",
+    xaxt = "n", yaxt = "n", xlab = "", ylab = if (first_column) row_titles[["context"]] else "")
+  abline(h = .5, col = "gray80", lty = 3)
+  abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
+  if (!is.null(signal$context)) points(times, signal$context, pch = 15, cex = .35, col = "gray35")
+  if (method != "score_fast_decline") {
+    broken <- break_gaps(dates, signal$gate)
+    lines(broken$dates, broken[[2]], col = colours[method], lwd = 1.5)
+  }
+  axis(2, at = c(0, .5, 1), las = 1, cex.axis = .75)
+  if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
+  box(col = "gray70")
+}
 draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_pages)) {
   columns <- weight_pages[[page]]
   columns <- columns[columns$method %in% names(run$weights), ]
   if (!nrow(columns)) next
   fills <- expert_fills(run, page)
-  has_common <- any(!is.na(columns$common_method))
-  last_weights <- if (has_common) nrow(weight_rows) else max(which(weight_rows$kind == "weights"))
+  rows <- page_rows(run, columns)
+  has_common <- any(!is.na(columns$common_method) & columns$common_method != columns$method)
+  last_row <- nrow(rows)
   # One axis per forecast row, shared by its columns.
   limits <- lapply(setNames(weight_forecast_levels, weight_forecast_levels), function(level) {
     a <- match(level, run$case$alpha)
@@ -431,33 +475,44 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
       c(run$expert_forecasts[[columns$method[j]]][, , a], sapply(na.omit(c(columns$method[j],
         columns$common_method[j])), function(m) run$predictions[[m]][, a]))), finite = TRUE)
   })
-  panel_ids <- matrix(seq_len(nrow(weight_rows) * nrow(columns)), ncol = nrow(columns),
-    byrow = TRUE)
-  layout(rbind(panel_ids, max(panel_ids) + 1L), heights = c(row_inches, 1.2))
+  panel_ids <- matrix(seq_len(nrow(rows) * nrow(columns)), ncol = nrow(columns), byrow = TRUE)
+  # Rows in inches; a shorter page keeps the free space below its key.
+  heights <- c(row_inches[rows$kind], 1.2)
+  layout(rbind(panel_ids, max(panel_ids) + 1L, max(panel_ids) + 2L),
+    heights = c(lcm(2.54 * heights), 1))
   par(oma = c(4.8, .8, 5.2, .8), mgp = c(2, .4, 0), cex = .9)
-  for (row in seq_len(nrow(weight_rows))) for (j in seq_len(nrow(columns))) {
-    kind <- weight_rows$kind[row]
-    level <- weight_rows$level[row]
+  for (row in seq_len(nrow(rows))) for (j in seq_len(nrow(columns))) {
+    kind <- rows$kind[row]
+    level <- rows$level[row]
+    method <- columns$method[j]
     if (kind == "forecasts") {
-      plot_mixture_forecasts(run, columns$method[j], columns$common_method[j], level, fills,
-        limits[[as.character(level)]], j == 1L, level == weight_forecast_levels[1])
+      plot_mixture_forecasts(run, method, columns$common_method[j], level, fills,
+        limits[[as.character(level)]], j == 1L, level == weight_forecast_levels[1],
+        if (row == 1L) columns$title[j] else "")
       next
     }
-    shown <- if (kind == "common") columns$common_method[j] else columns$method[j]
-    if (is.na(shown)) {                                  # No common-weight variant.
+    if (kind == "context") {
+      plot_context(run, method, j == 1L, row == last_row)
+      next
+    }
+    weights <- switch(kind,
+      weights = if (per_level(run, method)) run$weights[[method]][, , match(level, run$case$alpha)],
+      common = if (!per_level(run, method)) run$weights[[method]][, , 1] else
+        if (!is.na(columns$common_method[j])) run$weights[[columns$common_method[j]]][, , 1],
+      baseline = , declining = if (method %in% names(run$switches))
+        run$switches[[method]]$regime_weights[, , kind])
+    if (is.null(weights)) {                              # Not this mixture's kind of weights.
       plot.new()
       next
     }
-    weights <- run$weights[[shown]]
-    stopifnot(identical(dimnames(weights)[[2]], dimnames(run$expert_forecasts[[shown]])[[2]]))
-    weights <- matrix(weights[, , if (dim(weights)[3] == 1L) 1L else match(level, run$case$alpha)],
-      nrow(weights), dimnames = dimnames(weights)[1:2])
+    weights <- matrix(weights, nrow(run$weights[[method]]),
+      dimnames = dimnames(run$weights[[method]])[1:2])
     stack <- intersect(names(fills), colnames(weights))
     stopifnot(length(stack) == ncol(weights))
     plot_weight_distribution(run, weights[, stack, drop = FALSE], fills[stack],
       if (row == 1L) columns$title[j] else "",
-      if (kind == "weights") paste("alpha =", level) else "Common\n(all levels)",
-      first_column = j == 1L, last_row = row == last_weights)
+      if (kind == "weights") paste("alpha =", level) else row_titles[[kind]],
+      first_column = j == 1L, last_row = row == last_row)
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
@@ -470,23 +525,23 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     title = "Experts: weights and forecasts", title.adj = 0, title.font = 2)
   legend(1, .5, c("Latest reported counts", "Each expert: its weight colour",
     "Mixture: thick, in the colour of its method", if (has_common)
-      "Common-weight variant (last row): dashed"), xjust = 1, yjust = .5,
+      "Common-weight variant: dashed"), xjust = 1, yjust = .5,
     col = c("black", "gray55", "gray25", if (has_common) "gray25"),
     lty = c(1, 1, 1, if (has_common) 2), lwd = c(.8, .8, 2, if (has_common) 2),
     pch = c(16, NA, NA, if (has_common) NA), pt.cex = .6, bty = "n", cex = .95)
+  plot.new()                                             # The free space of a shorter page.
   mtext(page, side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.3)
   mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
   mtext("Target date | Weight at issuance for each target | Vertical dotted lines: peaks",
     side = 1, outer = TRUE, line = .4, cex = .85)
-  mtext(paste("Rows alpha = 0.1-0.9: one weight vector per quantile level; below alpha = 0.2,",
-    "0.5 and 0.8 the forecasts at that level (per-level mixtures after crossing repair, before",
-    "any outer correction)."), side = 1, outer = TRUE, line = 1.6, cex = .8)
-  mtext(if (page == "Score-based expert weights") paste("Every mixture: one weight vector for",
-    "all levels (repeated in every row), learned from the mean quantile loss over the levels.")
-    else if (has_common) paste("Last row: one weight vector for all levels, learned from the",
-    "mean quantile loss over the levels.") else paste("Every weekly-start mixture has one",
-    "weight vector per level, except the most recent starts (equal weights)."), side = 1,
-    outer = TRUE, line = 2.7, cex = .8)
+  mtext(paste("Rows alpha = 0.1-0.9 (mixtures with one weight vector per level): the weights of",
+    "each level; below alpha = 0.2, 0.5 and 0.8 the forecasts at that level (per-level mixtures",
+    "after crossing repair, before any outer correction)."), side = 1, outer = TRUE, line = 1.6,
+    cex = .8)
+  mtext(paste("Rows 'All levels': one weight vector for all levels (the mixture, or its",
+    "common-weight variant), learned from the mean quantile loss over the levels; two-vector",
+    "mixtures: baseline and declining vectors; context: G or the gate (line), c (points)."),
+    side = 1, outer = TRUE, line = 2.7, cex = .8)
   if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a CMU forecast, filled with",
     "the latest earlier CMU forecast of the same target week."), side = 1, outer = TRUE,
     line = 3.8, cex = .8)

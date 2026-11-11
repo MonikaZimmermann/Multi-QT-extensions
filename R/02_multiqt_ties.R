@@ -6,14 +6,29 @@ source("R/03_functions.R")
 
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
 settings <- multiqt_settings()            # Locations, tracker, S0 warmup and windows (R/03_functions.R).
-season_disease <- "covid"                 # Season forecast plot only: "covid" or "flu".
-season_horizon <- 2                       # Season forecast plot only: -1, 0, 1, 2 or 3.
+# The plots go through every disease, horizon and feedback design (designs), the locations
+# of multiqt_settings() and, where a plot can pool them, all locations except the US. The
+# single files multiqt_by_level.pdf and multiqt_season_forecasts.pdf show one combination
+# (the pages the notes load): the design of multiqt_settings() and, for the season forecasts,
+season_disease <- "covid"                 # this disease ("covid" or "flu")
+season_horizon <- 2                       # and horizon (-1, 0, 1, 2 or 3).
 # Descriptive CMU path page only: each location's largest peak in the selected season
 # and half season (winter: October to March, summer: April to September).
 path_season <- c(covid = "2024/25", flu = "2024/25")
 path_half <- c(covid = "summer", flu = "winter")
 path_weeks <- -5:5                        # Reference weeks relative to that location's peak.
 diseases <- c("covid", "flu")
+# Feedback designs, as in R/04 and R/05: the delay in weeks after the first report, after
+# which each forecast is learned once from its report current then, or the weekly re-run on
+# the reports known then.
+designs <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
+design_names <- with(designs, ifelse(revisions, "re-run", paste("delay", delay)))
+design_files <- gsub("[ -]", "", design_names)          # File names: "delay0", "rerun".
+default_design <- which(designs$delay == settings$feedback_delay &
+  designs$revisions == settings$feedback_revisions)
+design_of <- function(rows) ifelse(rows$feedback_revisions, "re-run",
+  paste("delay", rows$feedback_delay))
+cores <- max(1L, parallel::detectCores() - 2L)
 expert_multipliers <- settings$expert_multipliers
 multiplier_min <- min(expert_multipliers[expert_multipliers > 0])
 multiplier_max <- max(expert_multipliers)
@@ -38,8 +53,11 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # MultiQT tracks log1p(counts) or counts and learns only from the feedback released
 # so far: each forecast once, at the first later round feedback_delay weeks after its
 # first valid report, from its report current then (feedback_protocol() in
-# R/03_functions.R). (The re-run design, settings$feedback_revisions, is compared in
-# R/04_methods.R.)
+# R/03_functions.R). Re-run design (get_case(revisions = TRUE)): at every issue week t,
+# MultiQT is re-run from the first week on the reports current at t's cutoff (case_as_of())
+# and issues its week-t forecast; S0 stays that of the stateful design, as in R/04.
+# Every run is saved (cached() in R/03_functions.R): a restarted run recomputes only what
+# changed.
 # Scores use score_truth() (latest vintage by default), in counts / count_scale
 # (per 100k residents by default).
 # Every location keeps its own offsets, error scale S0 and count scale.
@@ -51,6 +69,18 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
   # If fewer than 20 reports arrive, every multiplier keeps the base.
   eta <- multipliers * s0$scale
   eta[multipliers == 0] <- 0
+  # The issued forecasts of one rate: stateful, or re-run at every issue week.
+  replays <- if (isTRUE(case$feedback_revised))
+    lapply(seq_len(nrow(case$base)), function(t) case_as_of(case, t, s0))
+  issue <- function(eta) {
+    if (is.null(replays)) return(multiqt(case$base, case$feedback_observed,
+      case$feedback_by_week, case$alpha, eta, s0$warmup_weeks, settings$transform))
+    t(vapply(seq_along(replays), function(t) {
+      replay <- replays[[t]]
+      multiqt(replay$base, replay$feedback_observed, replay$feedback_by_week, replay$alpha,
+        eta, s0$warmup_weeks, settings$transform)[t, ]
+    }, numeric(length(case$alpha))))
+  }
   # Score every issued week, including the S0 warmup, where every m issues the base
   # unless the warmup is replayed.
   truth <- score_truth(case, settings$score_target, settings$score_filled)
@@ -59,8 +89,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
     phase_weeks(case, phase, weeks_before_peak, weeks_after_peak)))
   scores <- scores_by_level <- weekly <- list()
   for (i in seq_along(multipliers)) {
-    q <- multiqt(case$base, case$feedback_observed, case$feedback_by_week, case$alpha,
-      eta[i], s0$warmup_weeks, settings$transform)
+    q <- issue(eta[i])
     # Coverage compares counts, so exact ties with integer reports stay ties.
     # The pinball loss is count loss divided by count_scale exactly once.
     week_scores <- score_quantiles(q, truth, case$alpha, scaling$scale)
@@ -79,6 +108,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
   }
   id <- data.frame(disease = case$disease, location = case$location,
     location_name = case$location_name, horizon = case$horizon,
+    feedback_delay = case$feedback_delay, feedback_revisions = case$feedback_revised,
     feedback_protocol = case$feedback_protocol)
   scores <- do.call(rbind, scores)
   # Loss change versus the same phase's m=0 baseline (the original forecasts).
@@ -90,7 +120,7 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
     scores = data.frame(id, scores, row.names = NULL),
     scores_by_level = data.frame(id, do.call(rbind, scores_by_level), row.names = NULL),
     rate_grid = data.frame(id, transform = settings$transform,
-      feedback_delay = case$feedback_delay, score_target = settings$score_target,
+      score_target = settings$score_target,
       multiplier = multipliers,
       eta, ensemble_expert = multipliers %in% expert_multipliers,
       initialized = s0$initialized, initialization_date = s0$date,
@@ -100,51 +130,74 @@ run_rate_grid <- function(case, keep_weekly = FALSE, multipliers = rate_multipli
       scale_used = scaling$used, count_scale = scaling$scale, scale_as_of = case$scale_as_of,
       reference_weeks = scaling$reference_weeks))
 }
-runs <- list()
-for (disease in diseases) for (location in settings$location_ids) for (horizon in settings$horizons) {
-  case <- get_case(prepared, disease, location, horizon, settings$feedback_delay)
+# The plotted locations on the dense grid, with the weekly forecasts of display_multipliers
+# (season plots), for every disease, horizon and design, in parallel.
+run_key <- function(disease, location, horizon, k) paste(disease, location, horizon,
+  design_files[k], sep = "_")
+plotted <- expand.grid(horizon = settings$horizons, location = settings$location_ids,
+  disease = diseases, design = seq_len(nrow(designs)), stringsAsFactors = FALSE)
+plotted <- plotted[order(!designs$revisions[plotted$design]), ]     # Re-runs first (longest).
+runs <- parallel::mclapply(seq_len(nrow(plotted)), function(i) {
+  k <- plotted$design[i]
+  case <- get_case(prepared, plotted$disease[i], plotted$location[i], plotted$horizon[i],
+    designs$delay[k], designs$revisions[k])
   check_peak_window(case, weeks_before_peak, weeks_after_peak,
     score_truth(case, settings$score_target, settings$score_filled))
-  message("Rate grid: ", disease, " | ", location, " | horizon ", horizon)
-  runs[[paste(disease, location, horizon, sep = "_")]] <- run_rate_grid(case,
-    keep_weekly = disease == season_disease && horizon == season_horizon)
-}
+  message("Rate grid: ", plotted$disease[i], " | ", plotted$location[i], " | horizon ",
+    plotted$horizon[i], " | ", design_names[k])
+  cached("02_rate_grid", run_rate_grid, case, TRUE)
+}, mc.cores = cores, mc.preschedule = FALSE)
+failed <- vapply(runs, function(x) is.null(x) || inherits(x, "try-error"), logical(1))
+if (any(failed)) stop("Rate grid failed: ", runs[[which(failed)[1]]])
+names(runs) <- with(plotted, run_key(disease, location, horizon, design))
 scores <- do.call(rbind, lapply(runs, `[[`, "scores"))
 scores_by_level <- do.call(rbind, lapply(runs, `[[`, "scores_by_level"))
 rownames(scores) <- rownames(scores_by_level) <- NULL
+scores$design <- design_of(scores)
+scores_by_level$design <- design_of(scores_by_level)
 write.csv(do.call(rbind, lapply(runs, `[[`, "rate_grid")),
   file.path(result_dir, "multiqt_rate_grid.csv"), row.names = FALSE)
 write.csv(scores, file.path(result_dir, "multiqt_phase_rate_tradeoffs.csv"), row.names = FALSE)
-# About 300,000 rows (cases x multipliers x phases x levels): stored as RDS.
+# About a million rows (cases x multipliers x phases x levels): stored as RDS.
 saveRDS(scores_by_level, file.path(result_dir, "multiqt_scores_by_level.rds"))
 # Every prepared location (not only location_ids), on the multipliers drawn as dots, for
-# the first row of multiqt_error_tradeoff.pdf. Only the scores are kept.
-all_scores <- list()
-for (prepared_case in prepared$cases) {
-  key <- with(prepared_case, paste(disease, location, horizon, sep = "_"))
-  if (!prepared_case$disease %in% diseases || !prepared_case$horizon %in% settings$horizons) next
-  all_scores[[key]] <- if (key %in% names(runs))
-    runs[[key]]$scores[runs[[key]]$scores$multiplier %in% expert_multipliers, ] else
-    run_rate_grid(get_case(prepared, prepared_case$disease, prepared_case$location,
-      prepared_case$horizon, settings$feedback_delay), multipliers = expert_multipliers)$scores
-}
-all_scores <- do.call(rbind, all_scores)
-rownames(all_scores) <- NULL
+# the pooled row and page of the plots. Only the scores are kept.
+dots <- do.call(rbind, lapply(seq_len(nrow(designs)), function(k) do.call(rbind,
+  lapply(prepared$cases, function(case) if (case$disease %in% diseases &&
+    case$horizon %in% settings$horizons) data.frame(disease = case$disease,
+      location = case$location, horizon = case$horizon, design = k)))))
+dot_scores <- parallel::mclapply(seq_len(nrow(dots)), function(i) {
+  k <- dots$design[i]
+  key <- run_key(dots$disease[i], dots$location[i], dots$horizon[i], k)
+  if (key %in% names(runs)) return(lapply(runs[[key]][c("scores", "scores_by_level")],
+    function(x) x[x$multiplier %in% expert_multipliers, ]))
+  cached("02_rate_grid_dots", function(case) run_rate_grid(case,
+    multipliers = expert_multipliers)[c("scores", "scores_by_level")], get_case(prepared,
+      dots$disease[i], dots$location[i], dots$horizon[i], designs$delay[k], designs$revisions[k]))
+}, mc.cores = cores)
+failed <- vapply(dot_scores, inherits, logical(1), "try-error")
+if (any(failed)) stop(dot_scores[[which(failed)[1]]])
+all_scores <- do.call(rbind, lapply(dot_scores, `[[`, "scores"))
+all_scores_by_level <- do.call(rbind, lapply(dot_scores, `[[`, "scores_by_level"))
+rownames(all_scores) <- rownames(all_scores_by_level) <- NULL
+all_scores$design <- design_of(all_scores)
+all_scores_by_level$design <- design_of(all_scores_by_level)
 write.csv(all_scores, file.path(result_dir, "multiqt_phase_rate_tradeoffs_all_locations.csv"),
   row.names = FALSE)
 print(scores[scores$disease == season_disease & scores$horizon == season_horizon &
-  scores$phase == "overall" & scores$multiplier %in% display_multipliers,
+  scores$design == design_names[default_design] & scores$phase == "overall" &
+  scores$multiplier %in% display_multipliers,
   c("location", "multiplier", "n_weeks", "quantile_loss", "coverage_error")], row.names = FALSE)
 
 # 3. PLOT SETTINGS ---------------------------------------------------
 score_units <- count_scale_label(settings$scale_method)
 tracker_label <- if (settings$transform == "log1p") "Log1p-count tracking" else "Count tracking"
-settings_label <- paste(tracker_label, "| eta = m * S0, S0 frozen after",
+# The settings line of a page for feedback design k.
+settings_label <- function(k) paste(tracker_label, "| eta = m * S0, S0 frozen after",
   settings$warmup_rounds, if (settings$replay_warmup)
-  "released rows (in hindsight: warmup replayed)" else "released rows", "| Feedback delay",
-  settings$feedback_delay, "week(s), protocol", feedback_protocol()$id, "| Scored against",
-  score_truth_label(settings$score_target, settings$feedback_delay), "in",
-  score_units)
+  "released rows (in hindsight: warmup replayed)" else "released rows", "| Feedback",
+  design_names[k], paste0("(protocol ", feedback_protocol()$id, ")"), "| Scored against",
+  score_truth_label(settings$score_target, designs$delay[k]), "in", score_units)
 phase_labels <- c(before = paste0("Before peak (weeks -", weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", weeks_after_peak, ")"),
   overall = paste0("Overall (", prepared$settings$evaluation_label, ")"))
@@ -164,9 +217,12 @@ multiplier_ticks <- multiplier_ticks[multiplier_ticks >= min(rate_multipliers[po
   multiplier_ticks <= max(rate_multipliers[positive])]
 multiplier_tick_labels <- trimws(formatC(multiplier_ticks, format = "fg", digits = 4))
 
-# 4. CMU FORECAST PATHS AROUND THE SELECTED PEAK ----------------------------
-# One page: locations by row, diseases by column. Each curve joins the five median
-# forecasts submitted in one reference week, at their different target dates.
+# 4. CMU FORECAST PATHS AROUND THE PEAKS -----------------------------------
+# Locations by row, diseases by column. Each curve joins the five median forecasts
+# submitted in one reference week, at their different target dates. First page: the
+# selected peak of each disease (path_season, path_half); then one page per season half
+# with peaks during the CMU forecasts, the same half for both diseases. The base forecasts
+# do not depend on the feedback design.
 # Use the raw CMU table: the prepared COVID base may be our own windowed_seasonal.
 # Missing submissions stay missing; they are not replaced by carried-forward paths.
 path_forecasts <- as.data.frame(nanoparquet::read_parquet("cmu_timeseries_hub_forecasts.parquet"))
@@ -176,14 +232,13 @@ path_forecasts <- path_forecasts[path_forecasts$quantile_level == .5 &
 stopifnot(!anyDuplicated(path_forecasts[c("disease", "location", "reference_date", "horizon")]),
   all(path_forecasts$target_end_date == path_forecasts$reference_date + 7 * path_forecasts$horizon))
 path_colours <- colorRampPalette(c("#ABD1E5", "#4393C3", "#1764A0", "#082C59"))(length(path_weeks))
-plot_forecast_path_panel <- function(disease, location) {
+plot_forecast_path_panel <- function(disease, location, season, half) {
   case <- get_case(prepared, disease, location, 0, settings$feedback_delay)
-  peak <- case$peaks[case$peaks$season == path_season[disease] &
-    case$peaks$half == path_half[disease], ]
+  peak <- case$peaks[case$peaks$season == season & case$peaks$half == half, ]
   if (!nrow(peak)) {
     plot.new()
     title(main = paste(case$location_name, "|", toupper(disease)))
-    text(.5, .5, paste("No peak in", path_season[disease], path_half[disease]))
+    text(.5, .5, paste("No peak in", season, half))
     return(invisible())
   }
   peak <- peak[which.max(peak$peak_value), ]
@@ -217,34 +272,44 @@ plot_forecast_path_panel <- function(disease, location) {
     length(unique(forecasts$reference_date)), " submitted reference weeks"),
     side = 3, line = .15, cex = .67)
 }
+# Season halves with a peak at a plotted location while CMU forecasts exist, in time order.
+halves <- unique(do.call(rbind, lapply(prepared$cases, function(case)
+  if (case$location %in% settings$location_ids && case$disease %in% diseases)
+    case$peaks[case$peaks$peak_date >= min(path_forecasts$reference_date), c("season", "half")])))
+halves <- halves[order(halves$season, halves$half != "winter"), ]
+path_pages <- c(list(list(season = path_season, half = path_half)), lapply(seq_len(nrow(halves)),
+  function(i) list(season = setNames(rep(halves$season[i], length(diseases)), diseases),
+    half = setNames(rep(halves$half[i], length(diseases)), diseases))))
 cairo_pdf(file.path(figure_dir, "multiqt_base_forecast_paths.pdf"), width = 15, height = 19,
   family = "DejaVu Sans")
 path_panels <- length(settings$location_ids) * length(diseases)
-layout(rbind(matrix(seq_len(path_panels), ncol = length(diseases), byrow = TRUE),
-  rep(path_panels + 1L, length(diseases))), heights = c(rep(1, length(settings$location_ids)), .5))
-par(mar = c(2.6, 4.4, 3.1, 1), oma = c(3.6, 0, 4.5, 0), mgp = c(2.7, .7, 0), cex = .9)
-for (location in settings$location_ids) for (disease in diseases)
-  plot_forecast_path_panel(disease, location)
-par(mar = c(0, 0, 0, 0))
-plot.new()
-legend("center", c(paste0("Week ", ifelse(path_weeks > 0, "+", ""), path_weeks),
-    "Latest reported counts", "Peak (retrospective)", "h = -1 (nowcast)", "h = 0 to 3"),
-  col = c(path_colours, "gray20", "gray65", "gray30", "gray30"),
-  lty = c(rep(1, length(path_weeks)), 2, 3, 0, 0),
-  lwd = 1.8, pch = c(rep(16, length(path_weeks)), NA, NA, 21, 16),
-  pt.bg = "white", pt.cex = c(rep(.6, length(path_weeks) + 2L), .85, .6),
-  ncol = 5, bty = "n", cex = .9)
-mtext("CMU base forecasts: five-horizon median curves around the selected peaks",
-  side = 3, outer = TRUE, line = 2.7, font = 2, cex = 1.25)
-mtext(paste(paste(toupper(diseases), path_season[diseases], path_half[diseases],
-    collapse = " | "), "|", score_units),
-  side = 3, outer = TRUE, line = 1.3, cex = .9)
-mtext("Each curve: one reference week, horizons -1 to 3. Darker = later reference week relative to the local peak.",
-  side = 3, outer = TRUE, line = 0, cex = .85)
-mtext("Horizontal axis: target week ending. Target date = reference date + 7h days. Raw CMU submissions; missing rounds stay missing.",
-  side = 1, outer = TRUE, line = .5, cex = .85)
-mtext("Observed counts and peak dates use the latest stored reports and are retrospective. Reference dates label weeks, not exact submission times.",
-  side = 1, outer = TRUE, line = 1.7, cex = .8)
+for (page in path_pages) {
+  layout(rbind(matrix(seq_len(path_panels), ncol = length(diseases), byrow = TRUE),
+    rep(path_panels + 1L, length(diseases))), heights = c(rep(1, length(settings$location_ids)), .5))
+  par(mar = c(2.6, 4.4, 3.1, 1), oma = c(3.6, 0, 4.5, 0), mgp = c(2.7, .7, 0), cex = .9)
+  for (location in settings$location_ids) for (disease in diseases)
+    plot_forecast_path_panel(disease, location, page$season[[disease]], page$half[[disease]])
+  par(mar = c(0, 0, 0, 0))
+  plot.new()
+  legend("center", c(paste0("Week ", ifelse(path_weeks > 0, "+", ""), path_weeks),
+      "Latest reported counts", "Peak (retrospective)", "h = -1 (nowcast)", "h = 0 to 3"),
+    col = c(path_colours, "gray20", "gray65", "gray30", "gray30"),
+    lty = c(rep(1, length(path_weeks)), 2, 3, 0, 0),
+    lwd = 1.8, pch = c(rep(16, length(path_weeks)), NA, NA, 21, 16),
+    pt.bg = "white", pt.cex = c(rep(.6, length(path_weeks) + 2L), .85, .6),
+    ncol = 5, bty = "n", cex = .9)
+  mtext("CMU base forecasts: five-horizon median curves around the peaks",
+    side = 3, outer = TRUE, line = 2.7, font = 2, cex = 1.25)
+  mtext(paste(paste(toupper(diseases), page$season[diseases], page$half[diseases],
+      collapse = " | "), "|", score_units),
+    side = 3, outer = TRUE, line = 1.3, cex = .9)
+  mtext("Each curve: one reference week, horizons -1 to 3. Darker = later reference week relative to the local peak.",
+    side = 3, outer = TRUE, line = 0, cex = .85)
+  mtext("Horizontal axis: target week ending. Target date = reference date + 7h days. Raw CMU submissions; missing rounds stay missing.",
+    side = 1, outer = TRUE, line = .5, cex = .85)
+  mtext("Observed counts and peak dates use the latest stored reports and are retrospective. Reference dates label weeks, not exact submission times.",
+    side = 1, outer = TRUE, line = 1.7, cex = .8)
+}
 dev.off()
 
 # 5. CALIBRATION ERROR VS MEAN QUANTILE LOSS ON THE MULTIPLIER GRID ----------
@@ -318,7 +383,8 @@ n_rows <- length(settings$location_ids)
 n_columns <- length(settings$horizons)
 page_height <- 3.1 * n_rows + 1.5   # 17 inches for 5 locations.
 # all_rows: scores of every pooled location (pooled_rows()); if given, they fill a first row.
-plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
+# k: the feedback design.
+plot_tradeoff_page <- function(rows, disease, title, k, all_rows = NULL) {
   page_rows <- n_rows + !is.null(all_rows)
   panels <- page_rows * n_columns
   layout(rbind(matrix(seq_len(panels), page_rows, n_columns, byrow = TRUE), panels + 1L),
@@ -338,43 +404,76 @@ plot_tradeoff_page <- function(rows, disease, title, all_rows = NULL) {
     pch = c(phase_pch, 1, rep(16, 4)), col = c(phase_colours, "gray25", rep("gray50", 4)),
     pt.cex = c(rep(1.2, 3), 2, dot_size(c(.01, .03, .1, .3))), pt.lwd = c(1, 1, 1, 2, rep(1, 4)),
     ncol = 4, bty = "n", cex = 1)
-  mtext(paste(toupper(disease), "|", title), side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
-  mtext(paste(settings_label, "| Lower left is better."), side = 3, outer = TRUE, line = .7, cex = .85)
+  mtext(paste(toupper(disease), "|", design_names[k], "|", title), side = 3, outer = TRUE,
+    line = 2.2, font = 2, cex = 1.2)
+  mtext(paste(settings_label(k), "| Lower left is better."), side = 3, outer = TRUE, line = .7,
+    cex = .85)
 }
 # Calibration error = mean over levels of |coverage - alpha|; loss = mean over levels.
-# First row: every prepared location except the US (all_scores, pooled_rows()).
+# One page per disease and feedback design. First row: every prepared location except the
+# US (all_scores, pooled_rows()).
+in_page <- function(rows, disease, k) rows[rows$disease == disease &
+  rows$design == design_names[k], ]
 cairo_pdf(file.path(figure_dir, "multiqt_error_tradeoff.pdf"), width = 17, height = page_height + 3.1, family = "DejaVu Sans")
-for (disease in diseases)
-  plot_tradeoff_page(scores[scores$disease == disease, ], disease,
-    "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels",
-    pooled_rows(all_scores[all_scores$disease == disease, ], settings))
+for (disease in diseases) for (k in seq_len(nrow(designs)))
+  plot_tradeoff_page(in_page(scores, disease, k), disease,
+    "Fixed-rate MultiQT: calibration error vs mean quantile loss, mean over quantile levels", k,
+    pooled_rows(in_page(all_scores, disease, k), settings))
 dev.off()
 
-# The same comparison for each quantile level: one page per disease and level.
+# The same comparison for each quantile level: one PDF per feedback design in
+# multiqt_by_level/, one page per disease and level, first row every location except the US;
+# multiqt_by_level.pdf: the design of multiqt_settings().
 # Averaging levels hides which quantiles struggle; CE here is |coverage - alpha| itself.
-cairo_pdf(file.path(figure_dir, "multiqt_by_level.pdf"), width = 17, height = page_height, family = "DejaVu Sans")
-for (disease in diseases) for (level in sort(unique(scores_by_level$alpha))) {
-  rows <- scores_by_level[scores_by_level$disease == disease & scores_by_level$alpha == level, ]
-  plot_tradeoff_page(rows, disease, paste0("Fixed-rate MultiQT at quantile level alpha = ", level,
-    ": |coverage - alpha| vs quantile loss"))
+dir.create(file.path(figure_dir, "multiqt_by_level"), showWarnings = FALSE)
+for (k in seq_len(nrow(designs))) {
+  cairo_pdf(file.path(figure_dir, "multiqt_by_level", paste0(design_files[k], ".pdf")),
+    width = 17, height = page_height + 3.1, family = "DejaVu Sans")
+  for (disease in diseases) for (level in sort(unique(scores_by_level$alpha))) {
+    at_level <- function(rows) in_page(rows[rows$alpha == level, ], disease, k)
+    plot_tradeoff_page(at_level(scores_by_level), disease, paste0("Fixed-rate MultiQT at ",
+      "quantile level alpha = ", level, ": |coverage - alpha| vs quantile loss"), k,
+      pooled_rows(at_level(all_scores_by_level), settings))
+  }
+  dev.off()
 }
-dev.off()
+file.copy(file.path(figure_dir, "multiqt_by_level", paste0(design_files[default_design], ".pdf")),
+  file.path(figure_dir, "multiqt_by_level.pdf"), overwrite = TRUE)
 
 # 6. LOSS AND CALIBRATION ALONG THE GRID: ONE PAGE PER LOCATION ----------
+# Per feedback design: first all locations except the US pooled (on the multipliers drawn
+# as dots: each phase's loss and calibration error pooled over the locations, each location
+# weighted by its weeks), then one page per location of location_ids (the dense grid).
 # Loss compares each phase with its own m=0 baseline. Calibration is the mean
 # absolute coverage gap over levels; dashed lines show its m=0 value.
+pooled_curves <- function(rows) {
+  rows <- pooled_rows(rows, settings)
+  rows <- rows[is.finite(rows$quantile_loss) & rows$n_weeks > 0, ]
+  pooled <- do.call(rbind, lapply(split(rows, rows[c("horizon", "phase", "multiplier")],
+    drop = TRUE), function(x) data.frame(x[1, c("horizon", "phase", "multiplier")],
+      quantile_loss = weighted.mean(x$quantile_loss, x$n_weeks),
+      coverage_error = weighted.mean(x$coverage_error, x$n_weeks))))
+  zero <- pooled[pooled$multiplier == 0, ]
+  base_loss <- zero$quantile_loss[match(paste(pooled$horizon, pooled$phase),
+    paste(zero$horizon, zero$phase))]
+  pooled$relative_loss <- 100 * (pooled$quantile_loss / base_loss - 1)
+  pooled[order(pooled$multiplier), ]
+}
 cairo_pdf(file.path(figure_dir, "multiqt_phase_rate_tradeoffs.pdf"), width = 20.3125, height = 15.5, family = "DejaVu Sans")
 par(mfrow = c(4, 5), mar = c(4, 4, 3, 1), oma = c(4.5, 0, 4, 0), mgp = c(2.5, .7, 0), cex = .95)
-for (location in settings$location_ids) {
+for (k in seq_len(nrow(designs))) for (location in c(NA, settings$location_ids)) {
+  pooled <- is.na(location)
+  page <- if (pooled) do.call(rbind, lapply(diseases, function(disease)
+    data.frame(disease, pooled_curves(in_page(all_scores, disease, k))))) else
+    scores[scores$location == location & scores$design == design_names[k], ]
   # Each disease's loss row is followed immediately by its calibration row.
   # Shared calibration limits within a disease make the five horizons comparable.
   for (disease in diseases) for (metric in c("relative_loss", "coverage_error"))
     for (horizon in settings$horizons) {
-      z <- scores[scores$disease == disease & scores$location == location &
-        scores$horizon == horizon, ]
+      z <- page[page$disease == disease & page$horizon == horizon, ]
       loss_panel <- metric == "relative_loss"
       values <- if (loss_panel) z[[metric]][z$multiplier > 0] else
-        scores$coverage_error[scores$disease == disease & scores$location == location]
+        page$coverage_error[page$disease == disease]
       finite_values <- values[is.finite(values)]
       limits <- if (length(finite_values)) range(0, finite_values) else
         if (loss_panel) c(-1, 1) else c(0, 1)
@@ -390,20 +489,26 @@ for (location in settings$location_ids) {
       for (phase in phases) {
         curve <- z[z$phase == phase, ]
         lines(curve$multiplier[curve$multiplier > 0], curve[[metric]][curve$multiplier > 0],
-          col = phase_colours[phase], lwd = 1.8)
+          col = phase_colours[phase], lwd = 1.8, type = if (pooled) "o" else "l", pch = 16,
+          cex = .6)
         if (!loss_panel) abline(h = curve$coverage_error[curve$multiplier == 0],
           col = phase_colours[phase], lty = 2)
       }
       if (!any(is.finite(z[[metric]][z$multiplier > 0])))
         text(sqrt(prod(range(rate_multipliers[positive]))), mean(limits), "No usable phase scores")
     }
-  mtext(paste(location_names[location], "| Fixed-rate MultiQT: loss and calibration before and after the peak"),
-    side = 3, outer = TRUE, line = 2, cex = 1.3)
-  mtext(settings_label, side = 3, outer = TRUE, line = .5, cex = .9)
+  where <- if (pooled) paste("All", pooled_label(length(unique(pooled_rows(in_page(all_scores,
+    diseases[1], k), settings)$location)), settings), "pooled (multipliers of the dots)") else
+    location_names[location]
+  mtext(paste(where, "|", design_names[k], "| Fixed-rate MultiQT: loss and calibration before",
+    "and after the peak"), side = 3, outer = TRUE, line = 2, cex = 1.3)
+  mtext(settings_label(k), side = 3, outer = TRUE, line = .5, cex = .9)
   legend(grconvertX(.5, "ndc", "user"), grconvertY(.035, "ndc", "user"), phase_labels,
     col = phase_colours, lwd = 2, bty = "n", horiz = TRUE, xjust = .5, cex = .85, xpd = NA)
-  mtext("Loss: % change from m = 0 in the same phase (negative is better). Calibration: mean |coverage - alpha| over levels (lower is better); dashed: m = 0.",
-    side = 1, outer = TRUE, line = 3, cex = .85)
+  mtext(paste("Loss: % change from m = 0 in the same phase (negative is better). Calibration:",
+    "mean |coverage - alpha| over levels (lower is better); dashed: m = 0.", if (pooled)
+      "Pooled: each location weighted by its weeks."), side = 1, outer = TRUE, line = 3,
+    cex = .85)
 }
 dev.off()
 
@@ -437,62 +542,74 @@ plot_season_diagnostic <- function(case, values, limits, y_label, title, ticks,
 }
 truth_label <- score_truth_label(settings$score_target, settings$feedback_delay)
 truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
-cairo_pdf(file.path(figure_dir, "multiqt_season_forecasts.pdf"), width = 18, height = 15, family = "DejaVu Sans")
-# Six multipliers per page; each column block holds forecast, coverage and loss panels.
-layout(rbind(cbind(1:3, 4:6, 7:9), cbind(10:12, 13:15, 16:18)), heights = c(2, 1, 1, 2, 1, 1))
-for (location in settings$location_ids) {
-  run <- runs[[paste(season_disease, location, season_horizon, sep = "_")]]
-  case <- run$case
-  columns <- match(plot_alpha, case$alpha)
-  dates <- case$target_date
-  ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "6 months")
-  observed <- score_truth(case, settings$score_target, settings$score_filled) / run$scaling$scale
-  base <- case$base[, columns] / run$scaling$scale
-  forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
-  plot_limits <- range(0, observed, base, unlist(forecasts), na.rm = TRUE)
-  loss_limits <- range(0, unlist(lapply(run$weekly, function(x) x$loss[, columns])), na.rm = TRUE)
-  par(oma = c(5, 0, 3, 0), mgp = c(2.5, 0.7, 0), cex = 0.9)
-  for (i in seq_along(display_multipliers)) {
-    key <- as.character(display_multipliers[i])
-    q <- forecasts[[key]]
-    par(mar = c(1, 4.5, 2.5, 1))
-    plot(dates, observed, type = "n", ylim = plot_limits, xlim = range(dates), xaxt = "n",
-      xaxs = "i", xlab = "", ylab = paste0("Hospitalizations (", score_units, ")"),
-      main = paste("Rate multiplier m =", key))
-    mark_time(case)
-    # Thick median lines; shading spans the selected lower/upper quantiles. The polygon
-    # and lines break at the summer 2024 gap.
-    broken <- break_gaps(dates, q, base, observed)
-    for (part in split(seq_along(broken$dates), cumsum(is.na(broken$dates)))) {
-      part <- part[!is.na(broken$dates[part])]
-      polygon(c(broken$dates[part], rev(broken$dates[part])),
-        c(broken[[2]][part, 1], rev(broken[[2]][part, 3])),
-        col = adjustcolor(multiplier_colours[i], alpha.f = 0.2), border = NA)
+# One PDF per disease, horizon and feedback design in multiqt_season_forecasts/, one page
+# per location; multiqt_season_forecasts.pdf: season_disease, season_horizon and the design
+# of multiqt_settings().
+draw_season_pages <- function(disease, horizon, k) {
+  cairo_pdf(file.path(figure_dir, "multiqt_season_forecasts", paste0(disease, "_horizon",
+    horizon, "_", design_files[k], ".pdf")), width = 18, height = 15, family = "DejaVu Sans")
+  # Six multipliers per page; each column block holds forecast, coverage and loss panels.
+  layout(rbind(cbind(1:3, 4:6, 7:9), cbind(10:12, 13:15, 16:18)), heights = c(2, 1, 1, 2, 1, 1))
+  for (location in settings$location_ids) {
+    run <- runs[[run_key(disease, location, horizon, k)]]
+    case <- run$case
+    columns <- match(plot_alpha, case$alpha)
+    dates <- case$target_date
+    ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "6 months")
+    observed <- score_truth(case, settings$score_target, settings$score_filled) / run$scaling$scale
+    base <- case$base[, columns] / run$scaling$scale
+    forecasts <- lapply(run$weekly, function(x) x$q[, columns, drop = FALSE])
+    plot_limits <- range(0, observed, base, unlist(forecasts), na.rm = TRUE)
+    loss_limits <- range(0, unlist(lapply(run$weekly, function(x) x$loss[, columns])), na.rm = TRUE)
+    par(oma = c(5, 0, 3, 0), mgp = c(2.5, 0.7, 0), cex = 0.9)
+    for (i in seq_along(display_multipliers)) {
+      key <- as.character(display_multipliers[i])
+      q <- forecasts[[key]]
+      par(mar = c(1, 4.5, 2.5, 1))
+      plot(dates, observed, type = "n", ylim = plot_limits, xlim = range(dates), xaxt = "n",
+        xaxs = "i", xlab = "", ylab = paste0("Hospitalizations (", score_units, ")"),
+        main = paste("Rate multiplier m =", key))
+      mark_time(case)
+      # Thick median lines; shading spans the selected lower/upper quantiles. The polygon
+      # and lines break at the summer 2024 gap.
+      broken <- break_gaps(dates, q, base, observed)
+      for (part in split(seq_along(broken$dates), cumsum(is.na(broken$dates)))) {
+        part <- part[!is.na(broken$dates[part])]
+        polygon(c(broken$dates[part], rev(broken$dates[part])),
+          c(broken[[2]][part, 1], rev(broken[[2]][part, 3])),
+          col = adjustcolor(multiplier_colours[i], alpha.f = 0.2), border = NA)
+      }
+      matlines(broken$dates, broken[[3]], col = "gray50", lty = 2, lwd = c(1, 2, 1))
+      matlines(broken$dates, broken[[2]], col = multiplier_colours[i], lty = 1, lwd = c(1, 2, 1))
+      lines(broken$dates, broken[[4]], type = "o", pch = 16, cex = 0.5)
+      legend("topright", c(truth_legend, "Original", "Fixed MultiQT", "Peaks (retrospective)"),
+        col = c("black", "gray50", multiplier_colours[i], "gray40"),
+        lty = c(1, 2, 1, 3), pch = c(16, NA, NA, NA), cex = 0.7, bty = "n")
+      residual <- sweep(run$weekly[[key]]$covered[, columns], 2, plot_alpha, "-")
+      plot_season_diagnostic(case, residual, c(-1, 1), "Coverage - alpha",
+        "Weekly coverage residual", ticks, zero_line = TRUE)
+      plot_season_diagnostic(case, run$weekly[[key]]$loss[, columns], loss_limits,
+        "Quantile loss", "Weekly quantile loss", ticks, show_time = TRUE)
     }
-    matlines(broken$dates, broken[[3]], col = "gray50", lty = 2, lwd = c(1, 2, 1))
-    matlines(broken$dates, broken[[2]], col = multiplier_colours[i], lty = 1, lwd = c(1, 2, 1))
-    lines(broken$dates, broken[[4]], type = "o", pch = 16, cex = 0.5)
-    legend("topright", c(truth_legend, "Original", "Fixed MultiQT", "Peaks (retrospective)"),
-      col = c("black", "gray50", multiplier_colours[i], "gray40"),
-      lty = c(1, 2, 1, 3), pch = c(16, NA, NA, NA), cex = 0.7, bty = "n")
-    residual <- sweep(run$weekly[[key]]$covered[, columns], 2, plot_alpha, "-")
-    plot_season_diagnostic(case, residual, c(-1, 1), "Coverage - alpha",
-      "Weekly coverage residual", ticks, zero_line = TRUE)
-    plot_season_diagnostic(case, run$weekly[[key]]$loss[, columns], loss_limits,
-      "Quantile loss", "Weekly quantile loss", ticks, show_time = TRUE)
+    mtext(paste(disease, "|", case$location_name, paste0("(", location, ")"),
+      "| horizon", horizon, "|", design_names[k], "|", min(dates), "to", max(dates)),
+      side = 3, outer = TRUE, line = 1, cex = 1)
+    mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
+      " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: peaks (local ",
+      "maxima of the latest counts) | Gray: tuning period (not scored)"),
+      side = 3, outer = TRUE, line = -0.3, cex = 0.8)
+    mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
+      line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
+    mtext(paste0("Coverage residual = 1(", truth_label, " <= quantile) - alpha."),
+      side = 1, outer = TRUE, line = 2, cex = 0.75)
   }
-  mtext(paste(season_disease, "|", case$location_name, paste0("(", location, ")"),
-    "| horizon", season_horizon, "|", min(dates), "to", max(dates)),
-    side = 3, outer = TRUE, line = 1, cex = 1)
-  mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
-    " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: peaks (local ",
-    "maxima of the latest counts) | Gray: tuning period (not scored)"),
-    side = 3, outer = TRUE, line = -0.3, cex = 0.8)
-  mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
-    line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
-  mtext(paste0("Coverage residual = 1(", truth_label, " <= quantile) - alpha."),
-    side = 1, outer = TRUE, line = 2, cex = 0.75)
+  invisible(dev.off())
 }
-dev.off()
+dir.create(file.path(figure_dir, "multiqt_season_forecasts"), showWarnings = FALSE)
+for (k in seq_len(nrow(designs))) for (disease in diseases) for (horizon in settings$horizons)
+  draw_season_pages(disease, horizon, k)
+file.copy(file.path(figure_dir, "multiqt_season_forecasts", paste0(season_disease, "_horizon",
+  season_horizon, "_", design_files[default_design], ".pdf")),
+  file.path(figure_dir, "multiqt_season_forecasts.pdf"), overwrite = TRUE)
 # Compare loss/coverage with these curves: do larger multipliers leave forecasts too high,
 # too low, or unstable after the peak? This motivates future adaptive rates.

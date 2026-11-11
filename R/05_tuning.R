@@ -189,57 +189,73 @@ print(tuned[c(groups, "method", "setting", "value", "on_grid_edge",
 # 4. PLOT: CRITERION OVER EACH GRID -------------------------------------------
 # One page per disease and feedback design; one panel per tuned setting; one line per
 # method. Solid: log1p tracker (loss of log(counts + 1)), dashed: identity (loss per
-# 100k); each tracker on its own criterion; the chosen value is circled.
-means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
-  feedback_delay + feedback_revisions + method + setting + value, scored, mean)
+# 100k); each tracker on its own criterion; the chosen value is circled. First the pooled
+# pages (the criterion), then the same pages for each tuned location of location_ids (mean
+# over horizons; circled: the value chosen on the pool). The US is not tuned.
+# where: the location of the pages (NULL: the pool).
+draw_tuning_pages <- function(scored, where = NULL) {
+  means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
+    feedback_delay + feedback_revisions + method + setting + value, scored, mean)
+  base <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
+    feedback_delay + feedback_revisions, unique(scored[scored$method == "original",
+      c(groups, "location", "horizon", "log_loss", "loss", "coverage_error")]), mean)
+  names(base)[5:7] <- paste0("original_", names(base)[5:7])
+  for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tuning_feedback))) {
+    feedback <- tuning_feedback[f, ]
+    in_design <- function(x) x$disease == disease & x$feedback_delay == feedback$delay &
+      x$feedback_revisions == feedback$revisions
+    # Eight setting panels plus a separate legend strip.
+    panel_rows <- ceiling(length(grids) / 4L)
+    panel_ids <- matrix(seq_len(4L * panel_rows), panel_rows, 4, byrow = TRUE)
+    panel_ids[panel_ids > length(grids)] <- 0L
+    layout(rbind(panel_ids, rep(length(grids) + 1L, 4L)), heights = c(rep(1, panel_rows), .18))
+    par(oma = c(2.5, 0, 3, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.3, .6, 0))
+    for (setting in names(grids)) {
+      rows <- means[in_design(means) & means$setting == setting & means$method != "original", ]
+      original <- base[in_design(base), ]
+      original <- original[match(rows$transform, original$transform), ]
+      rows$change <- 100 * ifelse(criterion_of(rows$transform) == "log_loss",
+        rows$log_loss / original$original_log_loss, rows$loss / original$original_loss) - 100
+      methods <- unique(rows$method)
+      colours <- setNames(hcl.colors(max(3L, length(methods)), "Dark 3")[seq_along(methods)], methods)
+      plot(NA, xlim = range(grids[[setting]]), ylim = range(0, rows$change, na.rm = TRUE),
+        log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
+        ylab = "Loss vs original (%)", main = setting)
+      abline(h = 0, col = "gray60")
+      for (method in methods) for (transform in transforms) {
+        line <- rows[rows$method == method & rows$transform == transform, ]
+        line <- line[order(line$value), ]
+        lines(line$value, line$change, col = colours[method], lty = if (transform == "log1p") 1 else 2,
+          type = "b", pch = 16, cex = .6)
+        chosen <- tuned[in_design(tuned) & tuned$transform == transform &
+          tuned$method == method, "value"]
+        points(chosen, line$change[match(chosen, line$value)], col = colours[method], cex = 1.6)
+      }
+      legend("topleft", methods, col = colours, lty = 1, bty = "n", cex = .7)
+    }
+    par(mar = c(0, 0, 0, 0))
+    plot.new()
+    legend("center", c("log1p tracker (loss of log(counts + 1))",
+      paste0("identity tracker (loss in ", count_scale_label(settings$scale_method), ")"),
+      "chosen value"), lty = c(1, 2, NA),
+      pch = c(NA, NA, 1), bty = "n", ncol = 3)
+    mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
+      feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
+      prepared$settings$tuning_label, "| horizons",
+      paste(range(tuning_horizons), collapse = " to "), "|", if (is.null(where))
+        pooled_label(length(unique(scored$location[scored$disease == disease])), settings) else
+        where), side = 3, outer = TRUE, line = 1.2, font = 2)
+    mtext(paste("Mean quantile loss relative to the original forecasts", if (is.null(where))
+      "(mean over locations and horizons)" else "(mean over horizons; circled: chosen on the pool)",
+      "on each tracker's scale"), side = 1, outer = TRUE, line = 1)
+  }
+}
 cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15,
   height = 3.6 * ceiling(length(grids) / 4L) + 1.5, family = "DejaVu Sans")
-for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tuning_feedback))) {
-  feedback <- tuning_feedback[f, ]
-  in_design <- function(x) x$disease == disease & x$feedback_delay == feedback$delay &
-    x$feedback_revisions == feedback$revisions
-  # Eight setting panels plus a separate legend strip.
-  panel_rows <- ceiling(length(grids) / 4L)
-  panel_ids <- matrix(seq_len(4L * panel_rows), panel_rows, 4, byrow = TRUE)
-  panel_ids[panel_ids > length(grids)] <- 0L
-  layout(rbind(panel_ids, rep(length(grids) + 1L, 4L)), heights = c(rep(1, panel_rows), .18))
-  par(oma = c(2.5, 0, 3, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.3, .6, 0))
-  for (setting in names(grids)) {
-    rows <- means[in_design(means) & means$setting == setting & means$method != "original", ]
-    original <- base[in_design(base), ]
-    original <- original[match(rows$transform, original$transform), ]
-    rows$change <- 100 * ifelse(criterion_of(rows$transform) == "log_loss",
-      rows$log_loss / original$original_log_loss, rows$loss / original$original_loss) - 100
-    methods <- unique(rows$method)
-    colours <- setNames(hcl.colors(max(3L, length(methods)), "Dark 3")[seq_along(methods)], methods)
-    plot(NA, xlim = range(grids[[setting]]), ylim = range(0, rows$change, na.rm = TRUE),
-      log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
-      ylab = "Loss vs original (%)", main = setting)
-    abline(h = 0, col = "gray60")
-    for (method in methods) for (transform in transforms) {
-      line <- rows[rows$method == method & rows$transform == transform, ]
-      line <- line[order(line$value), ]
-      lines(line$value, line$change, col = colours[method], lty = if (transform == "log1p") 1 else 2,
-        type = "b", pch = 16, cex = .6)
-      chosen <- tuned[in_design(tuned) & tuned$transform == transform &
-        tuned$method == method, "value"]
-      points(chosen, line$change[match(chosen, line$value)], col = colours[method], cex = 1.6)
-    }
-    legend("topleft", methods, col = colours, lty = 1, bty = "n", cex = .7)
-  }
-  par(mar = c(0, 0, 0, 0))
-  plot.new()
-  legend("center", c("log1p tracker (loss of log(counts + 1))",
-    paste0("identity tracker (loss in ", count_scale_label(settings$scale_method), ")"),
-    "chosen value"), lty = c(1, 2, NA),
-    pch = c(NA, NA, 1), bty = "n", ncol = 3)
-  mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
-    feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
-    prepared$settings$tuning_label, "| horizons",
-    paste(range(tuning_horizons), collapse = " to "), "|",
-    pooled_label(length(unique(scored$location[scored$disease == disease])), settings)),
-    side = 3, outer = TRUE, line = 1.2, font = 2)
-  mtext(paste("Mean pinball loss relative to the original forecasts (mean over locations",
-    "and horizons), on each tracker's scale"), side = 1, outer = TRUE, line = 1)
+draw_tuning_pages(scored)
+for (location in intersect(settings$location_ids, scored$location)) {
+  case <- prepared$cases[[paste(scored$disease[1], location, tuning_horizons[1], sep = "_")]]
+  draw_tuning_pages(scored[scored$location == location, ],
+    paste0(case$location_name, " (", location, ")"))
 }
 dev.off()
