@@ -29,12 +29,11 @@ transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses se
 # first report, after which each forecast is learned once from its report current then, or
 # the weekly re-run on the reports known then (feedback_protocol() in R/03_functions.R).
 tuning_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
-# One grid per tuned setting (tuned_setting in R/03_functions.R, plus the soft switch's
-# threshold, width and signal weights); multiples of S0 except H, lambda, the number of
-# recent weekly starts, the switch and context settings and the studentized eta (units of
-# sigma_t). Score-based experts (protocol fixed on 2026-11-10 before their evaluation):
-# H = 4, lambda_start = 2.72 and sharing 1/8 are not tuned; the target signal's threshold
-# delta for C and D, and kappa for E (delta = .05), with the sigmoid width fixed at .05.
+# One grid per tuned setting (tuned_setting in R/03_functions.R); multiples of S0 except H,
+# lambda, the number of recent weekly starts and the studentized eta (units of sigma_t).
+# Score-based experts: nothing tuned (H = 4, lambda_start = 2.72, sharing 1/8, the target
+# signal and the rate of Decline MultiQT are fixed in method_parameters()); their experts
+# use the rates tuned for these methods.
 grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4),
               slope_min_multiplier = c(.002, .004, .01, .02, .05, .1),
               median_rate = c(.003, .01, .03, .1, .3, 1),
@@ -42,28 +41,12 @@ grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4)
               restart_lambda = c(.25, .5, 1, 2.72, 7, 20),
               leaky_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2),
               restart_recent_k = c(8L, 16L),
-              context_delta = c(0, .05, .1),
-              decline_kappa = c(1, 2, 4),
-              switch_strength = c(0, .25, .5, .75, 1),
-              switch_threshold = c(.02, .05, .1, .2),
-              switch_width = c(.02, .05, .1, .2),
-              switch_weight_path = c(0, .5, 1),
-              switch_weight_nowcast = c(0, .5, 1),
-              switch_weight_revision = c(0, .5, 1),
               outer_multiplier = c(.001, .002, .004, .01, .02, .05, .1, .2))
 # Stages, in order; each uses the values chosen in the earlier ones. First every
-# method's own setting except the soft switch's, the context settings and the outer rates
-# (so the score experts' own rates); then the context settings of methods C, D and E on
-# those experts; then the soft switch's (B) settings one after another (strength 0 is
-# method A); last the outer rates, on the tuned inner mixtures.
-switch_settings <- c("switch_strength", "switch_threshold", "switch_width",
-  "switch_weight_path", "switch_weight_nowcast", "switch_weight_revision")
-context_settings <- c("context_delta", "decline_kappa")
-stages <- c(list(setdiff(names(grids), c(switch_settings, context_settings,
-  "outer_multiplier"))), list(context_settings), as.list(switch_settings),
-  list("outer_multiplier"))
-tuned_methods <- function(setting) if (setting %in% switch_settings) "score_switch" else
-  names(tuned_setting)[tuned_setting == setting]
+# method's own setting except the outer rates, then the outer rates, on the tuned inner
+# mixtures.
+stages <- list(setdiff(names(grids), "outer_multiplier"), "outer_multiplier")
+tuned_methods <- function(setting) names(tuned_setting)[tuned_setting == setting]
 # A value chosen on the edge of its grid is flagged in tuned_settings.csv (on_grid_edge).
 cores <- max(1L, parallel::detectCores() - 2L)
 result_dir <- "output/results/tuning"
@@ -121,7 +104,7 @@ run_stage <- function(disease, transform, feedback, stage, by_method = list()) {
   do.call(rbind, rows)
 }
 # The tuned value per method and setting: the smallest mean criterion over cases (ties:
-# the smaller value, i.e. the slower rate, shorter lookback or weaker context dependence).
+# the smaller value, i.e. the slower rate or shorter lookback).
 groups <- c("disease", "transform", "feedback_delay", "feedback_revisions")
 choose_values <- function(scores) {
   scores <- scores[scores$method != "original", ]

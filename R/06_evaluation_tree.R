@@ -162,7 +162,8 @@ write.csv(do.call(rbind, lapply(seq_len(nrow(pages)), function(p)
 # (duplicate_of); two methods are identical in a case if they lead to the same first method.
 # Each pair identical in all of the page's cases of a feedback design, with those designs
 # (pairs identical only in some cases are left out: at horizon -1, without a target signal,
-# the score mixtures C, D and E issue A's forecast, which the second line says once).
+# Decline MultiQT gives the original forecast and score_gated that of score_learned, which
+# the second line says once).
 twin_note <- function(rows, methods) {
   rows <- rows[rows$phase == "overall" & rows$method %in% names(methods), ]
   rows$first <- ifelse(is.na(rows$duplicate_of), rows$method, rows$duplicate_of)
@@ -175,14 +176,12 @@ twin_note <- function(rows, methods) {
     n <- table(factor(feedback, feedback_levels))
     names(n)[n > 0 & n == cases[names(n)]]
   }))
-  context <- intersect(names(methods), c("score_target_switch", "score_context",
-    "score_context_hard", "score_fast_decline", score_noshare[c("score_target_switch",
-      "score_context", "score_fast_decline")]))
+  context <- intersect(names(methods), c("decline", "score_gated"))
   c(if (length(pairs)) paste("Identical forecasts in every case of a design:",
     paste(paste0(names(pairs), " (", vapply(pairs, paste, "", collapse = ", "), ")"),
       collapse = "; ")),
-    if (length(context)) paste("At horizon -1 (no target signal) the score mixtures C, D and",
-      "E give the forecast of A (one vector)."))
+    if (length(context)) paste("At horizon -1 (no target signal) Decline MultiQT gives the",
+      "original forecast and the learned score mixture does not back off."))
 }
 
 # 3. PLOT ---------------------------------------------------------------------

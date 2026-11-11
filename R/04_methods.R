@@ -1,8 +1,8 @@
 # Apply the recalibration methods of R/03_functions.R to each location and plot them.
 # Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
 # Run from the project root: Rscript R/04_methods.R
-# Offsets and ensemble weights are fitted independently for each location. The forecast,
-# weight and soft-switching plots go through every disease, horizon and feedback design (one
+# Offsets and ensemble weights are fitted independently for each location. The forecast
+# and weight plots go through every disease, horizon and feedback design (one
 # PDF per combination in a folder per plot), their pages through the locations of
 # multiqt_settings(); every location, horizon and feedback design of both diseases is scored
 # for the trade-off pages and R/06_evaluation_tree.R (about 1.5 hours on 18 cores).
@@ -118,21 +118,7 @@ method_labels <- function(p) {
   outer <- function(method) paste0("outer m=", value(method))
   H_of <- function(method) paste0("H=", value(method))
   lambda_of <- function(method) paste0("lambda=", value(method))
-  delta_of <- function(method) paste0("delta=", par_of(method, "context_delta"))
-  sharing <- paste0("H=", p$score_H, ", sharing 1/", 2 * p$score_H)
-  score_labels <- c(
-    score_single = "Score experts: one vector (A",
-    score_switch = paste0("Score experts: soft switch, three signals (B, strength=",
-      value("score_switch")),
-    score_target_switch = paste0("Score experts: soft switch, target signal (C, ",
-      delta_of("score_target_switch")),
-    score_context = paste0("Score experts: context vectors, blended (D, ",
-      delta_of("score_context")),
-    score_context_hard = paste0("Score experts: context vectors, hard (D, ",
-      delta_of("score_context_hard")),
-    score_fast_decline = paste0("Score experts: lambda x ", value("score_fast_decline"),
-      " in decline (E, ", delta_of("score_fast_decline")))
-  noshare <- score_labels[names(score_noshare)]
+  learned <- paste0("H=", p$score_H, ", sharing 1/", 2 * p$score_H, ", lambda on the variance")
   c(original = "Original",
     fixed = paste0("Fixed MultiQT (eta=", value("fixed"), "*S0)"),
     leaky = paste0("Leaky MultiQT (eta=", value("leaky"), "*S0, leak ", par_of("leaky", "leak"),
@@ -165,20 +151,27 @@ method_labels <- function(p) {
     restart_grid_outer = paste0("Starts x rate grid + outer (", outer("restart_grid_outer"), ")"),
     restart_recent = paste0("Weekly starts: most recent ", value("restart_recent"),
       ", equal (m=", p$restart_multiplier, ")"),
-    setNames(paste0(score_labels, ", ", sharing, ")"), names(score_labels)),
-    setNames(paste0(noshare, ", no sharing)"), score_noshare),
+    decline = paste0("Decline MultiQT (eta=", par_of("decline", "decline_multiplier"),
+      "*S0, declining context, delta=", p$context_delta, ")"),
+    score_equal = "Score experts: equal weights",
+    score_learned = paste0("Score experts: learned weights per level (", learned, ")"),
+    score_gated = paste0("Score experts: learned, (1 - G) x mixture + G x original (delta=",
+      p$context_delta, ")"),
     studentized = paste0("Studentized median (", residual_label, ", ", p$median_start,
       " start, ", eta("studentized"), ")"),
     studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",
       eta("studentized_base"), ")"),
     studentized_full = paste0("Studentized full base (base ", base_width, " width, ",
       eta("studentized_full"), ")"),
-    studentized_levels = paste0("Studentized full base (level scales, ", eta("studentized_levels"),
-      ")"),
     studentized_level_rms = paste0("Studentized full base (level RMS of ", p$median_window,
       ", ", eta("studentized_level_rms"), ")"),
     median_constant = paste0("Median, constant sigma (", residual_label, ", ", p$median_start,
-      " start, ", eta("median_constant"), ")"))
+      " start, ", eta("median_constant"), ")"),
+    # The median-start variants use the rate of their normal-start method (parameter_source).
+    studentized_zero = paste0("Studentized median (", residual_label, ", median start, eta=",
+      par_of("studentized_zero", "median_rate"), ")"),
+    median_constant_zero = paste0("Median, constant sigma (", residual_label,
+      ", median start, eta=", par_of("median_constant_zero", "median_rate"), ")"))
 }
 # Colours as in the trade-off plots and 06's tree (tradeoff_colours in R/03); the original
 # in gray, as the scoring target is drawn in black.
@@ -186,7 +179,7 @@ colours <- replace(tradeoff_colours, "original", "gray40")
 # Lines as the symbols of the trade-off plots: common weights across quantile levels dashed
 # (triangles), + outer MultiQT dotted (squares), common weights + outer dot-dashed (diamonds).
 common <- setNames(grepl("_common", names(method_short_labels)), names(method_short_labels))
-common[c(score_methods, score_noshare)] <- TRUE
+common["score_equal"] <- TRUE
 with_outer <- setNames(grepl("_outer$", names(method_short_labels)), names(method_short_labels))
 line_types <- ifelse(with_outer, ifelse(common, 4, 3), ifelse(common, 2, 1))
 point_shapes <- ifelse(common, 17, 16)
@@ -281,20 +274,17 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
 # crossing repair or an outer correction; the outer methods keep their underlying ensemble's
 # weights. Expert colours: the base gray, the rate grid by multiplier, the weekly starts in
 # one palette per multiplier from dark (first start) to light (last start), the score
-# experts as in section 6. The score-based mixtures have one weight vector for all levels,
-# repeated in every row.
+# experts in one qualitative palette. Score experts: equal weights for all levels (row 'All
+# levels'), learned weights per level, and the learned weights backing off to the original
+# with G (the context row: G and c).
 weight_forecast_levels <- c(.2, .5, .8)
 weight_pages <- list(
   "Frozen rate-grid weights" = data.frame(method = c("uniform", "weighted", "shared"),
     common_method = c("uniform", "weighted_common", "shared_common"),
     title = c("Equal weights", "Learned, no sharing", "Learned + sharing")),
   "Score-based expert weights" = data.frame(
-    method = c("score_single", "score_switch", "score_target_switch", "score_context",
-      "score_fast_decline"),
-    common_method = c("score_single", "score_switch", "score_target_switch", "score_context",
-      "score_fast_decline"),
-    title = c("A: one vector", "B: soft switch, three signals", "C: soft switch, target signal",
-      "D: context vectors, blended", "E: faster lambda in decline")),
+    method = c("score_equal", "score_learned", "score_gated"), common_method = NA,
+    title = c("Equal weights", "Learned weights", "Learned, original in decline (G)")),
   "Weekly-start weights" = data.frame(
     method = c("restart_uniform", "restart_weighted", "restart_grid", "restart_recent"),
     common_method = NA, title = c("Equal weights", "Learned", "Starts x rate grid: learned",
@@ -413,18 +403,12 @@ draw_start_ramps <- function(run, fills, single) {
 # Rows of a page: each level's weights (only if a mixture of the page has one weight vector
 # per level; empty for the others), below 0.2, 0.5 and 0.8 the forecasts at that level, then
 # the weights that are not quantile specific: the vector for all levels of each mixture (or
-# of its common-weight variant), and for the two-vector mixtures (run$switches) the baseline
-# and declining vectors and the context (G or the gate; c: points), E's context too.
-row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25, baseline = 1.25,
-  declining = 1.25, context = .9)
-row_titles <- c(common = "All levels:\nweights", baseline = "All levels:\nbaseline",
-  declining = "All levels:\ndeclining", context = "Context\n(G, gate; c)")
+# of its common-weight variant), and for score_gated the target signal (G: line; c: points).
+row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25, context = .9)
+row_titles <- c(common = "All levels:\nweights", context = "Context\n(G; c)")
 weight_page_height <- sum(row_inches[c(rep("weights", length(plot_levels)),
-  rep("forecasts", length(weight_forecast_levels)), "common", "baseline", "declining",
-  "context")]) + 1.2 + 3.7                              # Inches; shorter pages leave space.
+  rep("forecasts", length(weight_forecast_levels)), "common", "context")]) + 1.2 + 3.7
 per_level <- function(run, method) dim(run$weights[[method]])[3] > 1L
-# E's context: the target signal with its threshold (not tuned) and width.
-context_params <- method_parameters()
 page_rows <- function(run, columns) {
   common <- !vapply(columns$method, function(m) per_level(run, m), logical(1))
   kind <- level <- NULL
@@ -434,15 +418,12 @@ page_rows <- function(run, columns) {
     level <- c(level, rep(a, length(shown)))
   }
   extra <- c(if (any(common) || any(!is.na(columns$common_method))) "common",
-    if (any(columns$method %in% names(run$switches))) c("baseline", "declining"),
-    if (any(columns$method %in% c(names(run$switches), "score_fast_decline"))) "context")
+    if ("score_gated" %in% columns$method) "context")
   data.frame(kind = c(kind, extra), level = c(level, rep(NA, length(extra))))
 }
-# The context of a mixture at each target: G or the mixed gate (line) and c (points).
+# The context of score_gated at each target: G (line) and c (points), 0 without a signal.
 plot_context <- function(run, method, first_column, last_row) {
-  signal <- if (method %in% names(run$switches)) run$switches[[method]]$gate else
-    if (method == "score_fast_decline") target_signal(run$case,
-      context_params$context_delta, context_params$context_width)
+  signal <- if (method == "score_gated") run$score_gate
   if (is.null(signal)) return(plot.new())
   dates <- run$case$target_date
   times <- as.numeric(dates)
@@ -451,11 +432,9 @@ plot_context <- function(run, method, first_column, last_row) {
     xaxt = "n", yaxt = "n", xlab = "", ylab = if (first_column) row_titles[["context"]] else "")
   abline(h = .5, col = "gray80", lty = 3)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
-  if (!is.null(signal$context)) points(times, signal$context, pch = 15, cex = .35, col = "gray35")
-  if (method != "score_fast_decline") {
-    broken <- break_gaps(dates, signal$gate)
-    lines(broken$dates, broken[[2]], col = colours[method], lwd = 1.5)
-  }
+  points(times, signal$context, pch = 15, cex = .35, col = "gray35")
+  broken <- break_gaps(dates, signal$gate)
+  lines(broken$dates, broken[[2]], col = colours[method], lwd = 1.5)
   axis(2, at = c(0, .5, 1), las = 1, cex.axis = .75)
   if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
   box(col = "gray70")
@@ -498,11 +477,10 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     weights <- switch(kind,
       weights = if (per_level(run, method)) run$weights[[method]][, , match(level, run$case$alpha)],
       common = if (!per_level(run, method)) run$weights[[method]][, , 1] else
-        if (!is.na(columns$common_method[j])) run$weights[[columns$common_method[j]]][, , 1],
-      baseline = , declining = if (method %in% names(run$switches))
-        run$switches[[method]]$regime_weights[, , kind])
+        if (!is.na(columns$common_method[j])) run$weights[[columns$common_method[j]]][, , 1])
     if (is.null(weights)) {                              # Not this mixture's kind of weights.
       plot.new()
+      if (row == 1L) title(columns$title[j])
       next
     }
     weights <- matrix(weights, nrow(run$weights[[method]]),
@@ -539,98 +517,22 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     "after crossing repair, before any outer correction)."), side = 1, outer = TRUE, line = 1.6,
     cex = .8)
   mtext(paste("Rows 'All levels': one weight vector for all levels (the mixture, or its",
-    "common-weight variant), learned from the mean quantile loss over the levels; two-vector",
-    "mixtures: baseline and declining vectors; context: G or the gate (line), c (points)."),
+    "common-weight variant), learned from the mean quantile loss over the levels (equal",
+    "weights: not learned); context: G (line) and c (points) of the target signal."),
     side = 1, outer = TRUE, line = 2.7, cex = .8)
   if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a CMU forecast, filled with",
     "the latest earlier CMU forecast of the same target week."), side = 1, outer = TRUE,
     line = 3.8, cex = .8)
 }
 
-# 6. TWO-VECTOR SCORE MIXTURES: CONTEXT AND COMMON WEIGHTS ------------
-# One page per location and two-vector method (B, C, D; run$switches). Issue dates align
-# the context with the information used for that forecast. B and C update both vectors
-# with the losses scaled by the context saved at issuance; D updates each vector only with
-# the losses of forecasts made in its context.
-# Notes without possessives or "issue" words (notes/ relabels its copies and checks for them).
-switch_notes <- list(
-  score_switch = c(paste("B: the gate is a context weight, not a peak probability; missing",
-    "signals contribute a neutral score of 0.5."), paste("Both vectors learn from every loss,",
-    "scaled by 2 x (1 - gate) and 2 x gate saved when the forecast was made.")),
-  score_target_switch = c(paste("C: gate G = logistic of the target signal (the target median",
-    "below an earlier point of the base curve)."), paste("Both vectors learn from every loss,",
-    "scaled by 2 x (1 - G) and 2 x G saved when the forecast was made; weeks without a signal",
-    "use the forecast of A.")),
-  score_context = c(paste("D: each vector learns only from the losses of forecasts made in",
-    "its context (c saved when the forecast was made)."), paste("Forecast: (1 - G) x",
-    "baseline + G x declining; weeks without a signal use the forecast of A.")))
-draw_switch_pages <- function(switch_runs, labels) {
-  for (run in switch_runs) for (method in names(run$switches)) {
-    switched <- run$switches[[method]]
-    signal <- switched$gate
-    regimes <- switched$regime_weights
-    dates <- run$case$reference_date
-    experts <- dimnames(regimes)[[2]]
-    fills <- setNames(c("gray45", hcl.colors(length(experts) - 1L, "Dark 3")), experts)
-    layout(matrix(1:5, ncol = 1), heights = c(1.1, 1, 1, 1, .45))
-    par(oma = c(4.4, .5, 4.1, .5), mgp = c(2, .4, 0), cex = .9)
-    par(mar = c(.4, 3.7, 2.1, .6))
-    plot(dates, dates, type = "n", xlim = range(dates) + c(-.5, .5) * 7,
-      ylim = c(0, 1.18), xaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
-      ylab = "Context weight", main = "Declining context at issuance")
-    axis(2, at = c(0, .5, 1), las = 1, cex.axis = .8)
-    abline(h = .5, col = "gray70", lty = 3)
-    abline(v = as.numeric(run$case$peaks$peak_date), col = "gray50", lty = 3)
-    if ("path_score" %in% names(signal)) {
-      score_names <- c("path_score", "nowcast_score", "revision_score")
-      score_colours <- c("#0072B2", "#D55E00", "#009E73")
-      broken <- break_gaps(dates, as.matrix(signal[c(score_names, "gate")]))
-      for (j in seq_along(score_names)) lines(broken$dates, broken[[2]][, j],
-        col = score_colours[j], lwd = 1)
-      key <- c("Forecast path", "Nowcast change", "Same-target revisions", "Mixed gate")
-      key_colours <- c(score_colours, colours[method])
-    } else {
-      broken <- break_gaps(dates, as.matrix(signal["gate"]))
-      points(dates, signal$context, pch = 15, cex = .35, col = "gray35")
-      key <- c("Declining context c (0/1)", "Gate G (target signal)")
-      key_colours <- c("gray35", colours[method])
-    }
-    lines(broken$dates, broken[[2]][, "gate"], col = colours[method], lwd = 2)
-    points(dates, signal$gate, col = colours[method], pch = 16, cex = .3)
-    legend("topleft", key, col = key_colours, lty = c(rep(1, length(key) - 1L), 1),
-      lwd = c(rep(1, length(key) - 1L), 2), ncol = length(key), bty = "n", cex = .85)
-    two <- if (method == "score_context") c("Baseline vector (forecasts made in baseline context)",
-      "Declining-context vector (forecasts made in declining context)") else
-      c("Baseline-context expert weights", "Declining-context expert weights")
-    plot_weight_distribution(run, regimes[, , "baseline"], fills, two[1], "Weight", TRUE,
-      FALSE, dates)
-    plot_weight_distribution(run, regimes[, , "declining"], fills, two[2], "Weight", TRUE,
-      FALSE, dates)
-    plot_weight_distribution(run, run$weights[[method]][, , 1], fills,
-      "Issued mixture: (1 - gate) x baseline + gate x declining", "Weight", TRUE, TRUE, dates)
-    par(mar = c(0, 0, 0, 0))
-    plot.new()
-    legend("center", expert_names(experts), fill = fills, border = NA,
-      ncol = ceiling(length(experts) / 2), bty = "n", cex = .9)
-    mtext(labels[method], side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
-    mtext(plot_title(run), side = 3, outer = TRUE, line = .8, cex = .9)
-    mtext("Issue date | Common expert weights across quantile levels | Dotted lines: hindsight peaks",
-      side = 1, outer = TRUE, line = .4, cex = .85)
-    mtext(switch_notes[[method]], side = 1, outer = TRUE, line = c(1.5, 2.4), cex = .8)
-    if (any(run$case$filled)) mtext("Lighter bars: filled forecast rounds.",
-      side = 1, outer = TRUE, line = 3.3, cex = .8)
-  }
-}
-
-# 7. EVERY DISEASE, HORIZON AND FEEDBACK DESIGN ---------------------
+# 6. EVERY DISEASE, HORIZON AND FEEDBACK DESIGN ---------------------
 # One PDF per combination and plot (one folder per plot), its pages going through the
 # locations of multiqt_settings(); the combinations run in parallel, re-runs first (the
 # longest). A re-run combination re-runs every week, so the plots show the tuning period too;
-# its scores (evaluation weeks only) equal those of section 8. Each combination returns its
+# its scores (evaluation weeks only) equal those of section 7. Each combination returns its
 # scores and result tables; the runs of disease_name, horizon_id and the feedback design of
 # multiqt_settings() also go to issued_forecasts.rds.
-plot_folders <- c(forecasts = "multiqt_method_forecasts", weights = "multiqt_weight_timelines",
-  switch = "multiqt_soft_switch_timelines")
+plot_folders <- c(forecasts = "multiqt_method_forecasts", weights = "multiqt_weight_timelines")
 for (folder in plot_folders) dir.create(file.path(figure_dir, folder), showWarnings = FALSE)
 combinations <- expand.grid(feedback = seq_len(nrow(tradeoff_feedback)),
   horizon = settings$horizons, disease = score_diseases, stringsAsFactors = FALSE)
@@ -664,39 +566,12 @@ run_results <- function(runs, run_params) list(
     with_case(run, run$rate_experts$experts))),
   restart_experts = do.call(rbind, lapply(runs, function(run) with_case(run,
     data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))),
-  # The context and both expert distributions of the two-vector methods (B, C, D) are
-  # saved at issuance, alongside the actual mixed weights. The gate describes declining
-  # context, not a peak probability. B's gate table has its three signals; C's and D's the
-  # target signal (signal, context, gate).
-  soft_switch_gate = do.call(rbind, lapply(runs, function(run) do.call(rbind,
-    lapply(names(run$switches), function(method) {
-      switched <- run$switches[[method]]
-      gate <- switched$gate
-      with_case(run, data.frame(method, target_date = run$case$target_date,
-        reference_date = gate$reference_date, gate = gate$gate,
-        signal = if (is.null(gate$signal)) NA_real_ else gate$signal,
-        context = if (is.null(gate$context)) NA_integer_ else gate$context,
-        path_score = if (is.null(gate$path_score)) NA_real_ else gate$path_score,
-        nowcast_score = if (is.null(gate$nowcast_score)) NA_real_ else gate$nowcast_score,
-        revision_score = if (is.null(gate$revision_score)) NA_real_ else gate$revision_score,
-        lambda_baseline = switched$regime_lambda[, "baseline"],
-        lambda_declining = switched$regime_lambda[, "declining"],
-        # A gate-weighted summary of the two learning rates, not a third update rate.
-        lambda_average = as.numeric(run$lambda[[method]])))
-    })))),
-  soft_switch_weights = do.call(rbind, lapply(runs, function(run) do.call(rbind,
-    lapply(names(run$switches), function(method) {
-      regimes <- run$switches[[method]]$regime_weights
-      weights <- list(baseline = regimes[, , "baseline"],
-        declining = regimes[, , "declining"], issued = run$weights[[method]][, , 1])
-      do.call(rbind, lapply(names(weights), function(context) {
-        values <- weights[[context]]
-        with_case(run, data.frame(method,
-          reference_date = rep(run$case$reference_date, ncol(values)),
-          target_date = rep(run$case$target_date, ncol(values)), context,
-          expert = rep(colnames(values), each = nrow(values)), weight = as.vector(values)))
-      }))
-    })))))
+  # The target signal of the score experts (target_signal() in R/03: D, c and G, 0 without
+  # a signal), by which Decline MultiQT and score_gated (G) act.
+  score_gate = do.call(rbind, lapply(runs, function(run) if (!is.null(run$score_gate))
+    with_case(run, data.frame(reference_date = run$case$reference_date,
+      target_date = run$case$target_date, signal = run$score_gate$signal,
+      context = run$score_gate$context, gate = run$score_gate$gate)))))
 plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
   disease <- combinations$disease[i]
   horizon <- combinations$horizon[i]
@@ -721,13 +596,6 @@ plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
     height = weight_page_height, family = "DejaVu Sans")
   draw_weight_pages(runs)
   dev.off()
-  switch_runs <- Filter(function(run) length(run$switches) > 0L, runs)
-  if (length(switch_runs)) {
-    cairo_pdf(file.path(figure_dir, plot_folders[["switch"]], file), width = 15, height = 11,
-      family = "DejaVu Sans")
-    draw_switch_pages(switch_runs, labels)
-    dev.off()
-  }
   list(results = run_results(runs, run_params), runs = if (i == saved) runs)
 }, mc.cores = cores, mc.preschedule = FALSE)
 failed <- vapply(plotted, function(x) is.null(x) || inherits(x, "try-error"), logical(1))
@@ -743,11 +611,11 @@ for (folder in plot_folders) if (file.exists(file.path(figure_dir, folder, combi
 results <- lapply(setNames(names(plotted[[1]]$results), names(plotted[[1]]$results)),
   function(table) do.call(rbind, lapply(plotted, function(p) p$results[[table]])))
 
-# 8. SCORES OF EVERY LOCATION ----------------------------------------
+# 7. SCORES OF EVERY LOCATION ----------------------------------------
 # Scores of every prepared location, horizon and feedback design of score_diseases for the
-# trade-off pages (section 9) and R/06_evaluation_tree.R, in parallel; only the scores are
+# trade-off pages (section 8) and R/06_evaluation_tree.R, in parallel; only the scores are
 # kept. Each disease and design uses the settings tuned with it; a re-run re-runs only the
-# evaluation weeks. The plotted locations (section 7) are reused.
+# evaluation weeks. The plotted locations (section 6) are reused.
 tradeoff_cases <- do.call(rbind, lapply(score_diseases, function(disease)
   expand.grid(disease = disease, location = setdiff(locations_of(disease),
     settings$location_ids), horizon = settings$horizons,
@@ -775,48 +643,9 @@ write_result(results$scores_by_level, "summary_scores_by_level.csv")
 write_result(results$scales, "scales.csv")
 write_result(results$expert_grid, "expert_grid.csv")
 write_result(results$restart_experts, "restart_experts.csv")
-if (!is.null(results$soft_switch_gate)) {
-  write_result(results$soft_switch_gate, "soft_switch_gate.csv")
-  write_result(results$soft_switch_weights, "soft_switch_weights.csv")
-}
+write_result(results$score_gate, "score_gate.csv")
 
-# The updates of the score mixtures' context vectors (context_updates() in R/03), for every
-# location, horizon and feedback design of score_diseases: how many released losses each
-# vector of D learns from (with D's tuned threshold), and the context of E's released
-# losses (faster: lambda multiplied at release; with E's threshold). The re-run design
-# consumes the same rows in the same rounds. A vector with fewer than score_H updates by
-# the evaluation period still uses lambda_start there (poorly_trained).
-context_cases <- do.call(rbind, lapply(score_diseases, function(disease)
-  expand.grid(disease = disease, location = locations_of(disease), horizon = settings$horizons,
-    feedback = seq_len(nrow(tradeoff_feedback)), stringsAsFactors = FALSE)))
-context_counts <- do.call(rbind, parallel::mclapply(seq_len(nrow(context_cases)), function(i) {
-  disease <- context_cases$disease[i]
-  k <- context_cases$feedback[i]
-  p <- tradeoff_params[[disease]][[k]]
-  case <- get_case(prepared, disease, context_cases$location[i], context_cases$horizon[i],
-    tradeoff_feedback$delay[k], FALSE)
-  do.call(rbind, lapply(c("score_context", "score_fast_decline"), function(method) {
-    delta <- method_parameter(p, method, "context_delta")
-    counts <- context_updates(case, target_signal(case, delta, p$context_width))
-    if (!is.null(counts)) data.frame(disease, location = case$location, horizon = case$horizon,
-      feedback = feedback_names[k], method, delta, counts)
-  }))
-}, mc.cores = cores))
-score_H <- method_parameters()$score_H
-before_evaluation <- aggregate(cbind(baseline_updates, declining_updates) ~ disease + location +
-  horizon + feedback + method, context_counts[context_counts$period == "tuning", ], sum)
-before_evaluation$poorly_trained <- ifelse(before_evaluation$horizon == -1, "no signal (A)",
-  ifelse(pmin(before_evaluation$baseline_updates, before_evaluation$declining_updates) <
-    score_H, "yes", "no"))
-write_result(context_counts, "context_updates.csv")
-write_result(before_evaluation, "context_updates_before_evaluation.csv")
-d_rows <- before_evaluation[before_evaluation$method == "score_context" &
-  before_evaluation$horizon > -1, ]
-message("Method D: cases (horizons 0-3) with a context vector of fewer than ", score_H,
-  " updates before the evaluation period: ",
-  sum(d_rows$poorly_trained == "yes"), " of ", nrow(d_rows), ".")
-
-# 9. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
+# 8. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
 # Per disease of score_diseases: one page per location, after a first page with all prepared
 # locations except the US. Columns:
 # horizons; rows: the feedback designs of tradeoff_feedback, each with its three windows.
@@ -897,10 +726,33 @@ draw_tradeoff_pages <- function(disease) {
       hidden_everywhere, ], settings) else
       tradeoff_scores[tradeoff_scores$location == location & !tradeoff_scores$hidden, ]
     page <- page[order(page$method == "original"), ]   # Original last, on top of the others.
+    # Notes below the legend, one per line; the bottom margin fits them.
+    notes <- c("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
+      paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
+        "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
+      # A long list of identical pairs on several lines (labels only: no relabelled words).
+      if (length(hidden_pairs)) strwrap(paste("Not drawn (identical forecasts):",
+        paste(hidden_pairs, collapse = "; ")), width = 200),
+      paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
+        "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
+        " (all: output/results/tuning)."),
+      paste0("Feedback protocol ", feedback_protocol()$id, ": Wednesday issue cutoffs (actual ",
+        "generation dates where known); S0 and the weighting loss scale from the first ",
+        settings$warmup_rounds, " released rows in hindsight, frozen for the re-runs."),
+      # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
+      # which are the original base (e.g. most of the flu up-to-peak window).
+      paste0("Studentized median methods: sigma_t = RMS of the last ", page_params$median_window,
+        " released median residuals, or the base's ", base_width, " interval width / ",
+        round(diff(qnorm(page_params$median_base_levels)), 3), " (a normal sd)."),
+      paste("With residuals, the original base is issued until sigma_t exists; these weeks are",
+        "scored as the base. Median start: all quantiles start at the median (offsets 0)."),
+      paste0("Studentized full base: offsets start at the base; level RMS = the RMS of each ",
+        "level's last ", page_params$median_window,
+        " released residuals (weighted isotonic projection)."))
     n_panels <- nrow(panel_rows) * length(settings$horizons)
     layout(rbind(matrix(seq_len(n_panels), nrow(panel_rows), byrow = TRUE), n_panels + 1L),
       heights = c(rep(panel_height, nrow(panel_rows)), legend_height))
-    par(oma = c(10.3, 3.4, 7.8, 0), mgp = c(2.2, .6, 0))
+    par(oma = c(1.8 + 1.3 * (length(notes) - 1), 3.4, 7.8, 0), mgp = c(2.2, .6, 0))
     for (r in seq_len(nrow(panel_rows))) for (horizon in settings$horizons) {
       phase <- panel_rows$phase[r]
       k <- panel_rows$feedback[r]
@@ -936,13 +788,19 @@ draw_tradeoff_pages <- function(disease) {
     }
     par(mar = c(0, 0, 0, 0))
     plot.new()
-    legend("center", ifelse(legend_method, labels[legend_entries], legend_entries),
+    key <- function(cex, plot = TRUE) legend("center", ifelse(legend_method,
+      labels[legend_entries], legend_entries),
       col = ifelse(legend_method, tradeoff_colours[legend_entries], NA),
       pch = ifelse(legend_method, tradeoff_shapes[legend_entries], NA),
       pt.cex = ifelse(legend_method, tradeoff_sizes[legend_entries], 1),
       pt.lwd = ifelse(legend_entries == "original", 2, 1),
-      text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = 1.1,
-      text.width = NA)                         # Column-wise widths, so every group column fits.
+      text.font = ifelse(legend_header, 2, 1), ncol = length(legend_columns), bty = "n", cex = cex,
+      text.width = NA, plot = plot)            # Column-wise widths, so every group column fits.
+    # The largest text size up to 1.1 at which the key fits the page width.
+    legend_cex <- 1.1
+    while (legend_cex > .6 && key(legend_cex, FALSE)$rect$w > diff(par("usr")[1:2]))
+      legend_cex <- legend_cex - .05
+    key(legend_cex)
     # Feedback blocks: a label in the left margin and a line between blocks; horizons on top.
     inner_height <- nrow(panel_rows) * panel_height + legend_height
     block <- length(phases) * panel_height / inner_height
@@ -964,27 +822,6 @@ draw_tradeoff_pages <- function(disease) {
       outer = TRUE, line = 3.9, cex = 1.05)
     if (all_page) mtext(paste("Small: single locations; large: means over locations;",
       "axes: 1st to 99th percentile of both."), side = 3, outer = TRUE, line = 2.5, cex = 1.05)
-    notes <- c("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
-      paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
-        "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
-      if (length(hidden_pairs)) paste("Not drawn (identical forecasts):",
-        paste(hidden_pairs, collapse = "; ")),
-      paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
-        "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
-        " (all: output/results/tuning)."),
-      paste0("Feedback protocol ", feedback_protocol()$id, ": Wednesday issue cutoffs (actual ",
-        "generation dates where known); S0 and the weighting loss scale from the first ",
-        settings$warmup_rounds, " released rows in hindsight, frozen for the re-runs."),
-      # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
-      # which are the original base (e.g. most of the flu up-to-peak window).
-      paste0("Studentized median methods: sigma_t = RMS of the last ", page_params$median_window,
-        " released median residuals, or the base's ", base_width, " interval width / ",
-        round(diff(qnorm(page_params$median_base_levels)), 3), " (a normal sd)."),
-      paste("With residuals, the original base is issued until sigma_t exists; these weeks are",
-        "scored as the base."),
-      paste0("Studentized full base: offsets start at the base; level scales = normal sd of the ",
-        "base's central interval at each level, or the RMS of each level's last ",
-        page_params$median_window, " released residuals (weighted isotonic projection)."))
     mtext(notes, side = 1, outer = TRUE, line = .6 + 1.3 * (seq_along(notes) - 1), cex = .95)
   }
   draw_tradeoff_page()
