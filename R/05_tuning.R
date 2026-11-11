@@ -194,78 +194,88 @@ print(tuned[c(groups, "method", "setting", "value", "on_grid_edge",
   "original_coverage_error")], digits = 3,
   row.names = FALSE)
 
-# 4. ELBOW PLOTS: CRITERION AND CALIBRATION ERROR OVER EACH GRID -------------
-# One page per disease and feedback design; for each tuned setting two panels side by side:
-# the criterion relative to the original forecasts (%) and the calibration error, one line
-# per method. Solid: log1p tracker (loss of log(counts + 1)), dashed: identity (loss per
-# 100k); each tracker on its own criterion. Rates: filled points lie within the elbow
-# tolerance of the lowest loss, open points above it; circled: the chosen value (H: the
-# lowest loss). First the pooled pages (the criterion), then the same pages for each tuned
-# location of location_ids (mean over horizons; circled: the value chosen on the pool).
-# The US is not tuned. where: the location of the pages (NULL: the pool).
+# 4. ELBOW PLOTS: CALIBRATION ERROR AGAINST LOSS ALONG EACH GRID --------------
+# One page per disease and feedback design, one panel per tuned setting: for each method and
+# tracker the path of its grid values in the plane of loss (relative to the original
+# forecasts, %) and calibration error, the symbols growing with the value, as in 02's
+# trade-off plots; the original forecasts: open square at 0 %. Solid: log1p tracker (loss of
+# log(counts + 1)), dashed: identity (loss per 100k); each tracker on its own criterion.
+# Rates: filled symbols lie within the elbow tolerance of the lowest loss, open ones above
+# it; circled: the chosen value (H: the lowest loss). Lower left is better. First the pooled
+# pages (the criterion), then the same pages for each tuned location of location_ids (means
+# over horizons; circled: the value chosen on the pool). The US is not tuned.
+# where: the location of the pages (NULL: the pool).
+panel_columns <- 3L
+panel_rows <- ceiling(length(grids) / panel_columns)
+value_size <- function(value, grid) .5 + 1.4 * (log(value) - log(min(grid))) /
+  diff(log(range(grid)))
 draw_tuning_pages <- function(scored, where = NULL) {
   means <- curve_means(scored)
   for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tuning_feedback))) {
     feedback <- tuning_feedback[f, ]
     in_design <- function(x) x$disease == disease & x$feedback_delay == feedback$delay &
       x$feedback_revisions == feedback$revisions
-    # Two panels per setting, two settings per row, plus a legend strip.
-    panel_rows <- ceiling(length(grids) / 2L)
-    panel_ids <- matrix(seq_len(4L * panel_rows), panel_rows, 4, byrow = TRUE)
-    panel_ids[panel_ids > 2L * length(grids)] <- 0L
-    layout(rbind(panel_ids, rep(2L * length(grids) + 1L, 4L)), heights = c(rep(1, panel_rows), .18))
-    par(oma = c(4.6, 0, 3, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.3, .6, 0))
+    panel_ids <- matrix(seq_len(panel_columns * panel_rows), panel_rows, panel_columns,
+      byrow = TRUE)
+    panel_ids[panel_ids > length(grids)] <- 0L
+    layout(rbind(panel_ids, rep(length(grids) + 1L, panel_columns)),
+      heights = c(rep(1, panel_rows), .2))
+    par(oma = c(4.6, 0, 3, 0), mar = c(4, 4.2, 3.4, 1), mgp = c(2.3, .6, 0))
     for (setting in names(grids)) {
       rows <- means[in_design(means) & means$setting == setting, ]
       rows$change <- 100 * (rows$criterion / rows$original_criterion - 1)
       methods <- unique(rows$method)
       colours <- setNames(hcl.colors(max(3L, length(methods)), "Dark 3")[seq_along(methods)], methods)
-      for (y in c("change", "coverage_error")) {
-        plot(NA, xlim = range(grids[[setting]]), ylim = range(if (y == "change") 0 else
-          rows$original_coverage_error, rows[[y]], na.rm = TRUE),
-          log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
-          ylab = if (y == "change") "Loss vs original (%)" else "Calibration error",
-          main = paste(setting, if (y == "change") "| loss" else "| calibration error"))
-        abline(h = if (y == "change") 0 else unique(rows$original_coverage_error), col = "gray60")
-        for (method in methods) for (transform in transforms) {
-          line <- rows[rows$method == method & rows$transform == transform, ]
-          line <- line[order(line$value), ]
-          lines(line$value, line[[y]], col = colours[method], lty = if (transform == "log1p") 1 else 2)
-          points(line$value, line[[y]], col = colours[method], pch = ifelse(line$admissible, 16, 1),
-            cex = .7)
-          chosen <- tuned[in_design(tuned) & tuned$transform == transform &
-            tuned$method == method & tuned$setting == setting, "value"]
-          points(chosen, line[[y]][match(chosen, line$value)], col = colours[method], cex = 1.8)
-        }
-        if (y == "change") legend("topleft", methods, col = colours, lty = 1, bty = "n", cex = .7)
+      originals <- unique(rows$original_coverage_error)
+      plot(NA, xlim = range(0, rows$change, na.rm = TRUE),
+        ylim = range(rows$coverage_error, originals, na.rm = TRUE),
+        xlab = "Loss vs original (%)", ylab = "Calibration error", main = setting)
+      abline(v = 0, col = "gray80")
+      points(rep(0, length(originals)), originals, pch = 0, cex = 1.6, lwd = 1.5, col = "gray40")
+      for (method in methods) for (transform in transforms) {
+        line <- rows[rows$method == method & rows$transform == transform, ]
+        if (!nrow(line)) next
+        line <- line[order(line$value), ]
+        lines(line$change, line$coverage_error, col = colours[method],
+          lty = if (transform == "log1p") 1 else 2)
+        points(line$change, line$coverage_error, col = colours[method],
+          pch = ifelse(line$admissible, 16, 1), cex = value_size(line$value, grids[[setting]]))
+        chosen <- match(tuned[in_design(tuned) & tuned$transform == transform &
+          tuned$method == method & tuned$setting == setting, "value"], line$value)
+        points(line$change[chosen], line$coverage_error[chosen], col = colours[method],
+          cex = 1.2 + value_size(line$value[chosen], grids[[setting]]), lwd = 1.5)
       }
+      legend("topright", methods, col = colours, lty = 1, bty = "n", cex = .7)
+      mtext(paste("symbols grow with the value:", paste(format(range(grids[[setting]])),
+        collapse = " to ")), side = 3, line = .2, cex = .65)
     }
     par(mar = c(0, 0, 0, 0))
     plot.new()
     legend("center", c("log1p tracker (loss of log(counts + 1))",
       paste0("identity tracker (loss in ", count_scale_label(settings$scale_method), ")"),
-      "rate within the tolerance (filled) or above it (open)", "chosen value",
-      "original forecasts (calibration error)"), lty = c(1, 2, NA, NA, 1),
-      pch = c(NA, NA, 16, 1, NA), pt.cex = c(1, 1, .7, 1.8, 1), col = c(1, 1, 1, 1, "gray60"),
+      "rate within the tolerance (filled) or above it (open)", "chosen value (circled)",
+      "original forecasts (0 %)", "symbol size: grid value (larger = larger)"),
+      lty = c(1, 2, NA, NA, NA, NA), pch = c(NA, NA, 16, 1, 0, 16),
+      pt.cex = c(1, 1, .8, 1.8, 1.6, 1.4), col = c(1, 1, 1, 1, "gray40", "gray60"),
       bty = "n", ncol = 3, cex = .9)
     mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
-      feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
+      feedback$revisions), "| tuning period",
       prepared$settings$tuning_label, "| horizons",
       paste(range(tuning_horizons), collapse = " to "), "|", if (is.null(where))
         pooled_label(length(unique(scored$location[scored$disease == disease])), settings) else
         where), side = 3, outer = TRUE, line = 1.2, font = 2)
-    mtext(paste("Mean quantile loss relative to the original forecasts and mean calibration",
-      "error", if (is.null(where)) "(means over locations and horizons)" else
-        "(means over horizons; circled: chosen on the pool)", "on the scale of each tracker"),
-      side = 1, outer = TRUE, line = .8)
+    mtext(paste("Calibration error against mean quantile loss relative to the original",
+      "forecasts", if (is.null(where)) "(means over locations and horizons)" else
+        "(means over horizons; circled: chosen on the pool)", "on the scale of each tracker;",
+      "lower left is better"), side = 1, outer = TRUE, line = .8)
     mtext(c(paste0("Tracker rates: the lowest calibration error among the rates whose loss lies ",
       "within ", 100 * elbow_tolerance, "% of the original loss above the lowest loss (filled ",
-      "points)."), "H: the lowest loss. Ties: the smaller value."), side = 1, outer = TRUE,
+      "symbols)."), "H: the lowest loss. Ties: the smaller value."), side = 1, outer = TRUE,
       line = c(2.1, 3.3))
   }
 }
 cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15,
-  height = 3.6 * ceiling(length(grids) / 2L) + 1.8, family = "DejaVu Sans")
+  height = 4.6 * panel_rows + 2, family = "DejaVu Sans")
 draw_tuning_pages(scored)
 for (location in intersect(settings$location_ids, scored$location)) {
   case <- prepared$cases[[paste(scored$disease[1], location, tuning_horizons[1], sep = "_")]]

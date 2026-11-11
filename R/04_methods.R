@@ -425,10 +425,18 @@ page_rows <- function(run, columns) {
     if ("score_gated" %in% columns$method) "context")
   data.frame(kind = c(kind, extra), level = c(level, rep(NA, length(extra))))
 }
+# An empty cell with the margins of a weight panel: the column title in a page's first row
+# and the row label in its first column, so empty mixtures never hide them.
+blank_cell <- function(title, label, first_column) {
+  par(mar = c(.3, if (first_column) 3.7 else 2.2, 1.5, .6))
+  plot.new()
+  if (nzchar(title)) title(main = title)
+  if (first_column) mtext(label, side = 2, line = 2, cex = .9)
+}
 # The context of score_gated at each target: G (line) and c (points), 0 without a signal.
 plot_context <- function(run, method, first_column, last_row) {
   signal <- if (method == "score_gated") run$score_gate
-  if (is.null(signal)) return(plot.new())
+  if (is.null(signal)) return(blank_cell("", row_titles[["context"]], first_column))
   dates <- run$case$target_date
   times <- as.numeric(dates)
   par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, .5, .6))
@@ -483,8 +491,8 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
       common = if (!per_level(run, method)) run$weights[[method]][, , 1] else
         if (!is.na(columns$common_method[j])) run$weights[[columns$common_method[j]]][, , 1])
     if (is.null(weights)) {                              # Not this mixture's kind of weights.
-      plot.new()
-      if (row == 1L) title(columns$title[j])
+      blank_cell(if (row == 1L) columns$title[j] else "", if (kind == "weights")
+        paste("alpha =", level) else row_titles[[kind]], j == 1L)
       next
     }
     weights <- matrix(weights, nrow(run$weights[[method]]),
