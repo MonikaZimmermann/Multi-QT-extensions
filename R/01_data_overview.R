@@ -568,10 +568,13 @@ prepare_settings$tuning_label <- if (design == "seasons")
   paste("season", paste(prepare_settings$tuning_seasons, collapse = " and ")) else
   paste(format(prepare_settings$start_date, "%b %Y"), "to",
     format(prepare_settings$hub_tuning_through, "%b %Y"))
+# The last evaluation season ends in the month before the next season starts.
+evaluation_end <- as.Date(sprintf("%d-%02d-01", as.integer(substr(tail(
+  prepare_settings$evaluation_seasons, 1), 1, 4)) + 1L, prepare_settings$season_start_month)) - 1
 prepare_settings$evaluation_label <- if (design == "seasons")
   paste("seasons", paste(prepare_settings$evaluation_seasons, collapse = " and ")) else
-  paste(format(prepare_settings$hub_tuning_through + 1, "%b %Y"), "to the end of season",
-    tail(prepare_settings$evaluation_seasons, 1))
+  paste(format(prepare_settings$hub_tuning_through + 1, "%b %Y"), "to",
+    format(evaluation_end, "%b %Y"))
 peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
 dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
 saveRDS(peak_aligned, "output/data/peak_aligned.rds")
