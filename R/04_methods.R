@@ -128,8 +128,6 @@ method_labels <- function(p) {
       ", leak ", par_of("ref_op", "ref_op_fast_decay"), ")"),
     sqrt_constant = paste0("Delphi flu prod (sqrt per 100k, eta=",
       par_of("sqrt_constant", "sqrt_constant_rate"), ")"),
-    absolute_slope = paste0(if (transform == "log1p") "Log-slope rate" else "Count-slope rate",
-      " (min m=", value("absolute_slope"), ")"),
     oracle_target = "Target oracle (hindsight)",
     uniform = "Rate grid: equal",
     weighted = paste0("Rate grid: learned, no sharing (", H_of("weighted"), ")"),
@@ -146,12 +144,9 @@ method_labels <- function(p) {
     restart_uniform = paste0("Weekly starts: equal (m=", p$restart_multiplier, ")"),
     restart_weighted = paste0("Weekly starts: learned (m=", p$restart_multiplier, ", ",
       H_of("restart_weighted"), ")"),
-    restart_grid = paste0("Starts x rate grid: learned (", H_of("restart_grid"), ")"),
     restart_uniform_outer = paste0("Starts equal + outer (", outer("restart_uniform_outer"), ")"),
     restart_weighted_outer = paste0("Starts learned + outer (", H_of("restart_weighted_outer"),
       ", ", outer("restart_weighted_outer"), ")"),
-    restart_grid_outer = paste0("Starts x rate grid + outer (", H_of("restart_grid_outer"), ", ",
-      outer("restart_grid_outer"), ")"),
     restart_recent = paste0("Weekly starts: most recent ", p$restart_recent_k,
       ", equal (m=", p$restart_multiplier, ")"),
     decline = paste0("Decline MultiQT (eta=", par_of("decline", "decline_multiplier"),
@@ -159,8 +154,6 @@ method_labels <- function(p) {
     score_equal = "Score experts: equal weights",
     score_learned = paste0("Score experts: learned weights per level (", H_of("score_learned"),
       ")"),
-    score_gated = paste0("Score experts: learned, (1 - G) x mixture + G x original (",
-      H_of("score_gated"), ", delta=", p$context_delta, ")"),
     studentized = paste0("Studentized median (", residual_label, ", ", p$median_start,
       " start, ", eta("studentized"), ")"),
     studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",
@@ -286,12 +279,11 @@ weight_pages <- list(
     common_method = c("uniform", "weighted_common", "shared_common"),
     title = c("Equal weights", "Learned, no sharing", "Learned + sharing")),
   "Score-based expert weights" = data.frame(
-    method = c("score_equal", "score_learned", "score_gated"), common_method = NA,
-    title = c("Equal weights", "Learned weights", "Learned, original in decline (G)")),
+    method = c("score_equal", "score_learned"), common_method = NA,
+    title = c("Equal weights", "Learned weights")),
   "Weekly-start weights" = data.frame(
-    method = c("restart_uniform", "restart_weighted", "restart_grid", "restart_recent"),
-    common_method = NA, title = c("Equal weights", "Learned", "Starts x rate grid: learned",
-      "Most recent starts: equal")))
+    method = c("restart_uniform", "restart_weighted", "restart_recent"),
+    common_method = NA, title = c("Equal weights", "Learned", "Most recent starts: equal")))
 # Experts named by their methods where they are methods (the score experts).
 expert_names <- function(experts) ifelse(experts %in% names(method_short_labels),
   method_short_labels[experts], experts)
@@ -406,11 +398,11 @@ draw_start_ramps <- function(run, fills, single) {
 # Rows of a page: each level's weights (only if a mixture of the page has one weight vector
 # per level; empty for the others), below 0.2, 0.5 and 0.8 the forecasts at that level, then
 # the weights that are not quantile specific: the vector for all levels of each mixture (or
-# of its common-weight variant), and for score_gated the target signal (G: line; c: points).
-row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25, context = .9)
-row_titles <- c(common = "All levels:\nweights", context = "Context\n(G; c)")
+# of its common-weight variant).
+row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25)
+row_titles <- c(common = "All levels:\nweights")
 weight_page_height <- sum(row_inches[c(rep("weights", length(plot_levels)),
-  rep("forecasts", length(weight_forecast_levels)), "common", "context")]) + 1.2 + 3.7
+  rep("forecasts", length(weight_forecast_levels)), "common")]) + 1.2 + 3.7
 per_level <- function(run, method) dim(run$weights[[method]])[3] > 1L
 page_rows <- function(run, columns) {
   common <- !vapply(columns$method, function(m) per_level(run, m), logical(1))
@@ -420,8 +412,7 @@ page_rows <- function(run, columns) {
     kind <- c(kind, shown)
     level <- c(level, rep(a, length(shown)))
   }
-  extra <- c(if (any(common) || any(!is.na(columns$common_method))) "common",
-    if ("score_gated" %in% columns$method) "context")
+  extra <- if (any(common) || any(!is.na(columns$common_method))) "common"
   data.frame(kind = c(kind, extra), level = c(level, rep(NA, length(extra))))
 }
 # An empty cell with the margins of a weight panel: the column title in a page's first row
@@ -431,24 +422,6 @@ blank_cell <- function(title, label, first_column) {
   plot.new()
   if (nzchar(title)) title(main = title)
   if (first_column) mtext(label, side = 2, line = 2, cex = .9)
-}
-# The context of score_gated at each target: G (line) and c (points), 0 without a signal.
-plot_context <- function(run, method, first_column, last_row) {
-  signal <- if (method == "score_gated") run$score_gate
-  if (is.null(signal)) return(blank_cell("", row_titles[["context"]], first_column))
-  dates <- run$case$target_date
-  times <- as.numeric(dates)
-  par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, .5, .6))
-  plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1.05), xaxs = "i", yaxs = "i",
-    xaxt = "n", yaxt = "n", xlab = "", ylab = if (first_column) row_titles[["context"]] else "")
-  abline(h = .5, col = "gray80", lty = 3)
-  abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
-  points(times, signal$context, pch = 15, cex = .35, col = "gray35")
-  broken <- break_gaps(dates, signal$gate)
-  lines(broken$dates, broken[[2]], col = colours[method], lwd = 1.5)
-  axis(2, at = c(0, .5, 1), las = 1, cex.axis = .75)
-  if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
-  box(col = "gray70")
 }
 draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_pages)) {
   columns <- weight_pages[[page]]
@@ -479,10 +452,6 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
       plot_mixture_forecasts(run, method, columns$common_method[j], level, fills,
         limits[[as.character(level)]], j == 1L, level == weight_forecast_levels[1],
         if (row == 1L) columns$title[j] else "")
-      next
-    }
-    if (kind == "context") {
-      plot_context(run, method, j == 1L, row == last_row)
       next
     }
     weights <- switch(kind,
@@ -578,7 +547,7 @@ run_results <- function(runs, run_params) list(
   restart_experts = do.call(rbind, lapply(runs, function(run) with_case(run,
     data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))),
   # The target signal of the score experts (target_signal() in R/03: D, c and G, 0 without
-  # a signal), by which Decline MultiQT and score_gated (G) act.
+  # a signal), by which Decline MultiQT acts.
   score_gate = do.call(rbind, lapply(runs, function(run) if (!is.null(run$score_gate))
     with_case(run, data.frame(reference_date = run$case$reference_date,
       target_date = run$case$target_date, signal = run$score_gate$signal,
