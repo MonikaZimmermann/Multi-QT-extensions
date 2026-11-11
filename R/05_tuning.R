@@ -1,5 +1,7 @@
 # Purpose: tune one setting per recalibration method on the tuning period of the
-# design prepared by R/01_data_overview.R and save the choice for R/04_methods.R.
+# design prepared by R/01_data_overview.R and save the choice for R/04_methods.R: first the
+# tracker rates from their loss and calibration-error curves (elbow), then the look-back H
+# of the learned mixtures with those rates. Everything else is fixed (method_parameters()).
 # Run from the project root after R/01_data_overview.R: Rscript R/05_tuning.R
 # (about 2.5 hours on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
 # Every finished stage is saved (cached() in R/03_functions.R): a restarted run, after a
@@ -29,24 +31,26 @@ transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses se
 # first report, after which each forecast is learned once from its report current then, or
 # the weekly re-run on the reports known then (feedback_protocol() in R/03_functions.R).
 tuning_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
-# One grid per tuned setting (tuned_setting in R/03_functions.R); multiples of S0 except H,
-# lambda, the number of recent weekly starts and the studentized eta (units of sigma_t).
-# Score-based experts: nothing tuned (H = 4, lambda_start = 2.72, sharing 1/8, the target
-# signal and the rate of Decline MultiQT are fixed in method_parameters()); their experts
-# use the rates tuned for these methods.
+# One grid per tuned setting (tuned_setting in R/03_functions.R): the tracker rates
+# (rate_settings; multiples of S0, the studentized eta in units of sigma_t) and H of the
+# learned mixtures (rate grid, weekly starts, starts x rates, score experts). Not tuned:
+# lambda (adaptive from lambda_start = 2.72), sharing 1/(2H), the outer rate, the number of
+# recent weekly starts, the target signal and the rate of Decline MultiQT. The median-start
+# methods, the back-off and the outer MultiQT use the values of their method
+# (parameter_source in R/03).
 grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4),
               slope_min_multiplier = c(.002, .004, .01, .02, .05, .1),
               median_rate = c(.003, .01, .03, .1, .3, 1),
-              H = c(2L, 4L, 8L, 16L, 32L),
-              restart_lambda = c(.25, .5, 1, 2.72, 7, 20),
               leaky_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2),
-              restart_recent_k = c(8L, 16L),
-              outer_multiplier = c(.001, .002, .004, .01, .02, .05, .1, .2))
-# Stages, in order; each uses the values chosen in the earlier ones. First every
-# method's own setting except the outer rates, then the outer rates, on the tuned inner
-# mixtures.
-stages <- list(setdiff(names(grids), "outer_multiplier"), "outer_multiplier")
+              H = c(2L, 4L, 8L, 16L, 32L))
+# Two stages: the tracker rates, then H with those rates (the score experts use them).
+stages <- list(rate_settings, "H")
 tuned_methods <- function(setting) names(tuned_setting)[tuned_setting == setting]
+# Elbow of a tracker rate: among the grid values whose mean criterion lies within
+# elbow_tolerance x the criterion of the original forecasts of the smallest one (on the
+# plots: 1 percentage point above the lowest loss change), the one with the lowest mean
+# calibration error. H: the smallest mean criterion. Ties: the smaller value.
+elbow_tolerance <- .01
 # A value chosen on the edge of its grid is flagged in tuned_settings.csv (on_grid_edge).
 cores <- max(1L, parallel::detectCores() - 2L)
 result_dir <- "output/results/tuning"
@@ -103,16 +107,38 @@ run_stage <- function(disease, transform, feedback, stage, by_method = list()) {
   if (any(failed)) stop(rows[[which(failed)[1]]])
   do.call(rbind, rows)
 }
-# The tuned value per method and setting: the smallest mean criterion over cases (ties:
-# the smaller value, i.e. the slower rate or shorter lookback).
+# Means over cases of each method, setting and value, with the criterion of the tracker and
+# that of the original forecasts (original_criterion) and the share of it within the elbow
+# tolerance (admissible: always for H).
 groups <- c("disease", "transform", "feedback_delay", "feedback_revisions")
-choose_values <- function(scores) {
-  scores <- scores[scores$method != "original", ]
+original_means <- function(scores) {
+  base <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
+    feedback_delay + feedback_revisions, unique(scores[scores$method == "original",
+      c(groups, "location", "horizon", "log_loss", "loss", "coverage_error")]), mean)
+  names(base)[5:7] <- paste0("original_", names(base)[5:7])
+  base
+}
+curve_means <- function(scores) {
   means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
-    feedback_delay + feedback_revisions + method + setting + value, scores, mean)
-  criterion <- ifelse(criterion_of(means$transform) == "log_loss", means$log_loss, means$loss)
+    feedback_delay + feedback_revisions + method + setting + value,
+    scores[scores$method != "original", ], mean)
+  means <- merge(means, original_means(scores), by = groups)
+  log_scale <- criterion_of(means$transform) == "log_loss"
+  means$criterion <- ifelse(log_scale, means$log_loss, means$loss)
+  means$original_criterion <- ifelse(log_scale, means$original_log_loss, means$original_loss)
+  lowest <- ave(means$criterion, means[c(groups, "method", "setting")], FUN = min)
+  means$admissible <- !means$setting %in% rate_settings |
+    means$criterion <= lowest + elbow_tolerance * means$original_criterion
+  means
+}
+# The tuned value per method and setting: the elbow for a tracker rate, the smallest
+# criterion for H (see elbow_tolerance).
+choose_values <- function(scores) {
+  means <- curve_means(scores)
+  means <- means[means$admissible, ]
   means <- means[do.call(order, unname(c(means[c(groups, "method", "setting")],
-    list(criterion, means$value)))), ]
+    list(ifelse(means$setting %in% rate_settings, means$coverage_error, means$criterion),
+      means$value)))), ]
   means[!duplicated(means[c(groups, "method", "setting")]), ]
 }
 
@@ -148,12 +174,11 @@ write.csv(all_scores, file.path(result_dir, paste0("tuning_scores_", design, ".c
 # the defaults in 04.
 scored <- all_scores[is.finite(all_scores$log_loss), ]
 tuned <- choose_values(scored)
-base <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
-  feedback_delay + feedback_revisions, unique(scored[scored$method == "original",
-    c(groups, "location", "horizon", "log_loss", "loss", "coverage_error")]), mean)
-names(base)[5:7] <- paste0("original_", names(base)[5:7])
-tuned <- merge(tuned, base, by = groups)
+tuned <- tuned[setdiff(names(tuned), c("criterion", "original_criterion", "admissible"))]
 tuned$criterion <- unname(tuning_score[tuned$transform])
+tuned$rule <- ifelse(tuned$setting %in% rate_settings, paste0("elbow: lowest calibration ",
+  "error within ", 100 * elbow_tolerance, "% of the original loss of the lowest loss"),
+  "lowest loss")
 tuned$log_loss_change_percent <- 100 * (tuned$log_loss / tuned$original_log_loss - 1)
 tuned$loss_change_percent <- 100 * (tuned$loss / tuned$original_loss - 1)
 tuned$on_grid_edge <- mapply(function(setting, value) value %in% range(grids[[setting]]),
@@ -169,72 +194,78 @@ print(tuned[c(groups, "method", "setting", "value", "on_grid_edge",
   "original_coverage_error")], digits = 3,
   row.names = FALSE)
 
-# 4. PLOT: CRITERION OVER EACH GRID -------------------------------------------
-# One page per disease and feedback design; one panel per tuned setting; one line per
-# method. Solid: log1p tracker (loss of log(counts + 1)), dashed: identity (loss per
-# 100k); each tracker on its own criterion; the chosen value is circled. First the pooled
-# pages (the criterion), then the same pages for each tuned location of location_ids (mean
-# over horizons; circled: the value chosen on the pool). The US is not tuned.
-# where: the location of the pages (NULL: the pool).
+# 4. ELBOW PLOTS: CRITERION AND CALIBRATION ERROR OVER EACH GRID -------------
+# One page per disease and feedback design; for each tuned setting two panels side by side:
+# the criterion relative to the original forecasts (%) and the calibration error, one line
+# per method. Solid: log1p tracker (loss of log(counts + 1)), dashed: identity (loss per
+# 100k); each tracker on its own criterion. Rates: filled points lie within the elbow
+# tolerance of the lowest loss, open points above it; circled: the chosen value (H: the
+# lowest loss). First the pooled pages (the criterion), then the same pages for each tuned
+# location of location_ids (mean over horizons; circled: the value chosen on the pool).
+# The US is not tuned. where: the location of the pages (NULL: the pool).
 draw_tuning_pages <- function(scored, where = NULL) {
-  means <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
-    feedback_delay + feedback_revisions + method + setting + value, scored, mean)
-  base <- aggregate(cbind(log_loss, loss, coverage_error) ~ disease + transform +
-    feedback_delay + feedback_revisions, unique(scored[scored$method == "original",
-      c(groups, "location", "horizon", "log_loss", "loss", "coverage_error")]), mean)
-  names(base)[5:7] <- paste0("original_", names(base)[5:7])
+  means <- curve_means(scored)
   for (disease in intersect(diseases, means$disease)) for (f in seq_len(nrow(tuning_feedback))) {
     feedback <- tuning_feedback[f, ]
     in_design <- function(x) x$disease == disease & x$feedback_delay == feedback$delay &
       x$feedback_revisions == feedback$revisions
-    # Eight setting panels plus a separate legend strip.
-    panel_rows <- ceiling(length(grids) / 4L)
+    # Two panels per setting, two settings per row, plus a legend strip.
+    panel_rows <- ceiling(length(grids) / 2L)
     panel_ids <- matrix(seq_len(4L * panel_rows), panel_rows, 4, byrow = TRUE)
-    panel_ids[panel_ids > length(grids)] <- 0L
-    layout(rbind(panel_ids, rep(length(grids) + 1L, 4L)), heights = c(rep(1, panel_rows), .18))
-    par(oma = c(2.5, 0, 3, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.3, .6, 0))
+    panel_ids[panel_ids > 2L * length(grids)] <- 0L
+    layout(rbind(panel_ids, rep(2L * length(grids) + 1L, 4L)), heights = c(rep(1, panel_rows), .18))
+    par(oma = c(4.6, 0, 3, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.3, .6, 0))
     for (setting in names(grids)) {
-      rows <- means[in_design(means) & means$setting == setting & means$method != "original", ]
-      original <- base[in_design(base), ]
-      original <- original[match(rows$transform, original$transform), ]
-      rows$change <- 100 * ifelse(criterion_of(rows$transform) == "log_loss",
-        rows$log_loss / original$original_log_loss, rows$loss / original$original_loss) - 100
+      rows <- means[in_design(means) & means$setting == setting, ]
+      rows$change <- 100 * (rows$criterion / rows$original_criterion - 1)
       methods <- unique(rows$method)
       colours <- setNames(hcl.colors(max(3L, length(methods)), "Dark 3")[seq_along(methods)], methods)
-      plot(NA, xlim = range(grids[[setting]]), ylim = range(0, rows$change, na.rm = TRUE),
-        log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
-        ylab = "Loss vs original (%)", main = setting)
-      abline(h = 0, col = "gray60")
-      for (method in methods) for (transform in transforms) {
-        line <- rows[rows$method == method & rows$transform == transform, ]
-        line <- line[order(line$value), ]
-        lines(line$value, line$change, col = colours[method], lty = if (transform == "log1p") 1 else 2,
-          type = "b", pch = 16, cex = .6)
-        chosen <- tuned[in_design(tuned) & tuned$transform == transform &
-          tuned$method == method, "value"]
-        points(chosen, line$change[match(chosen, line$value)], col = colours[method], cex = 1.6)
+      for (y in c("change", "coverage_error")) {
+        plot(NA, xlim = range(grids[[setting]]), ylim = range(if (y == "change") 0 else
+          rows$original_coverage_error, rows[[y]], na.rm = TRUE),
+          log = if (min(grids[[setting]]) > 0) "x" else "", xlab = setting,
+          ylab = if (y == "change") "Loss vs original (%)" else "Calibration error",
+          main = paste(setting, if (y == "change") "| loss" else "| calibration error"))
+        abline(h = if (y == "change") 0 else unique(rows$original_coverage_error), col = "gray60")
+        for (method in methods) for (transform in transforms) {
+          line <- rows[rows$method == method & rows$transform == transform, ]
+          line <- line[order(line$value), ]
+          lines(line$value, line[[y]], col = colours[method], lty = if (transform == "log1p") 1 else 2)
+          points(line$value, line[[y]], col = colours[method], pch = ifelse(line$admissible, 16, 1),
+            cex = .7)
+          chosen <- tuned[in_design(tuned) & tuned$transform == transform &
+            tuned$method == method & tuned$setting == setting, "value"]
+          points(chosen, line[[y]][match(chosen, line$value)], col = colours[method], cex = 1.8)
+        }
+        if (y == "change") legend("topleft", methods, col = colours, lty = 1, bty = "n", cex = .7)
       }
-      legend("topleft", methods, col = colours, lty = 1, bty = "n", cex = .7)
     }
     par(mar = c(0, 0, 0, 0))
     plot.new()
     legend("center", c("log1p tracker (loss of log(counts + 1))",
       paste0("identity tracker (loss in ", count_scale_label(settings$scale_method), ")"),
-      "chosen value"), lty = c(1, 2, NA),
-      pch = c(NA, NA, 1), bty = "n", ncol = 3)
+      "rate within the tolerance (filled) or above it (open)", "chosen value",
+      "original forecasts (calibration error)"), lty = c(1, 2, NA, NA, 1),
+      pch = c(NA, NA, 16, 1, NA), pt.cex = c(1, 1, .7, 1.8, 1), col = c(1, 1, 1, 1, "gray60"),
+      bty = "n", ncol = 3, cex = .9)
     mtext(paste(disease, "| design", design, "| feedback", feedback_label(feedback$delay,
       feedback$revisions), paste0("(", feedback_protocol()$id, ")"), "| tuning period",
       prepared$settings$tuning_label, "| horizons",
       paste(range(tuning_horizons), collapse = " to "), "|", if (is.null(where))
         pooled_label(length(unique(scored$location[scored$disease == disease])), settings) else
         where), side = 3, outer = TRUE, line = 1.2, font = 2)
-    mtext(paste("Mean quantile loss relative to the original forecasts", if (is.null(where))
-      "(mean over locations and horizons)" else "(mean over horizons; circled: chosen on the pool)",
-      "on each tracker's scale"), side = 1, outer = TRUE, line = 1)
+    mtext(paste("Mean quantile loss relative to the original forecasts and mean calibration",
+      "error", if (is.null(where)) "(means over locations and horizons)" else
+        "(means over horizons; circled: chosen on the pool)", "on the scale of each tracker"),
+      side = 1, outer = TRUE, line = .8)
+    mtext(c(paste0("Tracker rates: the lowest calibration error among the rates whose loss lies ",
+      "within ", 100 * elbow_tolerance, "% of the original loss above the lowest loss (filled ",
+      "points)."), "H: the lowest loss. Ties: the smaller value."), side = 1, outer = TRUE,
+      line = c(2.1, 3.3))
   }
 }
 cairo_pdf(file.path(figure_dir, "multiqt_tuning.pdf"), width = 15,
-  height = 3.6 * ceiling(length(grids) / 4L) + 1.5, family = "DejaVu Sans")
+  height = 3.6 * ceiling(length(grids) / 2L) + 1.8, family = "DejaVu Sans")
 draw_tuning_pages(scored)
 for (location in intersect(settings$location_ids, scored$location)) {
   case <- prepared$cases[[paste(scored$disease[1], location, tuning_horizons[1], sep = "_")]]

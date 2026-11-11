@@ -107,18 +107,18 @@ feedback_names <- with(tradeoff_feedback, ifelse(revisions,
 feedback_files <- gsub("[ ,-]", "", feedback_names)    # File names: "delay0", "rerun".
 
 # 3. PLOT SETTINGS ---------------------------------------------------
-# Labels show each method's own value of its tuned setting (tuned_setting in R/03) in the
-# settings p of one disease and feedback design (tuned_for()).
+# Labels show each method's own value of its tuned setting (tuned_setting in R/03: the
+# tracker rates and H) and the fixed settings that tell methods apart, in the settings p of
+# one disease and feedback design (tuned_for()). Back-off and outer variants show H of the
+# mixture they correct (parameter_source in R/03).
 method_labels <- function(p) {
   par_of <- function(method, name) method_parameter(p, method, name)
   residual_label <- paste("RMS of", p$median_window)
   base_width <- paste0(round(100 * diff(p$median_base_levels)), "%")
   value <- function(method) par_of(method, tuned_setting[[method]])
   eta <- function(method) paste0("eta=", value(method))
-  outer <- function(method) paste0("outer m=", value(method))
-  H_of <- function(method) paste0("H=", value(method))
-  lambda_of <- function(method) paste0("lambda=", value(method))
-  learned <- paste0("H=", p$score_H, ", sharing 1/", 2 * p$score_H, ", lambda on the variance")
+  outer <- function(method) paste0("outer m=", par_of(method, "outer_multiplier"))
+  H_of <- function(method) paste0("H=", par_of(method, "H"))
   c(original = "Original",
     fixed = paste0("Fixed MultiQT (eta=", value("fixed"), "*S0)"),
     leaky = paste0("Leaky MultiQT (eta=", value("leaky"), "*S0, leak ", par_of("leaky", "leak"),
@@ -138,25 +138,29 @@ method_labels <- function(p) {
     shared = paste0("Rate grid: learned + sharing (", H_of("shared"), ")"),
     shared_common = paste0("Rate grid: learned + sharing, common weights (", H_of("shared_common"),
       ")"),
-    shared_outer = paste0("Rate grid: sharing + outer (", outer("shared_outer"), ")"),
+    shared_outer = paste0("Rate grid: sharing + outer (", H_of("shared_outer"), ", ",
+      outer("shared_outer"), ")"),
     shared_common_outer = paste0("Rate grid: sharing, common weights + outer (",
-      outer("shared_common_outer"), ")"),
+      H_of("shared_common_outer"), ", ", outer("shared_common_outer"), ")"),
     restart_persistent = paste0("First start only (m=", p$restart_multiplier, ")"),
     restart_uniform = paste0("Weekly starts: equal (m=", p$restart_multiplier, ")"),
     restart_weighted = paste0("Weekly starts: learned (m=", p$restart_multiplier, ", ",
-      lambda_of("restart_weighted"), ")"),
-    restart_grid = paste0("Starts x rate grid: learned (", lambda_of("restart_grid"), ")"),
+      H_of("restart_weighted"), ")"),
+    restart_grid = paste0("Starts x rate grid: learned (", H_of("restart_grid"), ")"),
     restart_uniform_outer = paste0("Starts equal + outer (", outer("restart_uniform_outer"), ")"),
-    restart_weighted_outer = paste0("Starts learned + outer (", outer("restart_weighted_outer"), ")"),
-    restart_grid_outer = paste0("Starts x rate grid + outer (", outer("restart_grid_outer"), ")"),
-    restart_recent = paste0("Weekly starts: most recent ", value("restart_recent"),
+    restart_weighted_outer = paste0("Starts learned + outer (", H_of("restart_weighted_outer"),
+      ", ", outer("restart_weighted_outer"), ")"),
+    restart_grid_outer = paste0("Starts x rate grid + outer (", H_of("restart_grid_outer"), ", ",
+      outer("restart_grid_outer"), ")"),
+    restart_recent = paste0("Weekly starts: most recent ", p$restart_recent_k,
       ", equal (m=", p$restart_multiplier, ")"),
     decline = paste0("Decline MultiQT (eta=", par_of("decline", "decline_multiplier"),
       "*S0, declining context, delta=", p$context_delta, ")"),
     score_equal = "Score experts: equal weights",
-    score_learned = paste0("Score experts: learned weights per level (", learned, ")"),
-    score_gated = paste0("Score experts: learned, (1 - G) x mixture + G x original (delta=",
-      p$context_delta, ")"),
+    score_learned = paste0("Score experts: learned weights per level (", H_of("score_learned"),
+      ")"),
+    score_gated = paste0("Score experts: learned, (1 - G) x mixture + G x original (",
+      H_of("score_gated"), ", delta=", p$context_delta, ")"),
     studentized = paste0("Studentized median (", residual_label, ", ", p$median_start,
       " start, ", eta("studentized"), ")"),
     studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",

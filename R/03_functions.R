@@ -784,11 +784,10 @@ select_experts <- function(experts, keep) list(
 #   over the S0 rows), released by feedback_by_week like the MultiQT updates. The
 #   division makes lambda unit-free: the count scale does not change the weights.
 # lambda: "learned" starts at lambda_start and, after H updates, uses
-#   sqrt((log(2 K H) + 1) / sum of the previous H second moments); a number fixes
-#   lambda; 0 gives the uniform average of the active experts.
-# centered: FALSE: the second moment of the experts' losses under the pre-update weights
-#   (the paper's); TRUE: of their deviations from the weighted mean loss, i.e. the weighted
-#   variance. The weights ignore a loss shared by all experts (e.g. the base error that
+#   sqrt((log(2 K H) + 1) / sum of the previous H moments); a number fixes lambda; 0 gives
+#   the uniform average of the active experts. The moment is the weighted variance of the
+#   experts' losses under the pre-update weights, not their second moment (the paper's):
+#   the weights ignore a loss shared by all experts (e.g. the base error that
 #   recalibrations of one base share), so the variance sets lambda for the differences.
 # sharing: after each update, share (default 1/(2H)) of the mass is spread uniformly.
 # per_quantile: one weight vector per level. FALSE: one weight vector for all levels,
@@ -802,7 +801,7 @@ select_experts <- function(experts, keep) list(
 # [week x expert x level, or x 1 if common], the lambda used at each issue week and the
 # experts' forecasts it weighs (experts$forecasts).
 exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
-                        lambda = "learned", centered = FALSE, sharing = TRUE, H = 8L,
+                        lambda = "learned", sharing = TRUE, H = 8L,
                         share = 1 / (2 * H), per_quantile = TRUE, lambda_start = 2.72,
                         warmup_weeks = 0L, loss_scale = 1) {
   forecasts <- experts$forecasts
@@ -851,12 +850,14 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
       stopifnot(all(is.finite(loss)))
       # Experts without a forecast for this row sleep and keep their mass.
       mass <- 1 - colSums(p[sleeping, , drop = FALSE])
-      # Paper's second moment: average squared expert losses using pre-update weights
-      # (centered: squared deviations from their weighted mean).
+      # Weighted variance of the expert losses under the pre-update weights. Losses that
+      # differ only by rounding (relative spread below 1e-6, e.g. weekly-start copies that
+      # still issue the same forecast) carry no information: no moment, as for equal losses,
+      # instead of a lambda that turns rounding into weight changes.
       n_updates <- n_updates + 1L
       prior <- sweep(p[eligible, , drop = FALSE], 2, mass, `/`)
-      deviation <- if (centered) sweep(loss, 2, colSums(prior * loss)) else loss
-      moments[n_updates, ] <- colSums(prior * deviation^2)
+      variance <- colSums(prior * sweep(loss, 2, colSums(prior * loss))^2)
+      moments[n_updates, ] <- ifelse(variance > 1e-12 * colSums(prior * loss^2), variance, 0)
       updated <- log_weights[eligible, , drop = FALSE] - sweep(loss, 2, learning_rate, `*`)
       if (length(sleeping)) {
         # Shift the eligible experts' log weights so that their total mass is unchanged.
@@ -928,21 +929,22 @@ method_parameters <- function() list(
   sqrt_constant_rate = .018,
   # Slope rate: eta_t = min(cap * S0, min * S0 + |weekly slope of the base median|).
   slope_min_multiplier = .004, slope_cap_multiplier = .08,
-  H = 8L, lambda_start = 2.72,           # Learned lambda (exp_weights()); sharing uses 1/(2H).
-  outer_multiplier = .004,               # Outer MultiQT on a mixture's own forecasts.
-  # Weekly restarts: a fresh copy per multiplier at every issue week, fixed meta-rate;
-  # restart_recent: equal weights on the restart_recent_k most recent copies.
-  restart_multiplier = .05, restart_multipliers = c(.01, .05, .2), restart_lambda = 2.72,
-  restart_recent_k = 8L,
+  # Learned mixtures (exp_weights()): adaptive lambda from lambda_start, look-back H (the
+  # only tuned weighting setting); sharing, where used, 1/(2H).
+  H = 8L, lambda_start = 2.72,
+  outer_multiplier = .001,               # Outer MultiQT on a mixture: eta = m * S0, not tuned.
+  # Weekly restarts: a fresh copy per multiplier at every issue week; restart_recent: equal
+  # weights on the restart_recent_k most recent copies (not tuned).
+  restart_multiplier = .05, restart_multipliers = c(.01, .05, .2), restart_recent_k = 8L,
   # Leaky MultiQT: eta = m * S0 plus a leaky shift of all levels on the log1p scale (see
   # multiqt()), halved every week since the previous issue.
   leaky_multiplier = .008, leak = .2,
-  # Score-based experts (score_experts, score_methods), none tuned: learned weights per level
-  # with lambda from lambda_start on the variance of the experts' losses, score_H and
-  # sharing 1/(2 score_H) = 1/8. Target signal (target_signal()): threshold context_delta,
-  # sigmoid width context_width. Decline MultiQT: eta = decline_multiplier * S0 (the
-  # default rate of Fixed MultiQT and of the weekly starts).
-  score_H = 4L, context_delta = 0, context_width = .05, decline_multiplier = .05,
+  # Score-based experts (score_experts, score_methods): learned weights per level with H and
+  # sharing 1/(2H) as the other learned mixtures (H tuned for score_learned). Target signal
+  # (target_signal()): threshold context_delta, sigmoid width context_width. Decline
+  # MultiQT: eta = decline_multiplier * S0 (the default rate of Fixed MultiQT and of the
+  # weekly starts). None of these tuned.
+  context_delta = 0, context_width = .05, decline_multiplier = .05,
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
   # residuals (the base until median_min_rows exist) or from the base width between
   # median_base_levels; median_start: "normal" or "t" start of the residual median methods
@@ -987,18 +989,16 @@ tuned_parameters <- function(disease, transform, params = method_parameters(),
     params$by_method[[tuned$method[i]]][[tuned$setting[i]]] <- tuned$value[i]
   params
 }
-# The setting R/05_tuning.R tunes for each method; the other methods have none.
+# The setting R/05_tuning.R tunes for each method; the other methods have none. First the
+# tracker rates (chosen from their loss and CE curves), then H of the learned mixtures
+# (rate_settings and the rest; see R/05).
 tuned_setting <- c(fixed = "fixed_multiplier", leaky = "leaky_multiplier",
   absolute_slope = "slope_min_multiplier",
-  weighted = "H", weighted_common = "H", shared = "H", shared_common = "H",
-  restart_weighted = "restart_lambda", restart_grid = "restart_lambda",
-  restart_recent = "restart_recent_k",
   studentized = "median_rate", studentized_base = "median_rate", median_constant = "median_rate",
-  studentized_full = "median_rate",
-  studentized_level_rms = "median_rate",
-  shared_outer = "outer_multiplier", shared_common_outer = "outer_multiplier",
-  restart_uniform_outer = "outer_multiplier", restart_weighted_outer = "outer_multiplier",
-  restart_grid_outer = "outer_multiplier")
+  studentized_full = "median_rate", studentized_level_rms = "median_rate",
+  weighted = "H", weighted_common = "H", shared = "H", shared_common = "H",
+  restart_weighted = "H", restart_grid = "H", score_learned = "H")
+rate_settings <- c("fixed_multiplier", "leaky_multiplier", "slope_min_multiplier", "median_rate")
 # Score-based experts: one bank of the forecasts of these six methods (score_experts; the
 # near duplicate studentized_level_rms of the original left out), weighted by equal
 # weights (score_equal), by learned weights per level (score_learned) or by the learned
@@ -1007,8 +1007,12 @@ score_experts <- c("original", "fixed", "leaky", "studentized_base", "studentize
   "decline")
 score_methods <- c("score_equal", "score_learned", "score_gated")
 # Methods that use the values tuned for another (method_parameter()): the median-start
-# variants keep the rate (so the effective rate eta x sigma_t) of their normal-start method.
-parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "median_constant")
+# variants keep the rate (so the effective rate eta x sigma_t) of their normal-start method;
+# the back-off and the outer MultiQT keep H of the mixture they correct.
+parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "median_constant",
+  score_gated = "score_learned", shared_outer = "shared", shared_common_outer = "shared_common",
+  restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted",
+  restart_grid_outer = "restart_grid")
 method_names <- c("original", "fixed", "leaky", "ref_op", "sqrt_constant", "absolute_slope",
   "studentized", "studentized_base",
   "median_constant", "studentized_zero", "median_constant_zero", "studentized_full",
@@ -1277,10 +1281,10 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # Several trackers: weight their forecasts. Rate grid: one persistent expert per
   # multiplier. Restarts: a fresh copy per multiplier at every issue week after warmup;
   # no permanent base expert. Score-based experts: the forecasts of six methods
-  # (score_experts). Each weighting learns from released quantile losses of issued
+  # (score_experts). Each learned weighting learns from released quantile losses of issued
   # forecasts, divided by the base's mean loss over the S0 rows, so the count scale does
-  # not change the weights. Their deterministic average still uses LEARNED weights;
-  # equal averaging is a control.
+  # not change the weights; adaptive lambda and look-back H (par(method, "H")) for every
+  # one. Equal averaging is a control.
   loss_scale <- if (!is.null(case$frozen_loss_scale)) case$frozen_loss_scale else
     weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
   weigh <- function(method, experts, ...) exp_weights(experts, base, feedback,
@@ -1290,10 +1294,10 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # Key of a mixture: the method and every setting a mixture can depend on.
   # Score mixtures also depend on their experts' own settings (rate_key()).
   mixture_key <- function(method) paste("mixture", method, paste(vapply(c("H", "lambda_start",
-    "restart_lambda", "restart_recent_k"),
+    "restart_recent_k"),
     function(name) format(par(method, name), digits = 15), ""), collapse = ","),
     paste(params$restart_multipliers, collapse = ","), params$restart_multiplier,
-    params$score_H, params$context_delta, params$context_width,
+    params$context_delta, params$context_width,
     par("decline", "decline_multiplier"), par("leaky", "leak"), paste(vapply(intersect(
       score_experts, names(tuned_setting)), rate_key, ""), collapse = ","), base_key, rms_key)
   mix <- function(method, value) memo(mixture_key(method), value)
@@ -1322,15 +1326,15 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     if (want("restart_uniform")) mixtures$restart_uniform <- mix("restart_uniform",
       weigh("restart_uniform", fixed_restarts, lambda = 0))
     if (want("restart_weighted")) mixtures$restart_weighted <- mix("restart_weighted",
-      weigh("restart_weighted", fixed_restarts, lambda = par("restart_weighted", "restart_lambda")))
+      weigh("restart_weighted", fixed_restarts))
     if (want("restart_grid")) mixtures$restart_grid <- mix("restart_grid",
-      weigh("restart_grid", restart_experts, lambda = par("restart_grid", "restart_lambda")))
+      weigh("restart_grid", restart_experts))
     if (want("restart_recent")) mixtures$restart_recent <- mix("restart_recent",
       recent_starts(fixed_restarts, base, par("restart_recent", "restart_recent_k")))
   }
   # Score-based experts: one bank of the forecasts of the six score_experts. score_equal: equal
-  # weights. score_learned: learned weights per level, lambda from lambda_start on the
-  # variance of the experts' losses (centered), score_H and sharing 1/(2 score_H).
+  # weights. score_learned: learned weights per level as the other learned mixtures (H,
+  # sharing 1/(2H)).
   # score_gated: (1 - G) x score_learned + G x the original, with the target signal G at the
   # issue week (0 without a signal: always at h = -1); its weights as mixed, the original
   # with the share G added. An expert identical to an earlier one in every week is left out
@@ -1343,13 +1347,10 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
       as.character(case$alpha))
     score_bank <- list(forecasts = forecasts, birth_week = rep(1L, length(experts)),
       experts = data.frame(expert = experts, start_date = case$reference_date[1]))
-    score_weigh <- function(...) exp_weights(score_bank, base, feedback, case$feedback_by_week,
-      case$alpha, H = params$score_H, lambda_start = params$lambda_start,
-      warmup_weeks = s0$warmup_weeks, loss_scale = loss_scale, ...)
     if (want("score_equal")) mixtures$score_equal <- mix("score_equal",
-      score_weigh(lambda = 0, per_quantile = FALSE))
+      weigh("score_equal", score_bank, lambda = 0, per_quantile = FALSE))
     if (want("score_learned", "score_gated")) mixtures$score_learned <- mix("score_learned",
-      score_weigh(centered = TRUE, per_quantile = TRUE))
+      weigh("score_learned", score_bank))
     if (want("score_gated")) {
       g <- signal$gate
       gated <- mixtures$score_learned
