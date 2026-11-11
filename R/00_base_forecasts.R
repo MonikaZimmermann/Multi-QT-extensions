@@ -2,14 +2,15 @@
 # forecasts with Delphi's windowed_seasonal forecaster (their code, unchanged).
 # Run from the project root: Rscript R/00_base_forecasts.R
 # Order of the workflow: 00 -> 01 -> 05 -> 02 / 04. About 25 minutes per disease the
-# first time; later runs read the cached forecasts (delete the parquet file below to
-# rebuild it from the cache).
+# first time; later runs read the cached forecasts. Changing the reviewed report
+# exclusions rebuilds the forecasts and retains the previous parquet under agent/.
 # Writes to the project root:
 #   cmu_timeseries_hub_forecasts.parquet  CMU-TimeSeries hub submissions (section 1);
 #   nhsn_vintages_epidata.parquet         every stored NHSN report version (section 1);
 #   windowed_seasonal_forecasts.parquet   our windowed_seasonal forecasts (section 5).
 # Delphi's code, its pinned packages and the caches go to external/delphi/ (not in Git).
 library(dplyr)
+source("R/03_functions.R")
 
 # 0. SETTINGS -----------------------------------------------------------------
 # cmu-delphi/delphi-hub-forecasting (formerly exploration-tooling): forecasters, as-of
@@ -39,6 +40,9 @@ flu_aux_files <- c("flu_burden.csv", "us_pop.csv",
 forecasts_path <- "cmu_timeseries_hub_forecasts.parquet"
 vintages_path <- "nhsn_vintages_epidata.parquet"
 own_forecasts_path <- "windowed_seasonal_forecasts.parquet"
+# The same reviewed report exclusions are used here and in script 01. Record the
+# filter on generated forecasts so script 01 can reject an older, unfiltered file.
+reports_filter_id <- report_filter_id()
 
 # 1. DOWNLOAD THE HUB FORECASTS AND REPORTS ONCE ------------------------------
 # Both tables are downloaded once and stored as Parquet in the project root. Delete
@@ -168,9 +172,12 @@ for (expression in harness)
 # R/01_data_overview.R use the same report versions.
 g_insufficient_data_geos <- c("as", "mp", "vi", "gu")
 g_time_value_adjust <- 3
-vintages <- nanoparquet::read_parquet(vintages_path)
+vintages <- filter_reports(nanoparquet::read_parquet(vintages_path))
 training_archive <- function(disease) {
   reports <- vintages[vintages$disease == disease, ]
+  # Keep masked versions as NA in the archive. A snapshot must select the latest
+  # version available then, even when excluded, rather than fall back to an older
+  # value. A subsequent valid revision can make the same target week usable again.
   nhsn_archive_data <- tibble(geo_value = reports$geo_value, time_value = reports$target_end_date,
     version = reports$version, value = reports$value) %>%
     as_epi_archive(compactify = TRUE)
@@ -229,7 +236,7 @@ forecast_disease <- function(disease) {
     ch_schedule(final_data_through, final_data_from) %>% mutate(as_of_policy = "cheating"),
     ch_schedule(archive$versions_end, versioned_from) %>% mutate(as_of_policy = "asof"))
   cache_file <- file.path(delphi_dir, "cache", paste0(disease, "_windowed_seasonal_",
-    rlang::hash(list(delphi_commit, CH_SPEC, aheads, schedule, archive$DT)), ".rds"))
+    rlang::hash(list(delphi_commit, reports_filter_id, CH_SPEC, aheads, schedule, archive$DT)), ".rds"))
   if (file.exists(cache_file)) return(readRDS(cache_file))
   failures <- list()
   forecasts <- purrr::map(seq_len(nrow(schedule)), .progress = paste(disease, "forecasts"),
@@ -258,8 +265,25 @@ forecast_disease <- function(disease) {
 # 5. HUB FORMAT AND SAVE ------------------------------------------------------
 # The columns of cmu_timeseries_hub_forecasts.parquet, plus forecast_date (the nominal
 # Wednesday), generation_date (the as-of date of the reports) and data ("final" or
-# "versions"). truth_finalized: the latest stored report, as for the hub forecasts.
-if (!file.exists(own_forecasts_path)) {
+# "versions"). truth_finalized: the latest stored report after the reviewed
+# exclusions. report_filter_id records the filter used for training and truth.
+own_forecasts <- if (file.exists(own_forecasts_path))
+  nanoparquet::read_parquet(own_forecasts_path) else NULL
+own_forecasts_current <- !is.null(own_forecasts) && nrow(own_forecasts) > 0 &&
+  "report_filter_id" %in% names(own_forecasts) &&
+  all(!is.na(own_forecasts$report_filter_id) &
+        own_forecasts$report_filter_id == reports_filter_id)
+if (!own_forecasts_current) {
+  if (!is.null(own_forecasts)) {
+    archive_dir <- "agent/outputs/archive/base_forecasts"
+    dir.create(archive_dir, recursive = TRUE, showWarnings = FALSE)
+    archive_file <- tempfile(paste0("windowed_seasonal_",
+      format(Sys.time(), "%Y%m%d_%H%M%S"), "_"), tmpdir = archive_dir, fileext = ".parquet")
+    if (!file.copy(own_forecasts_path, archive_file))
+      stop("Could not retain the previous forecasts in ", archive_file)
+    message("Report exclusions changed or are not recorded: rebuilding own forecasts; ",
+      "previous file retained in ", archive_file)
+  }
   aux_dir <- file.path(delphi_dir, "aux_data", "flusion_data")
   if ("flu" %in% diseases && !all(file.exists(file.path(aux_dir, flu_aux_files)))) {
     message("Flu skipped: put Delphi's ", paste(flu_aux_files, collapse = ", "), " in ",
@@ -289,6 +313,7 @@ if (!file.exists(own_forecasts_path)) {
         data = if_else(as_of_policy == "cheating", "final", "versions"))
   })) %>%
     left_join(latest_reports, by = c("disease", "location", "target_end_date")) %>%
+    mutate(report_filter_id = reports_filter_id) %>%
     arrange(disease, reference_date, horizon, location, quantile_level)
   nanoparquet::write_parquet(own_forecasts, own_forecasts_path)
 }

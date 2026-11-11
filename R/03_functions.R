@@ -29,6 +29,51 @@ multiqt_settings <- function() list(
   weeks_after_peak = 8L)            # after = weeks 1..8: 8 weeks.
 
 # 2. DELAYED FEEDBACK, CASES, SCALES AND WINDOWS ----------------------------
+# Reviewed exclusions, not an automatic outlier rule. These four reports were
+# identified from later corrections in nhsn_vintages_epidata.parquet: retrospective
+# cleaning, not information available when the erroneous report was released.
+# Keep the original value and correction evidence here; never exclude a whole target
+# week or every large revision. Add reviewed versions here to invalidate old results.
+reviewed_report_exclusions <- function() data.frame(
+  disease = c("covid", "covid", "covid", "flu"),
+  location = c("42", "01", "01", "01"),
+  target_end_date = as.Date(c("2024-11-16", "2026-01-24", "2026-02-14", "2026-02-14")),
+  version = as.Date(c("2024-11-20", "2026-01-28", "2026-02-18", "2026-02-18")),
+  value = c(6124, 1, 4, 6),
+  correction_version = as.Date(c("2024-11-21", "2026-02-04", "2026-02-20", "2026-02-20")),
+  correction_value = c(1005, 105, 130, 425),
+  reason = c("Erroneous high Pennsylvania COVID report",
+    "Incomplete Alabama COVID report", "Incomplete Alabama COVID report",
+    "Incomplete Alabama flu report"),
+  evidence = rep("Reviewed subsequent correction in nhsn_vintages_epidata.parquet", 4),
+  retrospective = TRUE)
+
+# The table is part of the protocol and own-base cache identity, including its evidence.
+report_filter_id <- function() paste0("reviewed-", unname(tools::md5sum(
+  bytes = serialize(reviewed_report_exclusions(), NULL, version = 2))))
+
+# Mask exact reviewed versions, retaining every row and its raw count for auditing.
+# Selecting the latest version from this table therefore keeps an excluded latest
+# version missing, rather than falling back to an older acceptable report.
+filter_reports <- function(reports, exclusions = reviewed_report_exclusions()) {
+  keys <- c("disease", "location", "target_end_date", "version")
+  stopifnot(all(c(keys, "value") %in% names(reports)),
+    all(c(keys, "value") %in% names(exclusions)), !anyNA(exclusions[keys]),
+    !anyDuplicated(exclusions[keys]), all(valid_report(exclusions$value)))
+  key <- function(x) do.call(paste, c(x[keys], sep = "|"))
+  i <- match(key(reports), key(exclusions))
+  if (is.null(reports$raw_value)) reports$raw_value <- reports$value
+  matched <- !is.na(i)
+  if (any(matched & (is.na(reports$raw_value) |
+      reports$raw_value != exclusions$value[i]), na.rm = TRUE))
+    stop("A reviewed report has changed in the archive; review its exclusion before use.",
+      call. = FALSE)
+  reports$report_excluded <- matched
+  reports$value <- reports$raw_value
+  reports$value[matched] <- NA_real_
+  reports
+}
+
 # The delayed-feedback protocol of notes/notes.tex, Section 2.1.1 (wait for the delay, then
 # learn once from the report current at the update). R/01_data_overview.R builds every
 # case's feedback with feedback_schedule() and stores this protocol with the prepared data;
@@ -37,18 +82,21 @@ multiqt_settings <- function() list(
 # definitions are never combined. Change the id when the protocol changes. The
 # initialization is a separate convention (error_scale(), replay_warmup).
 feedback_protocol <- function() list(
-  id = "latest-at-use-v2",
-  cutoff = paste("Issue cutoff of a round: the base's actual generation date where known",
+  id = paste0("latest-at-use-v3-", report_filter_id()),
+  report_filter = report_filter_id(),
+  exclusions = "Exact reviewed report versions masked; retrospective cleaning using later corrections.",
+  cutoff = paste("Reference cutoff of a round: the base's actual generation date where known",
     "(windowed_seasonal; CMU hub rounds that Delphi's production schedule ran late),",
     "otherwise the hub's Wednesday deadline (reference date - 3, also for filled rounds).",
     "Reports have dates only: a report dated on the cutoff day is available (same-day",
     "convention)."),
   vintage = paste("Delay d: each forecast is learned once, at the first later round whose",
-    "cutoff is at least its first valid report + 7d days and whose current report (the",
+    "cutoff is at least its first acceptable report + 7d days and whose current report (the",
     "latest by that cutoff) is valid, from that report; later revisions are ignored. An",
     "invalid current report waits for the next round; an older report is never used",
     "instead. Re-run: the same rows in the same rounds, each with its report at the re-run",
-    "round's cutoff; invalid ones are left out."))
+    "round's cutoff; invalid ones are left out. Reviewed excluded versions count as",
+    "missing for feedback, training, initialization, scoring and peak detection."))
 # Stop unless `found` (the protocol id of prepared data, tuned settings or scores, read
 # from `what`) is the current one.
 check_feedback_protocol <- function(found, what, rerun) {

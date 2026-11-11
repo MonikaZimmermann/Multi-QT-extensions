@@ -396,8 +396,11 @@ prepare_data <- function(forecasts, vintages, settings) {
       "wednesday_deadline", "wednesday_no_submission"))
     data.frame(date, source)
   }
-  reports <- as.data.frame(vintages[!is.na(vintages$location),
-    c("disease", "location", "geo_value", "target_end_date", "version", "value")])
+  # Keep excluded versions as missing rows: removing them would silently substitute
+  # older reports at historical cutoffs. Raw shared inputs remain unchanged.
+  reports <- filter_reports(as.data.frame(vintages[!is.na(vintages$location),
+    c("disease", "location", "geo_value", "target_end_date", "version", "value")]))
+  settings$report_exclusions <- reviewed_report_exclusions()
   reports$source <- ifelse(reports$version == min(reports$version), "archive_start", "archive")
   # Final counts before the report versions: a synthetic first report of the latest value
   # on the Wednesday after the week, before every stored version.
@@ -444,15 +447,18 @@ prepare_data <- function(forecasts, vintages, settings) {
     # Choose latest vintages first; missing newest values never fall back to an
     # older finite vintage. This ordering also applies to scaling and feedback.
     latest <- r[!duplicated(r$target_end_date, fromLast = TRUE), , drop = FALSE]
+    latest$value[!valid_report(latest$value)] <- NA_real_
 
     # Peaks: local maxima of the latest reports of all weeks (find_peaks()), without the
     # incomplete weeks; kept between the first and the last forecast target week.
-    series <- latest[is.finite(latest$value) &
+    series <- latest[valid_report(latest$value) &
       (latest$target_end_date < settings$incomplete_weeks[1] |
         latest$target_end_date > settings$incomplete_weeks[2]), , drop = FALSE]
-    found <- find_peaks(series$value, settings$peak_halfwidth, settings$peak_drop,
-      settings$peak_min_prominence, settings$peak_smooth,
-      scale = max(series$value[series$target_end_date %in% f$target_end_date]))
+    target_values <- series$value[series$target_end_date %in% f$target_end_date]
+    found <- if (nrow(series) && length(target_values))
+      find_peaks(series$value, settings$peak_halfwidth, settings$peak_drop,
+        settings$peak_min_prominence, settings$peak_smooth, scale = max(target_values)) else
+      data.frame(row = integer(), relative_prominence = numeric())
     found <- found[series$target_end_date[found$row] >= min(f$target_end_date) &
       series$target_end_date[found$row] <= max(f$target_end_date), , drop = FALSE]
     peak_date <- series$target_end_date[found$row]
@@ -471,27 +477,26 @@ prepare_data <- function(forecasts, vintages, settings) {
       peaks[[key]] <- location_peaks
     }
 
-    # The median identifies the issue/target rows; all quantiles enter base below.
-    medians <- f[is.finite(f$truth_finalized) & f$quantile_level == .5, , drop = FALSE]
+    # Preserve the forecast timeline even when latest truth is missing or excluded.
+    # Such targets are unscored for every method, but their forecasts still exist.
+    medians <- f[f$quantile_level == .5, , drop = FALSE]
     for (horizon in sort(unique(f$horizon))) {
       fh <- f[f$horizon == horizon, , drop = FALSE]
       z <- medians[medians$horizon == horizon, , drop = FALSE]
       z <- z[order(z$reference_date), , drop = FALSE]
-      if (!nrow(z)) stop("No finite finalized truth for ", key, " horizon ", horizon)
+      if (!nrow(z)) stop("No median forecasts for ", key, " horizon ", horizon)
       stopifnot(!anyDuplicated(z$reference_date), !anyDuplicated(z$target_end_date))
       reference_date <- as.Date(as.numeric(z$reference_date), origin = "1970-01-01")
       target_date <- as.Date(as.numeric(z$target_end_date), origin = "1970-01-01")
       alpha <- sort(unique(fh$quantile_level))
-      finite <- fh[is.finite(fh$truth_finalized), , drop = FALSE]
-      row <- match(finite$reference_date, reference_date)
-      column <- match(finite$quantile_level, alpha)
+      row <- match(fh$reference_date, reference_date)
+      column <- match(fh$quantile_level, alpha)
       stopifnot(!anyNA(row), !anyNA(column),
                 !anyDuplicated(data.frame(row, column)),
-                nrow(finite) == nrow(z) * length(alpha),
-                all(finite$target_end_date == target_date[row]),
-                all(finite$truth_finalized == z$truth_finalized[row]))
+                nrow(fh) == nrow(z) * length(alpha),
+                all(fh$target_end_date == target_date[row]))
       base <- matrix(NA_real_, nrow(z), length(alpha), dimnames = list(NULL, as.character(alpha)))
-      base[cbind(row, column)] <- finite$value
+      base[cbind(row, column)] <- fh$value
       stopifnot(all(is.finite(base)))
 
       # The issue cutoff of each row's round, and every stored report of its target week
@@ -499,7 +504,8 @@ prepare_data <- function(forecasts, vintages, settings) {
       cutoff <- round_cutoff(disease, reference_date)
       versions <- r[r$target_end_date %in% target_date, , drop = FALSE]
       versions <- data.frame(row = match(versions$target_end_date, target_date),
-        version = versions$version, value = versions$value, source = versions$source)
+        version = versions$version, value = versions$value, source = versions$source,
+        raw_value = versions$raw_value, report_excluded = versions$report_excluded)
       versions <- versions[order(versions$row, versions$version), , drop = FALSE]
       rownames(versions) <- NULL
       # Each earlier forecast is learned once, at the first later round at least d weeks
@@ -512,7 +518,9 @@ prepare_data <- function(forecasts, vintages, settings) {
       nearest <- if (is.null(location_peaks)) rep(NA_integer_, length(target_date)) else
         apply(abs(outer(as.numeric(target_date), as.numeric(location_peaks$peak_date), "-")),
           1, which.min)
-      relative_week <- as.numeric(target_date - location_peaks$peak_date[nearest]) / 7
+      nearest_date <- if (is.null(location_peaks)) rep(as.Date(NA), length(target_date)) else
+        location_peaks$peak_date[nearest]
+      relative_week <- as.numeric(target_date - nearest_date) / 7
 
       # Save the exact pre-first-forecast history (reports by the first round's cutoff),
       # before filtering finalized truth. Scripts 02/03 can use its median, maximum, or no
@@ -520,13 +528,13 @@ prepare_data <- function(forecasts, vintages, settings) {
       scale_as_of <- round_cutoff(disease, min(fh$reference_date))$date
       history <- r[r$version <= scale_as_of, , drop = FALSE]
       history <- history[!duplicated(history$target_end_date, fromLast = TRUE), , drop = FALSE]
-      history <- history[history$target_end_date <= scale_as_of & is.finite(history$value), , drop = FALSE]
+      history <- history[history$target_end_date <= scale_as_of & valid_report(history$value), , drop = FALSE]
       case_id <- paste(key, horizon, sep = "_")
       cases[[case_id]] <- list(disease = z$disease[1], location = z$location[1],
         geo_value = r$geo_value[1], location_name = location_name, population = population,
         horizon = as.integer(horizon),
         alpha = alpha, base = base, reference_date = reference_date, target_date = target_date,
-        truth_finalized = z$truth_finalized,
+        truth_finalized = latest$value[match(target_date, latest$target_end_date)],
         # Filled rounds: the source round of the earlier forecast (see fill_missing_rounds()).
         filled = !is.na(z$filled_from), filled_from = z$filled_from,
         # Latest stored report of each target week: scoring target only, never feedback.
@@ -541,7 +549,7 @@ prepare_data <- function(forecasts, vintages, settings) {
         season = season, period = period_of(target_date),
         # This location's peaks, and per week the nearest one (hindsight labels only).
         peaks = location_peaks, peak_index = nearest,
-        peak_date = location_peaks$peak_date[nearest], relative_week = relative_week,
+        peak_date = nearest_date, relative_week = relative_week,
         scale_history = history$value, scale_as_of = scale_as_of,
         scale_reference_start = if (nrow(history)) min(history$target_end_date) else as.Date(NA),
         scale_reference_end = if (nrow(history)) max(history$target_end_date) else as.Date(NA))
@@ -560,6 +568,10 @@ base_forecasts <- bind_rows(lapply(names(prepare_settings$base), function(diseas
     nanoparquet::read_parquet("windowed_seasonal_forecasts.parquet")
   table <- table[table$disease == disease, ]
   if (!nrow(table)) stop("No ", name, " forecasts for ", disease, ". See R/00_base_forecasts.R.")
+  if (name == "windowed_seasonal" &&
+      (is.null(table$report_filter_id) || anyNA(table$report_filter_id) ||
+        any(table$report_filter_id != report_filter_id())))
+    stop("Own forecasts use another report filter. Rerun Rscript R/00_base_forecasts.R.")
   if (!"generation_date" %in% names(table)) table$generation_date <- as.Date(NA)
   table
 }))
@@ -578,6 +590,8 @@ prepare_settings$evaluation_label <- if (design == "seasons")
 peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
 dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
 saveRDS(peak_aligned, "output/data/peak_aligned.rds")
+write.csv(peak_aligned$settings$report_exclusions,
+  "output/data/reviewed_report_exclusions.csv", row.names = FALSE)
 # The feedback schedules, all locations and horizons: rows with a valid report, consumed
 # rows, rows learned from a synthetic final report, horizon -1 style rows whose first
 # report is known at their own issue (learned at the next round at the earliest), consumed
