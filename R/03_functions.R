@@ -1006,6 +1006,12 @@ rate_settings <- c("fixed_multiplier", "leaky_multiplier", "slope_min_multiplier
 score_experts <- c("original", "fixed", "leaky", "studentized_base", "studentized_full",
   "decline")
 score_methods <- c("score_equal", "score_learned", "score_gated")
+# The members of the score bank of a case, fixed before any forecast and the same in every
+# week and re-run: score_experts, without Decline MultiQT at h = -1 (no target signal: it is
+# the original there by construction). Members that issue identical forecasts in some weeks
+# stay, so later forecasts never change earlier weights.
+score_members <- function(case)
+  if (case$horizon == -1L) setdiff(score_experts, "decline") else score_experts
 # Methods that use the values tuned for another (method_parameter()): the median-start
 # variants keep the rate (so the effective rate eta x sigma_t) of their normal-start method;
 # the back-off and the outer MultiQT keep H of the mixture they correct.
@@ -1337,11 +1343,10 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # sharing 1/(2H)).
   # score_gated: (1 - G) x score_learned + G x the original, with the target signal G at the
   # issue week (0 without a signal: always at h = -1); its weights as mixed, the original
-  # with the share G added. An expert identical to an earlier one in every week is left out
-  # (Decline MultiQT at h = -1).
+  # with the share G added. Members: score_members().
   score_bank <- NULL
   if (scored) {
-    experts <- score_experts[!duplicated(lapply(predictions[score_experts], unname))]
+    experts <- score_members(case)
     forecasts <- aperm(vapply(predictions[experts], identity, base), c(1, 3, 2))
     dimnames(forecasts) <- list(as.character(case$reference_date), experts,
       as.character(case$alpha))
@@ -1427,13 +1432,16 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
     array(NA_real_, c(n, d[-1]), c(list(NULL), dimnames(x)[-1]))
   }
   # Row t of x from the run at t (experts matched by name: weekly restarts join over time);
-  # empty: the value of the experts missing at t (weight 0, forecast NA).
+  # empty: the value of the experts missing at t (weight 0, forecast NA). Every expert of
+  # the run at t must have a column (allocated from the run at the last week).
   fill <- function(target, x, t, empty = 0) {
     if (is.data.frame(target)) {
       target[t, ] <- x[t, ]
     } else if (length(dim(target)) == 3L) {
       target[t, , ] <- empty
-      target[t, match(dimnames(x)[[2]], dimnames(target)[[2]]), ] <- x[t, , ]
+      columns <- match(dimnames(x)[[2]], dimnames(target)[[2]])
+      stopifnot(!anyNA(columns))
+      target[t, columns, ] <- x[t, , ]
     } else {
       target[t, ] <- if (is.null(dim(x))) x[t] else x[t, ]
     }
@@ -1446,6 +1454,11 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
   omitted <- list()
   for (t in weeks) {
     run <- if (t == max(weeks)) last else run_at(t)
+    # The score bank keeps its members in every re-run; an invalid report only removes its
+    # feedback (rerun_omitted).
+    for (method in intersect(names(run$weights), score_methods))
+      stopifnot(identical(dimnames(run$weights[[method]])[[2]], score_members(case)),
+        identical(dimnames(run$expert_forecasts[[method]])[[2]], score_members(case)))
     for (part in parts) for (method in names(issued[[part]]))
       issued[[part]][[method]] <- fill(issued[[part]][[method]], run[[part]][[method]], t,
         if (part == "expert_forecasts") NA else 0)
