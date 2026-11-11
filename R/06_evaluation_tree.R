@@ -182,7 +182,7 @@ twin_note <- function(rows, methods) {
     paste(paste0(names(pairs), " (", vapply(pairs, paste, "", collapse = ", "), ")"),
       collapse = "; ")),
     if (length(context)) paste("At horizon -1 (no target signal) the score mixtures C, D and",
-      "E issue the forecast of A (one vector)."))
+      "E give the forecast of A (one vector)."))
 }
 
 # 3. PLOT ---------------------------------------------------------------------

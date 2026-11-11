@@ -497,17 +497,18 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
 # the context with the information used for that forecast. B and C update both vectors
 # with the losses scaled by the context saved at issuance; D updates each vector only with
 # the losses of forecasts made in its context.
+# Notes without possessives or "issue" words (notes/ relabels its copies and checks for them).
 switch_notes <- list(
   score_switch = c(paste("B: the gate is a context weight, not a peak probability; missing",
     "signals contribute a neutral score of 0.5."), paste("Both vectors learn from every loss,",
-    "scaled by 2 x (1 - gate) and 2 x gate saved at issuance.")),
+    "scaled by 2 x (1 - gate) and 2 x gate saved when the forecast was made.")),
   score_target_switch = c(paste("C: gate G = logistic of the target signal (the target median",
     "below an earlier point of the base curve)."), paste("Both vectors learn from every loss,",
-    "scaled by 2 x (1 - G) and 2 x G saved at issuance; weeks without a signal issue A's",
-    "forecast.")),
+    "scaled by 2 x (1 - G) and 2 x G saved when the forecast was made; weeks without a signal",
+    "use the forecast of A.")),
   score_context = c(paste("D: each vector learns only from the losses of forecasts made in",
-    "its context (c saved at issuance)."), paste("Issued as (1 - G) x baseline + G x",
-    "declining; weeks without a signal issue A's forecast.")))
+    "its context (c saved when the forecast was made)."), paste("Forecast: (1 - G) x",
+    "baseline + G x declining; weeks without a signal use the forecast of A.")))
 draw_switch_pages <- function(switch_runs, labels) {
   for (run in switch_runs) for (method in names(run$switches)) {
     switched <- run$switches[[method]]
