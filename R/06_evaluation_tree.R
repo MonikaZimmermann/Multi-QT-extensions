@@ -160,23 +160,29 @@ write.csv(do.call(rbind, lapply(seq_len(nrow(pages)), function(p)
 # Footnote on the drawn methods with identical forecasts. In each case R/04 names, for a
 # method whose forecasts equal an earlier one's (method_names order), the first such method
 # (duplicate_of); two methods are identical in a case if they lead to the same first method.
-# Each pair, with the feedback designs in which it is identical in all of the page's cases
-# (": partly": in some of them).
+# Each pair identical in all of the page's cases of a feedback design, with those designs
+# (pairs identical only in some cases are left out: at horizon -1, without a target signal,
+# the score mixtures C, D and E issue A's forecast, which the second line says once).
 twin_note <- function(rows, methods) {
   rows <- rows[rows$phase == "overall" & rows$method %in% names(methods), ]
   rows$first <- ifelse(is.na(rows$duplicate_of), rows$method, rows$duplicate_of)
   twins <- merge(rows, rows, by = c("location", "horizon", "feedback", "first"))
   twins <- twins[match(twins$method.x, method_names) > match(twins$method.y, method_names), ]
-  if (!nrow(twins)) return(NULL)
   cases <- tapply(paste(rows$location, rows$horizon), rows$feedback,
     function(case) length(unique(case)))
   pairs <- split(twins$feedback, paste(methods[twins$method.x], "=", methods[twins$method.y]))
-  paste("Identical forecasts:", paste(mapply(function(pair, feedback) {
+  pairs <- Filter(length, lapply(pairs, function(feedback) {
     n <- table(factor(feedback, feedback_levels))
-    n <- n[n > 0]
-    paste0(pair, " (", paste0(names(n), ifelse(n < cases[names(n)], ": partly", ""),
-      collapse = ", "), ")")
-  }, names(pairs), pairs), collapse = "; "))
+    names(n)[n > 0 & n == cases[names(n)]]
+  }))
+  context <- intersect(names(methods), c("score_target_switch", "score_context",
+    "score_context_hard", "score_fast_decline", score_noshare[c("score_target_switch",
+      "score_context", "score_fast_decline")]))
+  c(if (length(pairs)) paste("Identical forecasts in every case of a design:",
+    paste(paste0(names(pairs), " (", vapply(pairs, paste, "", collapse = ", "), ")"),
+      collapse = "; ")),
+    if (length(context)) paste("At horizon -1 (no target signal) the score mixtures C, D and",
+      "E issue the forecast of A (one vector)."))
 }
 
 # 3. PLOT ---------------------------------------------------------------------

@@ -118,9 +118,25 @@ method_labels <- function(p) {
   outer <- function(method) paste0("outer m=", value(method))
   H_of <- function(method) paste0("H=", value(method))
   lambda_of <- function(method) paste0("lambda=", value(method))
-  slow <- function(method) paste0("slow m=", value(method))
+  delta_of <- function(method) paste0("delta=", par_of(method, "context_delta"))
+  sharing <- paste0("H=", p$score_H, ", sharing 1/", 2 * p$score_H)
+  score_labels <- c(
+    score_single = "Score experts: one vector (A",
+    score_switch = paste0("Score experts: soft switch, three signals (B, strength=",
+      value("score_switch")),
+    score_target_switch = paste0("Score experts: soft switch, target signal (C, ",
+      delta_of("score_target_switch")),
+    score_context = paste0("Score experts: context vectors, blended (D, ",
+      delta_of("score_context")),
+    score_context_hard = paste0("Score experts: context vectors, hard (D, ",
+      delta_of("score_context_hard")),
+    score_fast_decline = paste0("Score experts: lambda x ", value("score_fast_decline"),
+      " in decline (E, ", delta_of("score_fast_decline")))
+  noshare <- score_labels[names(score_noshare)]
   c(original = "Original",
     fixed = paste0("Fixed MultiQT (eta=", value("fixed"), "*S0)"),
+    leaky = paste0("Leaky MultiQT (eta=", value("leaky"), "*S0, leak ", par_of("leaky", "leak"),
+      ")"),
     ref_op = paste0("Delphi REF-op (sqrt, eta=", par_of("ref_op", "ref_op_multiplier"), "*Q90 of ",
       par_of("ref_op", "ref_op_window"), ", slow ", par_of("ref_op", "ref_op_slow_multiplier"),
       ", leak ", par_of("ref_op", "ref_op_fast_decay"), ")"),
@@ -147,13 +163,10 @@ method_labels <- function(p) {
     restart_uniform_outer = paste0("Starts equal + outer (", outer("restart_uniform_outer"), ")"),
     restart_weighted_outer = paste0("Starts learned + outer (", outer("restart_weighted_outer"), ")"),
     restart_grid_outer = paste0("Starts x rate grid + outer (", outer("restart_grid_outer"), ")"),
-    diverse_uniform = paste0("Diverse experts: equal (", slow("diverse_uniform"), ")"),
-    diverse_shared = paste0("Diverse experts: learned + sharing (", slow("diverse_shared"), ", ",
-      "H=", par_of("diverse_shared", "H"), ")"),
-    diverse_shared_common = paste0("Diverse experts: learned + sharing, common weights (",
-      slow("diverse_shared_common"), ")"),
-    diverse_soft_switch = paste0("Diverse experts: soft switching (strength=",
-      value("diverse_soft_switch"), ")"),
+    restart_recent = paste0("Weekly starts: most recent ", value("restart_recent"),
+      ", equal (m=", p$restart_multiplier, ")"),
+    setNames(paste0(score_labels, ", ", sharing, ")"), names(score_labels)),
+    setNames(paste0(noshare, ", no sharing)"), score_noshare),
     studentized = paste0("Studentized median (", residual_label, ", ", p$median_start,
       " start, ", eta("studentized"), ")"),
     studentized_base = paste0("Studentized median (base ", base_width, " width, normal start, ",
@@ -173,7 +186,7 @@ colours <- replace(tradeoff_colours, "original", "gray40")
 # Lines as the symbols of the trade-off plots: common weights across quantile levels dashed
 # (triangles), + outer MultiQT dotted (squares), common weights + outer dot-dashed (diamonds).
 common <- setNames(grepl("_common", names(method_short_labels)), names(method_short_labels))
-common["diverse_soft_switch"] <- TRUE
+common[c(score_methods, score_noshare)] <- TRUE
 with_outer <- setNames(grepl("_outer$", names(method_short_labels)), names(method_short_labels))
 line_types <- ifelse(with_outer, ifelse(common, 4, 3), ifelse(common, 2, 1))
 point_shapes <- ifelse(common, 17, 16)
@@ -267,27 +280,35 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
 # last row). Last row: one weight vector for all levels. The weights mix the forecasts before
 # crossing repair or an outer correction; the outer methods keep their underlying ensemble's
 # weights. Expert colours: the base gray, the rate grid by multiplier, the weekly starts in
-# one palette per multiplier from dark (first start) to light (last start), the diverse
-# experts as in section 6.
+# one palette per multiplier from dark (first start) to light (last start), the score
+# experts as in section 6. The score-based mixtures have one weight vector for all levels,
+# repeated in every row.
 weight_forecast_levels <- c(.2, .5, .8)
 weight_pages <- list(
   "Frozen rate-grid weights" = data.frame(method = c("uniform", "weighted", "shared"),
     common_method = c("uniform", "weighted_common", "shared_common"),
     title = c("Equal weights", "Learned, no sharing", "Learned + sharing")),
-  "Diverse expert weights" = data.frame(
-    method = c("diverse_uniform", "diverse_shared", "diverse_soft_switch"),
-    common_method = c("diverse_uniform", "diverse_shared_common", "diverse_soft_switch"),
-    title = c("Equal weights", "Learned + sharing", "Soft switching (one vector for all levels)")),
+  "Score-based expert weights" = data.frame(
+    method = c("score_single", "score_switch", "score_target_switch", "score_context",
+      "score_fast_decline"),
+    common_method = c("score_single", "score_switch", "score_target_switch", "score_context",
+      "score_fast_decline"),
+    title = c("A: one vector", "B: soft switch, three signals", "C: soft switch, target signal",
+      "D: context vectors, blended", "E: faster lambda in decline")),
   "Weekly-start weights" = data.frame(
-    method = c("restart_uniform", "restart_weighted", "restart_grid"), common_method = NA,
-    title = c("Equal weights", "Learned", "Starts x rate grid: learned")))
+    method = c("restart_uniform", "restart_weighted", "restart_grid", "restart_recent"),
+    common_method = NA, title = c("Equal weights", "Learned", "Starts x rate grid: learned",
+      "Most recent starts: equal")))
+# Experts named by their methods where they are methods (the score experts).
+expert_names <- function(experts) ifelse(experts %in% names(method_short_labels),
+  method_short_labels[experts], experts)
 restart_palettes <- c("Purples 3", "Blues 3", "Reds 3", "Oranges", "Greens 3")  # By multiplier.
 # The colour of every expert of a page, named by expert, in stacking order (bottom first).
 expert_fills <- function(run, page) {
   if (page != "Weekly-start weights") {
     experts <- dimnames(run$expert_forecasts[[weight_pages[[page]]$method[1]]])[[2]]
     return(setNames(c("gray45", hcl.colors(length(experts) - 1L,
-      if (page == "Diverse expert weights") "Dark 3" else "Viridis")), experts))
+      if (page == "Score-based expert weights") "Dark 3" else "Viridis")), experts))
   }
   experts <- run$restart_experts$experts
   experts <- experts[order(experts$multiplier, experts$start_date), ]
@@ -444,7 +465,7 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     single <- unique(run$restart_experts$experts$multiplier[run$restart_experts$experts$expert %in%
       colnames(run$weights[[columns$method[1]]])])
     draw_start_ramps(run, fills, single)
-  } else legend(0, .5, names(fills), fill = fills, border = NA, yjust = .5,
+  } else legend(0, .5, expert_names(names(fills)), fill = fills, border = NA, yjust = .5,
     ncol = ceiling(length(fills) / 2), bty = "n", cex = .95,
     title = "Experts: weights and forecasts", title.adj = 0, title.font = 2)
   legend(1, .5, c("Latest reported counts", "Each expert: its weight colour",
@@ -460,61 +481,88 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
   mtext(paste("Rows alpha = 0.1-0.9: one weight vector per quantile level; below alpha = 0.2,",
     "0.5 and 0.8 the forecasts at that level (per-level mixtures after crossing repair, before",
     "any outer correction)."), side = 1, outer = TRUE, line = 1.6, cex = .8)
-  mtext(if (has_common) paste("Last row: one weight vector for all levels, learned from the",
+  mtext(if (page == "Score-based expert weights") paste("Every mixture: one weight vector for",
+    "all levels (repeated in every row), learned from the mean quantile loss over the levels.")
+    else if (has_common) paste("Last row: one weight vector for all levels, learned from the",
     "mean quantile loss over the levels.") else paste("Every weekly-start mixture has one",
-    "weight vector per level."), side = 1, outer = TRUE, line = 2.7, cex = .8)
+    "weight vector per level, except the most recent starts (equal weights)."), side = 1,
+    outer = TRUE, line = 2.7, cex = .8)
   if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a CMU forecast, filled with",
     "the latest earlier CMU forecast of the same target week."), side = 1, outer = TRUE,
     line = 3.8, cex = .8)
 }
 
-# 6. SOFT SWITCHING: CONTEXT AND COMMON WEIGHTS ---------------------
-# Issue dates align the signal with the information used for that forecast. Each
-# regime learns from delayed own-horizon losses using the context saved at issuance.
+# 6. TWO-VECTOR SCORE MIXTURES: CONTEXT AND COMMON WEIGHTS ------------
+# One page per location and two-vector method (B, C, D; run$switches). Issue dates align
+# the context with the information used for that forecast. B and C update both vectors
+# with the losses scaled by the context saved at issuance; D updates each vector only with
+# the losses of forecasts made in its context.
+switch_notes <- list(
+  score_switch = c(paste("B: the gate is a context weight, not a peak probability; missing",
+    "signals contribute a neutral score of 0.5."), paste("Both vectors learn from every loss,",
+    "scaled by 2 x (1 - gate) and 2 x gate saved at issuance.")),
+  score_target_switch = c(paste("C: gate G = logistic of the target signal (the target median",
+    "below an earlier point of the base curve)."), paste("Both vectors learn from every loss,",
+    "scaled by 2 x (1 - G) and 2 x G saved at issuance; weeks without a signal issue A's",
+    "forecast.")),
+  score_context = c(paste("D: each vector learns only from the losses of forecasts made in",
+    "its context (c saved at issuance)."), paste("Issued as (1 - G) x baseline + G x",
+    "declining; weeks without a signal issue A's forecast.")))
 draw_switch_pages <- function(switch_runs, labels) {
-  for (run in switch_runs) {
-    signal <- run$soft_switch$gate
-    regimes <- run$soft_switch$regime_weights
+  for (run in switch_runs) for (method in names(run$switches)) {
+    switched <- run$switches[[method]]
+    signal <- switched$gate
+    regimes <- switched$regime_weights
     dates <- run$case$reference_date
     experts <- dimnames(regimes)[[2]]
-    fills <- c("gray45", hcl.colors(length(experts) - 1L, "Dark 3"))
+    fills <- setNames(c("gray45", hcl.colors(length(experts) - 1L, "Dark 3")), experts)
     layout(matrix(1:5, ncol = 1), heights = c(1.1, 1, 1, 1, .45))
     par(oma = c(4.4, .5, 4.1, .5), mgp = c(2, .4, 0), cex = .9)
     par(mar = c(.4, 3.7, 2.1, .6))
-    plot(dates, signal$gate, type = "n", xlim = range(dates) + c(-.5, .5) * 7,
+    plot(dates, dates, type = "n", xlim = range(dates) + c(-.5, .5) * 7,
       ylim = c(0, 1.18), xaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
       ylab = "Context weight", main = "Declining context at issuance")
     axis(2, at = c(0, .5, 1), las = 1, cex.axis = .8)
     abline(h = .5, col = "gray70", lty = 3)
     abline(v = as.numeric(run$case$peaks$peak_date), col = "gray50", lty = 3)
-    score_names <- c("path_score", "nowcast_score", "revision_score")
-    score_colours <- c("#0072B2", "#D55E00", "#009E73")
-    broken <- break_gaps(dates, as.matrix(signal[c(score_names, "gate")]))
-    for (j in seq_along(score_names)) lines(broken$dates, broken[[2]][, j],
-      col = score_colours[j], lwd = 1)
-    lines(broken$dates, broken[[2]][, "gate"], col = colours["diverse_soft_switch"], lwd = 2)
-    points(dates, signal$gate, col = colours["diverse_soft_switch"], pch = 16, cex = .3)
-    legend("topleft", c("Forecast path", "Nowcast change", "Same-target revisions", "Mixed gate"),
-      col = c(score_colours, colours["diverse_soft_switch"]), lty = 1, lwd = c(1, 1, 1, 2),
-      ncol = 4, bty = "n", cex = .85)
-    plot_weight_distribution(run, regimes[, , "baseline"], fills,
-      "Baseline-context expert weights", "Weight", TRUE, FALSE, dates)
-    plot_weight_distribution(run, regimes[, , "declining"], fills,
-      "Declining-context expert weights", "Weight", TRUE, FALSE, dates)
-    plot_weight_distribution(run, run$weights$diverse_soft_switch[, , 1], fills,
+    if ("path_score" %in% names(signal)) {
+      score_names <- c("path_score", "nowcast_score", "revision_score")
+      score_colours <- c("#0072B2", "#D55E00", "#009E73")
+      broken <- break_gaps(dates, as.matrix(signal[c(score_names, "gate")]))
+      for (j in seq_along(score_names)) lines(broken$dates, broken[[2]][, j],
+        col = score_colours[j], lwd = 1)
+      key <- c("Forecast path", "Nowcast change", "Same-target revisions", "Mixed gate")
+      key_colours <- c(score_colours, colours[method])
+    } else {
+      broken <- break_gaps(dates, as.matrix(signal["gate"]))
+      points(dates, signal$context, pch = 15, cex = .35, col = "gray35")
+      key <- c("Declining context c (0/1)", "Gate G (target signal)")
+      key_colours <- c("gray35", colours[method])
+    }
+    lines(broken$dates, broken[[2]][, "gate"], col = colours[method], lwd = 2)
+    points(dates, signal$gate, col = colours[method], pch = 16, cex = .3)
+    legend("topleft", key, col = key_colours, lty = c(rep(1, length(key) - 1L), 1),
+      lwd = c(rep(1, length(key) - 1L), 2), ncol = length(key), bty = "n", cex = .85)
+    two <- if (method == "score_context") c("Baseline vector (forecasts made in baseline context)",
+      "Declining-context vector (forecasts made in declining context)") else
+      c("Baseline-context expert weights", "Declining-context expert weights")
+    plot_weight_distribution(run, regimes[, , "baseline"], fills, two[1], "Weight", TRUE,
+      FALSE, dates)
+    plot_weight_distribution(run, regimes[, , "declining"], fills, two[2], "Weight", TRUE,
+      FALSE, dates)
+    plot_weight_distribution(run, run$weights[[method]][, , 1], fills,
       "Issued mixture: (1 - gate) x baseline + gate x declining", "Weight", TRUE, TRUE, dates)
     par(mar = c(0, 0, 0, 0))
     plot.new()
-    legend("center", experts, fill = fills, border = NA, ncol = ceiling(length(experts) / 2),
-      bty = "n", cex = .9)
-    mtext(labels["diverse_soft_switch"], side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
+    legend("center", expert_names(experts), fill = fills, border = NA,
+      ncol = ceiling(length(experts) / 2), bty = "n", cex = .9)
+    mtext(labels[method], side = 3, outer = TRUE, line = 2.2, font = 2, cex = 1.2)
     mtext(plot_title(run), side = 3, outer = TRUE, line = .8, cex = .9)
     mtext("Issue date | Common expert weights across quantile levels | Dotted lines: hindsight peaks",
       side = 1, outer = TRUE, line = .4, cex = .85)
-    mtext("The gate is a context weight, not a peak probability; missing signals contribute a neutral score of 0.5.",
-      side = 1, outer = TRUE, line = 1.6, cex = .8)
+    mtext(switch_notes[[method]], side = 1, outer = TRUE, line = c(1.5, 2.4), cex = .8)
     if (any(run$case$filled)) mtext("Lighter bars: filled forecast rounds.",
-      side = 1, outer = TRUE, line = 2.8, cex = .8)
+      side = 1, outer = TRUE, line = 3.3, cex = .8)
   }
 }
 
@@ -560,26 +608,39 @@ run_results <- function(runs, run_params) list(
     with_case(run, run$rate_experts$experts))),
   restart_experts = do.call(rbind, lapply(runs, function(run) with_case(run,
     data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))),
-  # The context and both expert distributions are saved at issuance, alongside the
-  # actual mixed weights. The gate describes declining context, not a peak probability.
-  soft_switch_gate = do.call(rbind, lapply(Filter(function(run) !is.null(run$soft_switch), runs),
-    function(run) with_case(run, data.frame(target_date = run$case$target_date,
-      run$soft_switch$gate, lambda_baseline = run$soft_switch$regime_lambda[, "baseline"],
-      lambda_declining = run$soft_switch$regime_lambda[, "declining"],
-      # A gate-weighted summary of the two learning rates, not a third update rate.
-      lambda_average = as.numeric(run$lambda$diverse_soft_switch))))),
-  soft_switch_weights = do.call(rbind, lapply(Filter(function(run) !is.null(run$soft_switch), runs),
-    function(run) {
-      regimes <- run$soft_switch$regime_weights
+  # The context and both expert distributions of the two-vector methods (B, C, D) are
+  # saved at issuance, alongside the actual mixed weights. The gate describes declining
+  # context, not a peak probability. B's gate table has its three signals; C's and D's the
+  # target signal (signal, context, gate).
+  soft_switch_gate = do.call(rbind, lapply(runs, function(run) do.call(rbind,
+    lapply(names(run$switches), function(method) {
+      switched <- run$switches[[method]]
+      gate <- switched$gate
+      with_case(run, data.frame(method, target_date = run$case$target_date,
+        reference_date = gate$reference_date, gate = gate$gate,
+        signal = if (is.null(gate$signal)) NA_real_ else gate$signal,
+        context = if (is.null(gate$context)) NA_integer_ else gate$context,
+        path_score = if (is.null(gate$path_score)) NA_real_ else gate$path_score,
+        nowcast_score = if (is.null(gate$nowcast_score)) NA_real_ else gate$nowcast_score,
+        revision_score = if (is.null(gate$revision_score)) NA_real_ else gate$revision_score,
+        lambda_baseline = switched$regime_lambda[, "baseline"],
+        lambda_declining = switched$regime_lambda[, "declining"],
+        # A gate-weighted summary of the two learning rates, not a third update rate.
+        lambda_average = as.numeric(run$lambda[[method]])))
+    })))),
+  soft_switch_weights = do.call(rbind, lapply(runs, function(run) do.call(rbind,
+    lapply(names(run$switches), function(method) {
+      regimes <- run$switches[[method]]$regime_weights
       weights <- list(baseline = regimes[, , "baseline"],
-        declining = regimes[, , "declining"], issued = run$weights$diverse_soft_switch[, , 1])
+        declining = regimes[, , "declining"], issued = run$weights[[method]][, , 1])
       do.call(rbind, lapply(names(weights), function(context) {
         values <- weights[[context]]
-        with_case(run, data.frame(reference_date = rep(run$case$reference_date, ncol(values)),
+        with_case(run, data.frame(method,
+          reference_date = rep(run$case$reference_date, ncol(values)),
           target_date = rep(run$case$target_date, ncol(values)), context,
           expert = rep(colnames(values), each = nrow(values)), weight = as.vector(values)))
       }))
-    })))
+    })))))
 plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
   disease <- combinations$disease[i]
   horizon <- combinations$horizon[i]
@@ -604,7 +665,7 @@ plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
     height = weight_page_height, family = "DejaVu Sans")
   draw_weight_pages(runs)
   dev.off()
-  switch_runs <- Filter(function(run) !is.null(run$soft_switch), runs)
+  switch_runs <- Filter(function(run) length(run$switches) > 0L, runs)
   if (length(switch_runs)) {
     cairo_pdf(file.path(figure_dir, plot_folders[["switch"]], file), width = 15, height = 11,
       family = "DejaVu Sans")
@@ -662,6 +723,42 @@ if (!is.null(results$soft_switch_gate)) {
   write_result(results$soft_switch_gate, "soft_switch_gate.csv")
   write_result(results$soft_switch_weights, "soft_switch_weights.csv")
 }
+
+# The updates of the score mixtures' context vectors (context_updates() in R/03), for every
+# location, horizon and feedback design of score_diseases: how many released losses each
+# vector of D learns from (with D's tuned threshold), and the context of E's released
+# losses (faster: lambda multiplied at release; with E's threshold). The re-run design
+# consumes the same rows in the same rounds. A vector with fewer than score_H updates by
+# the evaluation period still uses lambda_start there (poorly_trained).
+context_cases <- do.call(rbind, lapply(score_diseases, function(disease)
+  expand.grid(disease = disease, location = locations_of(disease), horizon = settings$horizons,
+    feedback = seq_len(nrow(tradeoff_feedback)), stringsAsFactors = FALSE)))
+context_counts <- do.call(rbind, parallel::mclapply(seq_len(nrow(context_cases)), function(i) {
+  disease <- context_cases$disease[i]
+  k <- context_cases$feedback[i]
+  p <- tradeoff_params[[disease]][[k]]
+  case <- get_case(prepared, disease, context_cases$location[i], context_cases$horizon[i],
+    tradeoff_feedback$delay[k], FALSE)
+  do.call(rbind, lapply(c("score_context", "score_fast_decline"), function(method) {
+    delta <- method_parameter(p, method, "context_delta")
+    counts <- context_updates(case, target_signal(case, delta, p$context_width))
+    if (!is.null(counts)) data.frame(disease, location = case$location, horizon = case$horizon,
+      feedback = feedback_names[k], method, delta, counts)
+  }))
+}, mc.cores = cores))
+score_H <- method_parameters()$score_H
+before_evaluation <- aggregate(cbind(baseline_updates, declining_updates) ~ disease + location +
+  horizon + feedback + method, context_counts[context_counts$period == "tuning", ], sum)
+before_evaluation$poorly_trained <- ifelse(before_evaluation$horizon == -1, "no signal (A)",
+  ifelse(pmin(before_evaluation$baseline_updates, before_evaluation$declining_updates) <
+    score_H, "yes", "no"))
+write_result(context_counts, "context_updates.csv")
+write_result(before_evaluation, "context_updates_before_evaluation.csv")
+d_rows <- before_evaluation[before_evaluation$method == "score_context" &
+  before_evaluation$horizon > -1, ]
+message("Method D: cases (horizons 0-3) with a context vector of fewer than ", score_H,
+  " updates before the evaluation period: ",
+  sum(d_rows$poorly_trained == "yes"), " of ", nrow(d_rows), ".")
 
 # 9. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
 # Per disease of score_diseases: one page per location, after a first page with all prepared

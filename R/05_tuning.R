@@ -30,14 +30,20 @@ transforms <- c("log1p", "identity")       # Tuned for both trackers; 04 uses se
 # the weekly re-run on the reports known then (feedback_protocol() in R/03_functions.R).
 tuning_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
 # One grid per tuned setting (tuned_setting in R/03_functions.R, plus the soft switch's
-# threshold, width and signal weights); multiples of S0 except H, lambda, the switch
-# settings and the studentized eta (units of sigma_t).
+# threshold, width and signal weights); multiples of S0 except H, lambda, the number of
+# recent weekly starts, the switch and context settings and the studentized eta (units of
+# sigma_t). Score-based experts (protocol fixed on 2026-11-10 before their evaluation):
+# H = 4, lambda_start = 2.72 and sharing 1/8 are not tuned; the target signal's threshold
+# delta for C and D, and kappa for E (delta = .05), with the sigmoid width fixed at .05.
 grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4),
               slope_min_multiplier = c(.002, .004, .01, .02, .05, .1),
               median_rate = c(.003, .01, .03, .1, .3, 1),
               H = c(2L, 4L, 8L, 16L, 32L),
               restart_lambda = c(.25, .5, 1, 2.72, 7, 20),
-              diverse_slow_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2),
+              leaky_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2),
+              restart_recent_k = c(8L, 16L),
+              context_delta = c(0, .05, .1),
+              decline_kappa = c(1, 2, 4),
               switch_strength = c(0, .25, .5, .75, 1),
               switch_threshold = c(.02, .05, .1, .2),
               switch_width = c(.02, .05, .1, .2),
@@ -46,14 +52,17 @@ grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4)
               switch_weight_revision = c(0, .5, 1),
               outer_multiplier = c(.001, .002, .004, .01, .02, .05, .1, .2))
 # Stages, in order; each uses the values chosen in the earlier ones. First every
-# method's own setting except the soft switch's and the outer rates; then the soft
-# switch's settings one after another, on the tuned diverse common bank (strength 0 is
-# that comparator); last the outer rates, on the tuned inner mixtures.
+# method's own setting except the soft switch's, the context settings and the outer rates
+# (so the score experts' own rates); then the context settings of methods C, D and E on
+# those experts; then the soft switch's (B) settings one after another (strength 0 is
+# method A); last the outer rates, on the tuned inner mixtures.
 switch_settings <- c("switch_strength", "switch_threshold", "switch_width",
   "switch_weight_path", "switch_weight_nowcast", "switch_weight_revision")
-stages <- c(list(setdiff(names(grids), c(switch_settings, "outer_multiplier"))),
-  as.list(switch_settings), list("outer_multiplier"))
-tuned_methods <- function(setting) if (setting %in% switch_settings) "diverse_soft_switch" else
+context_settings <- c("context_delta", "decline_kappa")
+stages <- c(list(setdiff(names(grids), c(switch_settings, context_settings,
+  "outer_multiplier"))), list(context_settings), as.list(switch_settings),
+  list("outer_multiplier"))
+tuned_methods <- function(setting) if (setting %in% switch_settings) "score_switch" else
   names(tuned_setting)[tuned_setting == setting]
 # A value chosen on the edge of its grid is flagged in tuned_settings.csv (on_grid_edge).
 cores <- max(1L, parallel::detectCores() - 2L)
