@@ -36,11 +36,14 @@ loss_column <- if (settings$transform == "log1p") "log_quantile_loss" else "quan
 loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
   paste("loss in", count_scale_label(settings$scale_method))
 # Methods drawn (the csv has every method): on each page the n_tree_methods with the
-# largest overall loss reduction at the root of that page (all its feedback designs,
-# horizons and locations), among the methods of 04's plots (method_groups in R/03) except
-# the target oracle (hindsight); best first, so the pages of a disease can draw different
-# methods. Chosen on the evaluation period itself: a ranking, not a choice of method.
+# largest loss reduction in the window selection_phase (after peak) at the root of that page
+# (all its feedback designs, horizons and locations; the same original loss for every
+# method, so the smallest pooled loss), among the methods of 04's plots (method_groups in
+# R/03) except the target oracle (hindsight); best first, so the pages of a disease can draw
+# different methods. Chosen on the evaluation period itself: a ranking, not a choice of
+# method.
 n_tree_methods <- 10L
+selection_phase <- "after"
 tree_candidates <- setdiff(unique(unlist(method_groups)), c("original", "oracle_target"))
 # Colours as in 04's trade-off plots (tradeoff_colours in R/03), so a method keeps its
 # colour on every page. A variant shares its method's shade: pale with an outline in the
@@ -144,7 +147,7 @@ trees <- lapply(page_rows, tree_nodes)
 # The methods of each page (see n_tree_methods), with their labels.
 tree_methods <- lapply(trees, function(nodes) {
   root <- nodes[[1]]$summary
-  root <- root[root$phase == "overall" & root$method %in% tree_candidates, ]
+  root <- root[root$phase == selection_phase & root$method %in% tree_candidates, ]
   top <- head(root$method[order(-root$reduction)], n_tree_methods)
   setNames(method_short_labels[top], top)
 })
@@ -300,8 +303,9 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
   plot.new()
   key <- legend("center", unname(methods), fill = style$fill, border = style$border,
     bty = "n", cex = 1.2, y.intersp = 1.3,
-    title = paste("Bars, top to bottom: the", length(methods),
-      "best on this page (overall quantile loss)"), title.font = 2)
+    title = paste("Bars, top to bottom: the", length(methods), "best on this page",
+      paste0("(quantile loss ", tolower(sub(" \\(.*", "", window_titles[[selection_phase]])),
+        ", all designs and horizons)")), title.font = 2)
   text(key$rect$left, key$rect$top - key$rect$h, paste(key_note(names(methods)),
     collapse = "\n"), adj = c(0, 1), cex = .95, col = "gray25")
   # Connectors from each node to its children, on top of the whole page.

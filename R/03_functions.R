@@ -1503,3 +1503,53 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
   last$frozen <- list(s0 = s0, loss_scale = loss_scale)
   last
 }
+
+# 8. SAVED RESULTS OF LONG RUNS --------------------------------------------
+# R/04 and R/05 save every finished piece of work (one location's run, one tuning stage) in
+# output/cache/<name>/, under a key of its arguments and of everything the function reads:
+# the code of every function it calls (without comments) and the values of the global
+# objects these use (codetools::findGlobals()). A restarted run, after a crash or a change,
+# loads every piece whose key is unchanged and recomputes the others; changes to plots,
+# colours or labels recompute nothing. Not in the key: the R and package versions and files
+# read inside the function. Delete output/cache/ to recompute everything.
+cache_dir <- "output/cache"
+cache_ignore <- "cores"                   # Global objects that never change a result.
+# The plotted locations (settings$location_ids) only choose pages: left out of keys.
+key_value <- function(x) {
+  if (is.list(x) && all(c("location_ids", "summary_exclude") %in% names(x)))
+    x$location_ids <- NULL
+  x
+}
+# The code and the global values a function reads, followed through the functions it calls
+# (also functions inside lists).
+code_key <- function(fun) {
+  key <- list(deparse(fun))
+  queue <- list(fun)
+  while (length(queue)) {
+    names_used <- setdiff(codetools::findGlobals(queue[[1]]), c(names(key), cache_ignore))
+    queue <- queue[-1]
+    for (name in names_used) if (exists(name, globalenv(), inherits = FALSE)) {
+      value <- get(name, globalenv())
+      functions <- if (is.function(value)) list(value) else if (is.list(value))
+        Filter(is.function, value) else list()
+      key[[name]] <- if (is.function(value)) deparse(value) else
+        rapply(list(key_value(value)), deparse, classes = "function", how = "replace")
+      queue <- c(queue, functions)
+    }
+  }
+  key
+}
+# fun(...), loaded from output/cache/<name>/ if saved under the same key, else computed and
+# saved (written to a temporary file first, so an interrupted write leaves no result).
+cached <- function(name, fun, ...) {
+  key <- tools::md5sum(bytes = serialize(list(code_key(fun), lapply(list(...), key_value)),
+    NULL))
+  file <- file.path(cache_dir, name, paste0(key, ".rds"))
+  if (file.exists(file)) return(readRDS(file))
+  value <- fun(...)
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  temporary <- file.path(dirname(file), paste0("tmp_", Sys.getpid(), "_", basename(file)))
+  saveRDS(value, temporary)
+  file.rename(temporary, file)
+  value
+}

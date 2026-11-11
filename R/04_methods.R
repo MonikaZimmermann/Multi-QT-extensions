@@ -6,6 +6,9 @@
 # PDF per combination in a folder per plot), their pages through the locations of
 # multiqt_settings(); every location, horizon and feedback design of both diseases is scored
 # for the trade-off pages and R/06_evaluation_tree.R (about 1.5 hours on 18 cores).
+# Every location's run is saved (cached() in R/03_functions.R): a restarted run, after a
+# crash or a change, recomputes only the runs whose settings, data or code changed; changes
+# to the plots recompute nothing.
 source("R/03_functions.R")
 
 # 1. SETTINGS AND PREPARED DATA -------------------------------------
@@ -589,7 +592,7 @@ plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
       tradeoff_feedback$revisions[k])
     check_peak_window(case, settings$weeks_before_peak, settings$weeks_after_peak,
       score_truth(case, settings$score_target, settings$score_filled))
-    runs[[location]] <- run_methods(case, run_params)
+    runs[[location]] <- cached("04_runs", run_methods, case, run_params)
   }
   message("Plots: ", disease, " | horizon ", horizon, " | ", feedback_names[k])
   file <- combination_file(i)
@@ -635,12 +638,15 @@ tradeoff_cases <- do.call(rbind, lapply(score_diseases, function(disease)
 for (disease in score_diseases) message("Trade-off scores: ", disease, " | ",
   length(locations_of(disease)), " locations x ", length(settings$horizons), " horizons x ",
   nrow(tradeoff_feedback), " feedback designs")
+# The scores of one case.
+evaluation_scores <- function(case, run_params)
+  run_methods(case, run_params, which(case$period == "evaluation"))$scores
 other_scores <- parallel::mclapply(seq_len(nrow(tradeoff_cases)), function(i) {
   disease <- tradeoff_cases$disease[i]
   k <- tradeoff_cases$feedback[i]
   case <- get_case(prepared, disease, tradeoff_cases$location[i], tradeoff_cases$horizon[i],
     tradeoff_feedback$delay[k], tradeoff_feedback$revisions[k])
-  run_methods(case, tradeoff_params[[disease]][[k]], which(case$period == "evaluation"))$scores
+  cached("04_scores", evaluation_scores, case, tradeoff_params[[disease]][[k]])
 }, mc.cores = cores)
 failed <- vapply(other_scores, inherits, logical(1), "try-error")
 if (any(failed)) stop(other_scores[[which(failed)[1]]])

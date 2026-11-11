@@ -2,6 +2,8 @@
 # design prepared by R/01_data_overview.R and save the choice for R/04_methods.R.
 # Run from the project root after R/01_data_overview.R: Rscript R/05_tuning.R
 # (about 2.5 hours on 18 cores). Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
+# Every finished stage is saved (cached() in R/03_functions.R): a restarted run, after a
+# crash or a change, recomputes only the stages whose settings, data or code changed.
 # Every method runs online from the first round on, exactly as in 04; only the rows of
 # the tuning period are scored (phase_weeks(..., period = "tuning")).
 source("R/03_functions.R")
@@ -129,7 +131,7 @@ for (disease in diseases) for (transform in transforms) for (f in seq_len(nrow(t
   for (stage in stages) {
     message("Tuning: ", disease, " | ", transform, " | feedback ",
       feedback_label(feedback$delay, feedback$revisions), " | ", paste(stage, collapse = ", "))
-    scores <- run_stage(disease, transform, feedback, stage, by_method)
+    scores <- cached("05_tuning", run_stage, disease, transform, feedback, stage, by_method)
     all_scores[[length(all_scores) + 1L]] <- scores
     scores <- scores[is.finite(scores$log_loss), ]
     if (!nrow(scores)) {
