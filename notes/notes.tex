@@ -2052,6 +2052,84 @@ and $0.25$--$0.33$), with about two members dominating any week (effective
 number $2$ of $5$). Neither mixture beats its own member
 \texttt{sqrt\_constant} ($+0.8\%$).
 
+\paragraph{Mixtures against a single fixed rate.}
+Tables~\ref{tab:mixture-vs-fixed} and \ref{tab:mixture-vs-fixed-after}
+compare two mixtures with Fixed MultiQT on the rate grid of script 02, in
+each disease--design cell. A fixed rate beats a mixture if both its loss
+and its calibration error are at most the mixture's.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}llrrlrrl@{}}
+\toprule
+ & & \multicolumn{3}{c}{\texttt{weighted\_common}} & \multicolumn{3}{c}{\texttt{restart\_recent}}\\
+\cmidrule(lr){3-5}\cmidrule(l){6-8}
+Disease & Design & Loss & CE & Beaten by: $\kappa$ (loss, CE) & Loss & CE & Beaten by: $\kappa$ (loss, CE)\\
+\midrule
+COVID & delay 0 & 3.4 & $-16.7$ & --- & 0.8 & $-16.4$ & ---\\
+      & delay 1 & 3.9 & $-45.5$ & $.02$ \ ($3.3$, $-47.2$) & $-0.4$ & $-24.1$ & ---\\
+      & re-run  & 4.6 & $-54.6$ & $.015$ ($2.4$, $-58.2$) & 0.4 & $-23.7$ & ---\\
+\addlinespace
+Flu   & delay 0 & 3.3 & $-28.8$ & $.01$ \ ($1.2$, $-32.9$) & 4.0 & $-9.1$ & $.01$ ($1.2$, $-32.9$)\\
+      & delay 1 & 2.6 & $-40.1$ & $.01$ \ ($1.5$, $-41.9$) & 3.1 & $-18.0$ & $.01$ ($1.5$, $-41.9$)\\
+      & re-run  & 8.3 & $-45.3$ & $.015$ ($3.0$, $-47.2$) & 3.7 & $-16.9$ & $.01$ ($1.7$, $-41.0$)\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:mixture-vs-fixed}
+\begin{center}\small Table \thetable: Best rate-grid mixture and most recent
+weekly starts against single fixed rates: pooled overall change versus the
+base (\%). Beaten by: the rate of the grid with both loss and CE at most the
+mixture's (the lowest loss if several); ---: no such rate.
+\end{center}
+
+The best rate-grid mixture, \texttt{weighted\_common}, is beaten by a single
+rate between $.01$ and $.02$ in five of the six cells. Only for COVID at
+delay 0 is it ahead: a fixed rate needs $+6.3\%$ loss ($\kappa=.03$) for its
+calibration error. The other rate-grid mixtures (\texttt{uniform},
+\texttt{weighted}, \texttt{shared}, \texttt{shared\_common}) are beaten in
+all six cells, the score mixtures in all but COVID at delay 0. The beating
+rate is picked in hindsight, but it lies between $.01$ and $.02$ in every
+cell, and $\kappa=.015$ throughout would have matched the mixture's
+calibration at less loss (means $+2.7\%$ and $-38.8\%$ against $+4.4\%$ and
+$-38.5\%$). Mixing rates thus protects against a badly selected rate
+(\texttt{fixed}, $+16.2\%$), but does not improve on a small fixed one.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}llrrrrrrr@{}}
+\toprule
+ & & \multicolumn{2}{c}{\texttt{restart\_recent}} & \multicolumn{2}{c}{$\kappa=.01$} & \multicolumn{3}{c}{Lowest CE of the grid}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-9}
+Disease & Design & Loss & CE & Loss & CE & $\kappa$ & Loss & CE\\
+\midrule
+COVID & delay 0 & 1.4 & $-3.8$  & 2.4 & $-4.8$ & $.45$ & 49.8 & $-30.1$\\
+      & delay 1 & 1.3 & $-0.5$  & 4.3 & 2.4    & $.45$ & 81.2 & $-23.1$\\
+      & re-run  & 1.8 & $-2.3$  & 5.4 & 6.0    & $.45$ & 57.6 & $-25.7$\\
+\addlinespace
+Flu   & delay 0 & 3.2 & $-9.8$  & 0.5 & $-0.5$ & $.02$ & 1.5  & $-1.5$\\
+      & delay 1 & 1.5 & $-9.0$  & 0.0 & $-0.4$ & $.01$ & 0.0  & $-0.4$\\
+      & re-run  & 2.9 & $-13.0$ & 0.7 & 0.4    & $.01$ & 0.7  & 0.4\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:mixture-vs-fixed-after}
+\begin{center}\small Table \thetable: After peaks: most recent weekly starts
+against the smallest fixed rate and the fixed rate with the lowest
+calibration error, pooled change versus the base (\%).
+\end{center}
+
+\texttt{restart\_recent} is not beaten for COVID in any design: its loss
+($-0.4\%$ to $+0.8\%$) is below that of every rate in the grid, at $16$ to
+$24\%$ less calibration error than the base. After COVID peaks it also loses
+less than $\kappa=.01$. For flu, $\kappa=.01$ beats it overall in every
+design. After flu peaks, however, it reduces the calibration error by $9$ to
+$13\%$ at $+1.5\%$ to $+3.2\%$ loss, while no fixed rate gets below
+$-1.5\%$. Its weights stay almost uniform, so these gains come from the
+eight-week memory of its copies, not from learning which copy to trust. Of
+the single trackers, REF-op is beaten by no fixed rate in any cell, and
+\texttt{sqrt\_constant} only for COVID at delay 1 and in the re-run.
+
 \emph{Plots.} Performance: \path{multiqt_feedback_bars.pdf}, groups
 ``Rate-grid experts'', ``Weekly starts: immediate admission'' and
 ``Score-based experts'' (pooled: pp.~1 and 7). Weights:
@@ -2066,7 +2144,11 @@ weekly starts on pp.~4, 8, 12, 16 and 20. Their forecasts: the pages
 ``Score-based experts'' of \path{multiqt_method_forecasts/} (the third to
 fifth of each location's seven). The effective numbers and mean weights
 quoted above summarize the weights for COVID, $h=2$, delay 0
-(\path{covid_horizon2_delay0.pdf}); they are not plotted.
+(\path{covid_horizon2_delay0.pdf}); they are not plotted. Neither are
+Tables~\ref{tab:mixture-vs-fixed} and \ref{tab:mixture-vs-fixed-after}; the
+fixed-rate curves they use are those of
+\path{multiqt_phase_rate_tradeoffs.pdf}, pp.~1--3, and the mixtures are
+bars of \path{multiqt_feedback_bars.pdf}, pp.~1 and 7.
 
 \subsection{Locations}
 \label{sec:results-locations}
