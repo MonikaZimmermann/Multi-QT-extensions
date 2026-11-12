@@ -12,8 +12,10 @@ slides/multivariate_calibration_files/
 *.snm
 *.toc
 *.vrb
-# PDFs: only the workflow plots directly in output/pdf/ (base cmu_submission) and
-# output/windowed_seasonal/pdf/ (base windowed_seasonal) are tracked.
+# PDFs: the workflow plots directly in output/pdf/ (base cmu_submission) and
+# output/windowed_seasonal/pdf/ (base windowed_seasonal) are tracked. The plots in their
+# subfolders (about 240 MB) are committed only at milestones: git add -f the folders,
+# commit, then git rm -r --cached them in the next commit.
 *.pdf
 !/output/pdf/*.pdf
 !/output/windowed_seasonal/pdf/*.pdf
