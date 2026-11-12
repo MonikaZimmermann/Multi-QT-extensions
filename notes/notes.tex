@@ -78,6 +78,29 @@ Delayed reports and revisions are introduced in
 Section~\ref{sec:feedback-designs}; implementation, weighting and
 evaluation symbols are defined where they are used.
 
+\paragraph{Pathwise view.}
+No probability model is assumed for $y_t$, $b_t$ or the reports. The
+recursions are deterministic functions of the data seen so far, and the
+statements below hold for each realized sequence. This is the setting
+of MultiQT~\cite{multiqt} and of the quantile tracker~\cite{pid}, whose
+guarantees hold for any, even adversarial, sequence of outcomes. The
+guarantee is long-run empirical coverage: if $|y_t-b_t^\alpha|\le R$
+for all $t$ and $\alpha$, then for every level
+\[
+ \Bigl|\frac1T\sum_{t=1}^T\cov_t^\alpha-\alpha\Bigr|
+ \le\frac{2\norm{\tilde\theta_1}}{\eta T}
+ +\sqrt{\frac{m}{T}+\frac{2Rm^{3/2}}{\eta\,d_\A T}},\qquad
+ d_\A=\min_{\alpha\in\A}\min(\alpha,1-\alpha)
+\]
+(their Theorem~1; their Proposition~7 adds a constant feedback delay).
+It says nothing about coverage in a given week, and with $m=23$ levels
+and about $100$ rounds per case the term $\sqrt{m/T}\approx0.5$ alone
+allows a coverage gap of $0.5$ at every level, whatever the rate: over
+our seasons the bound does not constrain coverage. Coverage and quantile loss are therefore
+evaluated empirically, and differences between methods are those of one
+realized sequence. Section~\ref{sec:mixture-bootstrap} checks how much
+such differences depend on the weeks and locations scored.
+
 \clearpage
 \section{Methodological notes}
 \subsection{Studentized score}
@@ -167,9 +190,7 @@ projected state and apply it to the hidden state.
 
 \subsubsection{Studentized residuals and their objective}
 Choose finite, positive scales $\sigma_t^\alpha$ from information
-available at the forecast cutoff and hold them fixed when differentiating.
-Offsets $u_t^\alpha$ are in studentized units, whereas $\theta_t^\alpha$
-is in outcome units. Define
+available at the forecast cutoff and hold them fixed when differentiating. Define
 \begin{equation}
  S_t^{\stu,\alpha}(y)=\frac{y-b_t^\alpha}{\sigma_t^\alpha},\qquad
  r_t^{\stu,\alpha}=\frac{y_t-b_t^\alpha}{\sigma_t^\alpha}.
@@ -278,6 +299,23 @@ and converting state and rate:
 \end{equation}
 For varying $\sigma_t$, changing the scale rescales the accumulated
 state; changing only the current rate does not reproduce that effect.
+
+The equivalence carries the pathwise guarantee
+(Section~\ref{sec:notation}) over to a common scale: Theorem~1
+of~\cite{multiqt} holds for $b_t/\sigma_t$ and $y_t/\sigma_t$, with $R$
+a bound on $|y_t-b_t^\alpha|/\sigma_t$, which the lower clip of the
+scales at $.05S_0$ (Section~\ref{sec:studentized-code-updates}) keeps
+finite. Rescaling leaves coverage unchanged, so the bound applies to
+$q_t^\stu$. Per-level scales change the constraint set: at a tie
+$q_t^{\alpha_i}=q_t^{\alpha_{i+1}}$, the negative gradient points into
+$C_t^\stu$ only if
+\[
+ \frac{\alpha_i}{\alpha_{i+1}}\le
+ \frac{\sigma_t^{\alpha_{i+1}}}{\sigma_t^{\alpha_i}}\le
+ \frac{1-\alpha_i}{1-\alpha_{i+1}},
+\]
+so the inward-flow condition of their Lemma~2 can fail, and no guarantee
+is claimed for them.
 
 \subsection{Questions and ideas}
 Which property of the base forecast should another score recalibrate?
