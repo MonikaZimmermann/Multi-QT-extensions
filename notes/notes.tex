@@ -2132,87 +2132,87 @@ Pennsylvania for COVID.
 \path{multiqt_peak_reasoning_tradeoff.pdf} (pp.~3--7 and 10--14); the fixed
 rates per location in \path{multiqt_error_tradeoff.pdf}, pp.~2--7.
 
-\appendix
-\section{Base forecast paths and the three indicators}
-\label{sec:forecast-path-indicators}
-\path{multiqt_base_forecast_paths.pdf}, pp.~1--2, shows COVID and flu.
-Each location has a full latest-count timeline, all peaks retained by
-script 01, and blue median curves for horizons $-1,\ldots,3$.
-Curves use reference weeks $-7,\ldots,8$ around each peak and are trimmed
-to the same target-date windows. The three rows underneath show the
-three indicators at their reference dates, using information available
-by the corresponding cutoff. Peaks and latest counts are retrospective;
-neither enters these indicators.
+% \appendix
+% \section{Base forecast paths and the three indicators}
+% \label{sec:forecast-path-indicators}
+% \path{multiqt_base_forecast_paths.pdf}, pp.~1--2, shows COVID and flu.
+% Each location has a full latest-count timeline, all peaks retained by
+% script 01, and blue median curves for horizons $-1,\ldots,3$.
+% Curves use reference weeks $-7,\ldots,8$ around each peak and are trimmed
+% to the same target-date windows. The three rows underneath show the
+% three indicators at their reference dates, using information available
+% by the corresponding cutoff. Peaks and latest counts are retrospective;
+% neither enters these indicators.
 
-\paragraph{How the indicators are computed.}
-Let $Z(t,h;v)$ be $\log(1+\text{base median})$ at reference date $t$
-and horizon $h$, if the median is finite, nonnegative, available by $v$
-and not filled; otherwise it is missing. The threshold is
-$\varepsilon=\log(1.05)$.
-Here date differences are calendar days: $t-7$ means exactly one week
-earlier, not the previous retained round. Blue cells mean indicator 1,
-white 0 and gray unavailable. Each indicator is computed separately.
+% \paragraph{How the indicators are computed.}
+% Let $Z(t,h;v)$ be $\log(1+\text{base median})$ at reference date $t$
+% and horizon $h$, if the median is finite, nonnegative, available by $v$
+% and not filled; otherwise it is missing. The threshold is
+% $\varepsilon=\log(1.05)$.
+% Here date differences are calendar days: $t-7$ means exactly one week
+% earlier, not the previous retained round. Blue cells mean indicator 1,
+% white 0 and gray unavailable. Each indicator is computed separately.
 
-\begin{enumerate}[leftmargin=*,itemsep=4pt]
-\item \textbf{Path: a decline within the current forecast curve.}
-The indicator is
-\[
- I_t^{\mathrm{path}}=
- \ind\!\left\{\max_{\substack{h=-1,\ldots,2\\Z_{t,h},\,Z_{t,h+1}\ \text{available}}}
- (Z_{t,h}-Z_{t,h+1})>\varepsilon\right\}.
-\]
-Horizons $0,1,2,3$ must be available; include the $-1$ to $0$ comparison
-only when the nowcast exists. This detects any sufficiently large
-adjacent decline, rather than comparing one target with all earlier horizons.
+% \begin{enumerate}[leftmargin=*,itemsep=4pt]
+% \item \textbf{Path: a decline within the current forecast curve.}
+% The indicator is
+% \[
+%  I_t^{\mathrm{path}}=
+%  \ind\!\left\{\max_{\substack{h=-1,\ldots,2\\Z_{t,h},\,Z_{t,h+1}\ \text{available}}}
+%  (Z_{t,h}-Z_{t,h+1})>\varepsilon\right\}.
+% \]
+% Horizons $0,1,2,3$ must be available; include the $-1$ to $0$ comparison
+% only when the nowcast exists. This detects any sufficiently large
+% adjacent decline, rather than comparing one target with all earlier horizons.
 
-\item \textbf{Nowcast: a decline or slowing positive growth.}
-Set $z_0=Z(t,-1;\iota_t)$, $z_1=Z(t-7,-1;\iota_{t-7})$ and
-$z_2=Z(t-14,-1;\iota_{t-7})$, and let $g=z_0-z_1$ and
-$g_{\mathrm{prev}}=z_1-z_2$. Then
-\[
- I_t^{\mathrm{nowcast}}=\ind\{g<-\varepsilon\ \text{or}\
- (g_{\mathrm{prev}}>\varepsilon\ \text{and}\ g_{\mathrm{prev}}-g>\varepsilon)\}.
-\]
-Thus slowing growth can trigger the indicator before the nowcast falls.
-It requires three consecutive reference weeks with usable nowcasts.
+% \item \textbf{Nowcast: a decline or slowing positive growth.}
+% Set $z_0=Z(t,-1;\iota_t)$, $z_1=Z(t-7,-1;\iota_{t-7})$ and
+% $z_2=Z(t-14,-1;\iota_{t-7})$, and let $g=z_0-z_1$ and
+% $g_{\mathrm{prev}}=z_1-z_2$. Then
+% \[
+%  I_t^{\mathrm{nowcast}}=\ind\{g<-\varepsilon\ \text{or}\
+%  (g_{\mathrm{prev}}>\varepsilon\ \text{and}\ g_{\mathrm{prev}}-g>\varepsilon)\}.
+% \]
+% Thus slowing growth can trigger the indicator before the nowcast falls.
+% It requires three consecutive reference weeks with usable nowcasts.
 
-\item \textbf{Revision: downward forecast revisions that become more negative.}
-For older horizons $j=0,\ldots,3$, compare each nowcast with forecasts
-for the \emph{same target week}:
-\begin{align*}
- r_j&=z_0-Z(t-7(j+1),j;\iota_t),\\
- r_j^{\mathrm{prev}}&=z_1-Z(t-7(j+2),j;\iota_{t-7}).
-\end{align*}
-Let $J$ contain horizons with both comparisons available; require
-$|J|\ge2$. The indicator is
-\[
- I_t^{\mathrm{revision}}=\ind\!\left\{
- \operatorname{median}_{j\in J}r_j<-\varepsilon\ \text{and}\
- \operatorname{median}_{j\in J}(r_j-r_j^{\mathrm{prev}})<-\varepsilon
- \right\}.
-\]
-The prior comparison uses its prior cutoff. These are revisions between
-\emph{forecasts}, not revisions of reported hospital counts.
-\end{enumerate}
-The logarithm defines the relative-change scale of these three
-indicators and their nonzero threshold. They are diagnostic warnings,
-not probabilities of having passed a true peak.
+% \item \textbf{Revision: downward forecast revisions that become more negative.}
+% For older horizons $j=0,\ldots,3$, compare each nowcast with forecasts
+% for the \emph{same target week}:
+% \begin{align*}
+%  r_j&=z_0-Z(t-7(j+1),j;\iota_t),\\
+%  r_j^{\mathrm{prev}}&=z_1-Z(t-7(j+2),j;\iota_{t-7}).
+% \end{align*}
+% Let $J$ contain horizons with both comparisons available; require
+% $|J|\ge2$. The indicator is
+% \[
+%  I_t^{\mathrm{revision}}=\ind\!\left\{
+%  \operatorname{median}_{j\in J}r_j<-\varepsilon\ \text{and}\
+%  \operatorname{median}_{j\in J}(r_j-r_j^{\mathrm{prev}})<-\varepsilon
+%  \right\}.
+% \]
+% The prior comparison uses its prior cutoff. These are revisions between
+% \emph{forecasts}, not revisions of reported hospital counts.
+% \end{enumerate}
+% The logarithm defines the relative-change scale of these three
+% indicators and their nonzero threshold. They are diagnostic warnings,
+% not probabilities of having passed a true peak.
 
-\paragraph{Why indicators are unavailable.}
-A required median must exist at the exact reference date and horizon,
-be finite and nonnegative, be available by the cutoff and not be filled
-from an earlier forecast. Flu has no submitted forecasts for long summer
-intervals, although reported counts continue. Missing or removed rounds
-also interrupt the history: the nowcast indicator needs three consecutive
-nowcasts, and revision needs at least two matched older-horizon comparisons
-in both the current and prior round. Consequently, these two indicators
-can remain gray after forecasts resume, while Path is already available.
-For example, the unusable COVID reference weeks 25 January and 1 February
-2025 leave Nowcast unavailable through 15 February and Revision through
-22 February. Insufficient history at the start also gives gray cells.
-Forecast rows are retained when latest outcomes are unavailable; those
-outcomes are needed for scoring, not for these indicators. A gray cell
-does not mean indicator 0.
+% \paragraph{Why indicators are unavailable.}
+% A required median must exist at the exact reference date and horizon,
+% be finite and nonnegative, be available by the cutoff and not be filled
+% from an earlier forecast. Flu has no submitted forecasts for long summer
+% intervals, although reported counts continue. Missing or removed rounds
+% also interrupt the history: the nowcast indicator needs three consecutive
+% nowcasts, and revision needs at least two matched older-horizon comparisons
+% in both the current and prior round. Consequently, these two indicators
+% can remain gray after forecasts resume, while Path is already available.
+% For example, the unusable COVID reference weeks 25 January and 1 February
+% 2025 leave Nowcast unavailable through 15 February and Revision through
+% 22 February. Insufficient history at the start also gives gray cells.
+% Forecast rows are retained when latest outcomes are unavailable; those
+% outcomes are needed for scoring, not for these indicators. A gray cell
+% does not mean indicator 0.
 
 \begin{thebibliography}{4}
 \bibitem{multiqt}
