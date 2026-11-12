@@ -268,7 +268,8 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
 # 5. ISSUED WEIGHTS OVER TIME ---------------------------------------
 # One page per location and expert bank, one column per mixture. Rows alpha = 0.1-0.9: one
 # weight vector per quantile level; below alpha = 0.2, 0.5 and 0.8, that level's forecasts:
-# the latest reported counts (black), every expert in its weight colour and the issued
+# the latest reported counts (black), every expert in its weight colour in the weeks the
+# mixture weighs it (the most recent weekly starts: only the copies in use) and the issued
 # mixture (a thin dashed line in its colour of the other plots, so that it hides none of
 # them). Last two rows 'All levels': the column's
 # mixture with one weight vector for all levels (the mixture itself, or its common-weight
@@ -363,19 +364,32 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
   box(col = "gray70")
 }
-# One level's forecasts of a mixture: every expert in its weight colour, the issued mixture
-# (a thin dashed line in its colour, so that it hides none of the experts) and the latest
-# reported counts. key: name the mixture in the panel; title: the column title (first row of
-# a page).
+# One level's forecasts of a mixture: every expert in its weight colour, drawn only in the
+# weeks the mixture weighs it (a copy of the most recent weekly starts leaves with its
+# weight), the issued mixture (a thin dashed line in its colour, so that it hides none of the
+# experts) and the latest reported counts. key: name the mixture in the panel; title: the
+# column title (first row of a page).
 mixture_lwd <- 1.2
 mixture_lty <- "22"
+# The experts' forecasts of a mixture at level index a (weeks x experts), missing in the
+# weeks without weight (before a copy's admission, after its retirement): only what the
+# mixture uses is drawn and sets the axes.
+weighted_experts <- function(run, method, a) {
+  experts <- run$expert_forecasts[[method]]
+  experts <- matrix(experts[, , a], nrow(experts), dimnames = dimnames(experts)[1:2])
+  weights <- run$weights[[method]]
+  weights <- matrix(weights[, , if (per_level(run, method)) a else 1], nrow(weights),
+    dimnames = dimnames(weights)[1:2])[, colnames(experts), drop = FALSE]
+  stopifnot(identical(dim(weights), dim(experts)))
+  experts[which(weights == 0)] <- NA
+  experts
+}
 plot_mixture_forecasts <- function(run, method, level, fills, ylim, row_label, first_column,
                                    key, title = "") {
   dates <- run$case$target_date
   times <- as.numeric(dates)
   a <- match(level, run$case$alpha)
-  experts <- run$expert_forecasts[[method]]
-  experts <- matrix(experts[, , a], nrow(experts), dimnames = dimnames(experts)[1:2])
+  experts <- weighted_experts(run, method, a)
   truth <- run$case$truth_latest / run$scaling$scale
   par(mar = c(2.2, if (first_column) first_margin else 2.2, if (nzchar(title)) 1.5 else .5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = ylim, xaxs = "i", xaxt = "n",
@@ -383,7 +397,7 @@ plot_mixture_forecasts <- function(run, method, level, fills, ylim, row_label, f
     main = title)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
   broken <- break_gaps(dates, experts, run$predictions[[method]][, a], truth)   # Gaps break lines.
-  many <- ncol(experts) > 40L
+  many <- max(rowSums(!is.na(experts))) > 40L          # Experts drawn in the same week.
   for (k in seq_len(ncol(experts))) lines(broken$dates, broken[[2]][, k],
     col = adjustcolor(fills[colnames(experts)[k]], if (many) .6 else .9), lwd = if (many) .35 else .8)
   lines(broken$dates, broken[[3]], col = colours[[method]], lwd = mixture_lwd, lty = mixture_lty)
@@ -467,7 +481,7 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     a <- match(level, run$case$alpha)
     shown <- c(columns$method, if (level == common_forecast_level) na.omit(common_mixtures))
     range(run$case$truth_latest / run$scaling$scale, lapply(shown, function(m)
-      c(run$expert_forecasts[[m]][, , a], run$predictions[[m]][, a])), finite = TRUE)
+      c(weighted_experts(run, m, a), run$predictions[[m]][, a])), finite = TRUE)
   })
   panel_ids <- matrix(seq_len(nrow(rows) * nrow(columns)), ncol = nrow(columns), byrow = TRUE)
   # Rows in inches; a shorter page keeps the free space below its key.
@@ -509,7 +523,7 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
   else legend(0, .5, expert_names(names(fills)), fill = fills, border = NA, yjust = .5,
     ncol = ceiling(length(fills) / 2), bty = "n", cex = .95,
     title = "Experts: weights and forecasts", title.adj = 0, title.font = 2)
-  legend(1, .5, c("Latest reported counts", "Each expert: its weight colour",
+  legend(1, .5, c("Latest reported counts", "Each expert, while weighted: its weight colour",
     "Mixture: dashed, in the colour of its method"), xjust = 1, yjust = .5,
     col = c("black", "gray55", "gray25"), lwd = c(.8, .8, mixture_lwd),
     lty = c("solid", "solid", mixture_lty), seg.len = 3, pch = c(16, NA, NA), pt.cex = .6,
