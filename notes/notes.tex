@@ -444,6 +444,49 @@ than 28 days and can bridge shorter missing intervals.
 Updates occur only at retained rounds: pending feedback waits across
 unfilled rounds, without resetting the state.
 
+\paragraph{Reporting pause in autumn 2025.}
+\label{sec:reporting-pause}
+NHSN published no report between 26 September and 14 November 2025, a
+pause that coincides with the US federal government shutdown (1
+October--12 November). Target weeks 27 September--8 November were first
+reported together on 14 November, $6$ to $48$ days after the week ended;
+weekly reports resumed on 19 November. Both diseases are affected. CMU
+kept submitting through 18 October and then skipped four rounds. Each
+round of 2025 around the pause, with its cutoff on the Wednesday before:
+
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Round & Newest NHSN report at the cutoff & CMU forecast & Learned at delay 0\\
+\midrule
+27 Sep & 24 Sep, through week 20 Sep & submitted & week 20 Sep\\
+4 Oct  & 26 Sep (revision) & submitted, no new counts & ---\\
+11 Oct & 26 Sep & submitted, no new counts & ---\\
+18 Oct & 26 Sep & submitted, no new counts & ---\\
+25 Oct & 26 Sep & missing; filled for $h\le2$ & ---\\
+1 Nov  & 26 Sep & missing; filled for $h\le1$ & ---\\
+8 Nov  & 26 Sep & missing; filled for $h\le0$ & ---\\
+15 Nov & 26 Sep & missing; filled for $h=-1$ & ---\\
+22 Nov & 19 Nov, through week 15 Nov & submitted & weeks 27 Sep--15 Nov\\
+29 Nov & 26 Nov, through week 22 Nov & submitted & week 22 Nov\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The trackers learn nothing for seven rounds: at delay 0 the last update
+before the pause is in the round of 27 September and the next in that of
+22 November (delay 1: 4 October and 29 November; the re-run learns from
+the same reports). The forecasts of 4--25 October carry the corrections of
+late September, and the weeks of the pause are then learned in one step.
+CMU's forecasts of 4--18 October had no new NHSN counts, so they
+extrapolate one to three weeks further than their horizon says. The pause
+came right after the summer COVID wave: 45 of the 52 locations without the
+US have a COVID peak in August--September 2025 (the US on 6 September,
+11{,}048 admissions, falling to 3{,}649 by 25 October), and 287 of the 800
+COVID after-peak weeks (36\%) are among the weeks first reported on 14
+November. The COVID results after peaks thus partly measure trackers that
+could not see the decline. No flu peak is near the pause.
+
 \paragraph{Locations.}
 Every disease--location--horizon case learns independently. Detailed
 plots show the US, California, Texas, New York and Pennsylvania.
@@ -1140,8 +1183,8 @@ weights across levels.
 \label{sec:adaptive-expert-weighting}
 The lookback $H$ counts processed updates. The first $H$ updates use
 starting rate $\lambda_{\mathrm{start}}$.
-For rate-grid and weekly-start mixtures, record the weighted second
-moment of the losses using weights before the exponential step and sharing:
+For rate-grid and weekly-start mixtures, record the weighted mean squared
+loss of the experts, using weights before the exponential step and sharing:
 \begin{align}
  M_n^\alpha
  &=\sum_{k=1}^K w_{k,n}^\alpha(\ell_{k,n}^\alpha)^2,\notag\\
@@ -1170,33 +1213,33 @@ For per-quantile weighting, the rate is
  \end{cases}
  \label{eq:adaptive-expert-rate}
 \end{equation}
-Only the previous $H$ moments enter; a zero sum retains the previous
-finite rate. Larger moments reduce the rate.
+Only the previous $H$ values of $M_r^\alpha$ enter; a zero sum retains the
+previous finite rate. Larger values reduce the rate.
 
 \subparagraph{Why the score mixture uses the variance.}
 The step \eqref{eq:level-expert-weight-step} is unchanged when the same
 amount is added to every expert's loss: the factor $e^{-\lambda c}$
 cancels in the normalization. Only the differences between experts move
-the weights. The second moment \eqref{eq:expert-loss-moments}, however,
+the weights. The weighted mean squared loss \eqref{eq:expert-loss-moments}, however,
 also grows with a loss that all experts share, and so lowers the rate
 \eqref{eq:adaptive-expert-rate} without any information for the weights.
 Since the step ignores a common shift, the losses can be centred at their
-weighted mean before the moment is taken; the moment is then the weighted
+weighted mean before squaring; $M_n^\alpha$ is then the weighted
 variance \eqref{eq:score-loss-variance}, which sets the rate by the
 differences alone. The score members are complete corrections of the
 same base, so their losses are dominated by the base error they share:
-in the exploratory check of the score bank the weights under the second
-moment hardly left uniform, which motivated the centred rule. In the
+in the exploratory check of the score bank the weights under the weighted
+mean squared loss hardly left uniform, which motivated the centred rule. In the
 saved runs for COVID, $h=2$, delay 0 (the five plotted locations),
-the between-expert variance under equal weights is $2\%$ of the second
-moment for the score bank, so the centred rate is about seven times
+the between-expert variance under equal weights is $2\%$ of the weighted
+mean squared loss for the score bank, so the centred rate is about seven times
 larger. The same holds for
 the weekly starts ($2\%$) and, less so, for the rate grid ($18\%$); these
-mixtures keep the second moment of Gibbs and Cand\`es~\cite{dtaci},
+mixtures keep the weighted mean squared loss of Gibbs and Cand\`es~\cite{dtaci},
 whose regret bound (their Lemma~2) gives the constant $\log(2KH)+1$ for
 $\gamma=1/(2H)$.
 
-Per-quantile weighting maintains a vector, moment history and rate
+Per-quantile weighting maintains a vector, a history of $M_r^\alpha$ and a rate
 for each level. Common weighting uses one of each: average losses
 across levels \emph{before} computing $M_r$, then omit $\alpha$ in
 \eqref{eq:adaptive-expert-rate}. 
@@ -1241,11 +1284,11 @@ from the 20 rows used to estimate $L_0$.
 
 \subparagraph{Effect on adaptive learning rates.}
 After $H$ updates, the rule in~\eqref{eq:adaptive-expert-rate} already
-adapts to the loss moments. Use superscripts
+adapts to the losses through $M_r^\alpha$. Use superscripts
 $\mathrm{raw},\mathrm{norm}$ for calculations without and with $L_0$
 normalization. Conditional on the same
 pre-update weight vectors at updates $n-H,\ldots,n$ and a positive
-moment sum, normalization gives, separately at each level,
+sum of $M_r^\alpha$, normalization gives, separately at each level,
 \begin{align}
  M_r^{\alpha,\mathrm{norm}}
  &=M_r^{\alpha,\mathrm{raw}}/L_0^2,
@@ -1255,18 +1298,18 @@ moment sum, normalization gives, separately at each level,
  &=\lambda_n^{\alpha,\mathrm{raw}}L_{k,n}^\alpha.
  \label{eq:expert-normalization-cancellation}
 \end{align}
-The identity holds for both moment definitions and for common weights.
+The identity holds for both definitions of $M_r^\alpha$ and for common weights.
 The numerical zero-variance threshold of the centred rule scales by $L_0^{-2}$ too.
 Thus the loss and rate changes cancel
 in the exponential update, conditional on the same weight history.
 Runs with the same numerical starting rate can still differ: their
-first $H$ updates change later weights and moments.
+first $H$ updates change later weights and $M_r^\alpha$.
 
 Equivalent runs require matching settings and
 $\lambda_{\mathrm{start}}^{\mathrm{raw}}
 =\lambda_{\mathrm{start}}^{\mathrm{norm}}/L_0$, including the same scaling
-of retained rates when the moment sum is zero. Keep normalization
-throughout a run so incoming losses, stored moments and rates remain
+of retained rates when the sum of $M_r^\alpha$ is zero. Keep normalization
+throughout a run so incoming losses, stored $M_r^\alpha$ and rates remain
 in consistent units. After adaptation, $L_0$ is not an additional
 reduction in update strength.
 
@@ -1276,8 +1319,9 @@ reduction in update strength.
 \label{sec:phase-specific-experts}
 \label{sec:shared-quantile-weights}
 Table~\ref{tab:expert-combinations} groups the current combinations.
-Every learned mixture uses the adaptive rate above, with second moments
-for rate-grid and weekly-start mixtures and variance for the score mixture.
+Every learned mixture uses the adaptive rate above, with the weighted mean
+squared loss for rate-grid and weekly-start mixtures and the weighted
+variance for the score mixture.
 
 \begin{center}\small
 \renewcommand{\arraystretch}{1.2}
@@ -2041,9 +2085,9 @@ weights behave alike ($+7.2\%$, $+8.2\%$); the learned weight spreads over
 copies of every age, $29\%$ on copies older than 32 weeks. The first start
 alone (\texttt{restart\_persistent}) loses most ($+11.9\%$). The weights of
 the weekly starts barely move because their losses share a large common
-part: the between-copy variance is about $2\%$ of the second moment that
-sets the rate (Section~\ref{sec:adaptive-expert-weighting}); the centred
-moment of the score mixture was not tried for them.
+part: the between-copy variance is about $2\%$ of the weighted mean squared
+loss that sets the rate (Section~\ref{sec:adaptive-expert-weighting}); the
+weighted variance of the score mixture was not tried for them.
 
 \paragraph{Score bank.} Equal and learned weights perform alike
 ($+6.4\%$, $+6.6\%$); learned weights calibrate less ($-28\%$ against
@@ -2053,9 +2097,9 @@ number $2$ of $5$). Neither mixture beats its own member
 \texttt{sqrt\_constant} ($+0.8\%$).
 
 \paragraph{Mixtures against a single fixed rate.}
-Tables~\ref{tab:mixture-vs-fixed} and \ref{tab:mixture-vs-fixed-after}
-compare two mixtures with Fixed MultiQT on the rate grid of script 02, in
-each disease--design cell. A fixed rate beats a mixture if both its loss
+Tables~\ref{tab:mixture-vs-fixed} (overall) and
+\ref{tab:mixture-vs-fixed-after} (after peaks) compare two mixtures with
+Fixed MultiQT on the rate grid of script 02, in each disease--design cell. A fixed rate beats a mixture if both its loss
 and its calibration error are at most the mixture's.
 
 \begin{center}\small
@@ -2079,8 +2123,8 @@ Flu   & delay 0 & 3.3 & $-28.8$ & $.01$ \ ($1.2$, $-32.9$) & 4.0 & $-9.1$ & $.01
 \refstepcounter{table}\label{tab:mixture-vs-fixed}
 \begin{center}\small Table \thetable: Best rate-grid mixture and most recent
 weekly starts against single fixed rates: pooled overall change versus the
-base (\%). Beaten by: the rate of the grid with both loss and CE at most the
-mixture's (the lowest loss if several); ---: no such rate.
+base (\%). Beaten by: the rate $\kappa>0$ of the grid with both loss and CE
+at most the mixture's (the lowest loss if several); ---: no such rate.
 \end{center}
 
 The best rate-grid mixture, \texttt{weighted\_common}, is beaten by a single
@@ -2097,38 +2141,43 @@ $-38.5\%$). Mixing rates thus protects against a badly selected rate
 
 \begin{center}\small
 \renewcommand{\arraystretch}{1.15}
-\begin{tabular}{@{}llrrrrrrr@{}}
+\begin{tabular}{@{}llrrlrrl@{}}
 \toprule
- & & \multicolumn{2}{c}{\texttt{restart\_recent}} & \multicolumn{2}{c}{$\kappa=.01$} & \multicolumn{3}{c}{Lowest CE of the grid}\\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-9}
-Disease & Design & Loss & CE & Loss & CE & $\kappa$ & Loss & CE\\
+ & & \multicolumn{3}{c}{\texttt{weighted\_common}} & \multicolumn{3}{c}{\texttt{restart\_recent}}\\
+\cmidrule(lr){3-5}\cmidrule(l){6-8}
+Disease & Design & Loss & CE & Beaten by: $\kappa$ (loss, CE) & Loss & CE & Beaten by: $\kappa$ (loss, CE)\\
 \midrule
-COVID & delay 0 & 1.4 & $-3.8$  & 2.4 & $-4.8$ & $.45$ & 49.8 & $-30.1$\\
-      & delay 1 & 1.3 & $-0.5$  & 4.3 & 2.4    & $.45$ & 81.2 & $-23.1$\\
-      & re-run  & 1.8 & $-2.3$  & 5.4 & 6.0    & $.45$ & 57.6 & $-25.7$\\
+COVID & delay 0 & 7.3  & $-1.7$ & $.01$ ($2.4$, $-4.8$) & 1.4 & $-3.8$  & ---\\
+      & delay 1 & 11.7 & 6.1    & $.01$ ($4.3$, $2.4$)  & 1.3 & $-0.5$  & ---\\
+      & re-run  & 12.9 & 8.0    & $.01$ ($5.4$, $6.0$)  & 1.8 & $-2.3$  & ---\\
 \addlinespace
-Flu   & delay 0 & 3.2 & $-9.8$  & 0.5 & $-0.5$ & $.02$ & 1.5  & $-1.5$\\
-      & delay 1 & 1.5 & $-9.0$  & 0.0 & $-0.4$ & $.01$ & 0.0  & $-0.4$\\
-      & re-run  & 2.9 & $-13.0$ & 0.7 & 0.4    & $.01$ & 0.7  & 0.4\\
+Flu   & delay 0 & 2.4  & 0.9    & $.01$ ($0.5$, $-0.5$) & 3.2 & $-9.8$  & ---\\
+      & delay 1 & 1.0  & 1.2    & $.01$ ($0.0$, $-0.4$) & 1.5 & $-9.0$  & ---\\
+      & re-run  & 7.0  & 2.2    & $.01$ ($0.7$, $0.4$)  & 2.9 & $-13.0$ & ---\\
 \bottomrule
 \end{tabular}
 \end{center}
 \refstepcounter{table}\label{tab:mixture-vs-fixed-after}
-\begin{center}\small Table \thetable: After peaks: most recent weekly starts
-against the smallest fixed rate and the fixed rate with the lowest
-calibration error, pooled change versus the base (\%).
+\begin{center}\small Table \thetable: As Table~\ref{tab:mixture-vs-fixed}, after
+peaks (weeks 1 to 8).
 \end{center}
 
-\texttt{restart\_recent} is not beaten for COVID in any design: its loss
-($-0.4\%$ to $+0.8\%$) is below that of every rate in the grid, at $16$ to
-$24\%$ less calibration error than the base. After COVID peaks it also loses
-less than $\kappa=.01$. For flu, $\kappa=.01$ beats it overall in every
-design. After flu peaks, however, it reduces the calibration error by $9$ to
-$13\%$ at $+1.5\%$ to $+3.2\%$ loss, while no fixed rate gets below
-$-1.5\%$. Its weights stay almost uniform, so these gains come from the
-eight-week memory of its copies, not from learning which copy to trust. Of
-the single trackers, REF-op is beaten by no fixed rate in any cell, and
-\texttt{sqrt\_constant} only for COVID at delay 1 and in the re-run.
+After peaks (Table~\ref{tab:mixture-vs-fixed-after}), the smallest rate,
+$\kappa=.01$, beats the rate mixture in every cell, and the base itself does
+in five: the rates above $.01$ that the mixture weighs carry the correction
+learned during the rise past the peak (Section~\ref{sec:results-fixed-rates}).
+\texttt{restart\_recent} is beaten by no rate after peaks. For COVID it loses
+less than every rate ($+1.3\%$ to $+1.8\%$) and changes the calibration error
+little; for flu it reduces the calibration error by $9$ to $13\%$ at $+1.5\%$
+to $+3.2\%$ loss, while no fixed rate gets below $-1.5\%$ there. Overall, no
+rate beats it for COVID either: its loss ($-0.4\%$ to $+0.8\%$) is below that
+of every rate, at $16$ to $24\%$ less calibration error than the base. For
+flu, $\kappa=.01$ beats it overall in every design: it trades calibration over
+the season for calibration after peaks. Its weights stay almost uniform, so
+these gains come from the eight-week memory of its copies, not from learning
+which copy to trust. Of the single trackers, REF-op is beaten by no fixed rate
+overall in any cell, and \texttt{sqrt\_constant} only for COVID at delay 1 and
+in the re-run.
 
 \emph{Plots.} Performance: \path{multiqt_feedback_bars.pdf}, groups
 ``Rate-grid experts'', ``Weekly starts: immediate admission'' and
