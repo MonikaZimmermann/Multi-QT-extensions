@@ -1,5 +1,5 @@
 # Apply the recalibration methods of R/03_functions.R to each location and plot them.
-# Run R/01_data_overview.R once to prepare output/data/peak_aligned.rds.
+# Run R/01_data_overview.R once to prepare <output_dir>/data/peak_aligned.rds (multiqt_settings()).
 # Run from the project root: Rscript R/04_methods.R
 # Offsets and ensemble weights are fitted independently for each location. The forecast
 # and weight plots go through every disease, horizon and feedback design (one
@@ -25,14 +25,14 @@ score_diseases <- c("covid", "flu")
 cores <- max(1L, parallel::detectCores() - 2L)
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
-prepared <- readRDS("output/data/peak_aligned.rds")
+prepared <- read_prepared(settings)           # The base model's prepared data and output folder.
 # The methods' settings: method_parameters() in R/03_functions.R, with the values tuned
-# on the tuning period by R/05_tuning.R for this disease, tracker, design and feedback.
+# on the tuning period by R/05_tuning.R for this disease, tracker, base model and feedback.
 tuned_for <- function(delay, revisions, disease = disease_name) tuned_parameters(disease,
-  transform, design = prepared$settings$design, feedback_delay = delay, revisions = revisions)
-seasons <- c("all", prepared$settings$evaluation_seasons)   # Scored: each season and all.
-result_dir <- "output/results/peak_reasoning"
-figure_dir <- "output/pdf"
+  transform, base_model = prepared$settings$base_model, feedback_delay = delay,
+  revisions = revisions)
+result_dir <- file.path(settings$output_dir, "results", "peak_reasoning")
+figure_dir <- file.path(settings$output_dir, "pdf")
 dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 write_result <- function(rows, filename)
@@ -57,7 +57,7 @@ run_methods <- function(case, run_params, issue_weeks = NULL) {
   # the latest vintage by default, the same truth for every feedback design.
   # Counts are already scaled: do not divide quantile loss a second time. The log-scale
   # loss (score_quantiles(score_scale = "log")) needs counts. Windows lie in the evaluation
-  # seasons: each season, and "all" of them together (the default of the plots).
+  # period, scored as a whole.
   count_scale <- run$scaling$scale
   truth <- score_truth(case, settings$score_target, settings$score_filled) / count_scale
   weekly <- lapply(predictions, score_quantiles, truth = truth, alpha = case$alpha)
@@ -74,18 +74,17 @@ run_methods <- function(case, run_params, issue_weeks = NULL) {
     if (!is.null(twin)) duplicate_of[methods[i]] <- methods[twin]
   }
   scores <- scores_by_level <- list()
-  for (season in seasons) for (phase in phases) {
+  for (phase in phases) {
     weeks <- which(is.finite(truth) & phase_weeks(case, phase, settings$weeks_before_peak,
-      settings$weeks_after_peak) & (season == "all" | case$season == season))
+      settings$weeks_after_peak))
     for (method in methods) {
       s <- summarize_scores(weekly[[method]], case$alpha, weeks)
-      key <- paste(method, season, phase)
-      scores[[key]] <- data.frame(method, season, phase, n_weeks = s$n_weeks,
+      key <- paste(method, phase)
+      scores[[key]] <- data.frame(method, phase, n_weeks = s$n_weeks,
         quantile_loss = s$quantile_loss,
         log_quantile_loss = summarize_scores(weekly_log[[method]], case$alpha, weeks)$quantile_loss,
         coverage_error = s$coverage_error, duplicate_of = unname(duplicate_of[method]))
-      if (season == "all") scores_by_level[[key]] <- data.frame(method, phase,
-        n_weeks = s$n_weeks, s$by_level)
+      scores_by_level[[key]] <- data.frame(method, phase, n_weeks = s$n_weeks, s$by_level)
     }
   }
   id <- data.frame(disease = case$disease, location = case$location,
@@ -108,9 +107,9 @@ feedback_files <- gsub("[ ,-]", "", feedback_names)    # File names: "delay0", "
 
 # 3. PLOT SETTINGS ---------------------------------------------------
 # Labels show each method's own value of its tuned setting (tuned_setting in R/03: the
-# tracker rates and H) and the fixed settings that tell methods apart, in the settings p of
-# one disease and feedback design (tuned_for()). Back-off and outer variants show H of the
-# mixture they correct (parameter_source in R/03).
+# tracker rates) and the fixed settings that tell methods apart (H of the learned mixtures),
+# in the settings p of one disease and feedback design (tuned_for()). Outer variants show H
+# of the mixture they correct (parameter_source in R/03).
 method_labels <- function(p) {
   par_of <- function(method, name) method_parameter(p, method, name)
   residual_label <- paste("RMS of", p$median_window)
@@ -119,10 +118,14 @@ method_labels <- function(p) {
   eta <- function(method) paste0("eta=", value(method))
   outer <- function(method) paste0("outer m=", par_of(method, "outer_multiplier"))
   H_of <- function(method) paste0("H=", par_of(method, "H"))
-  c(original = "Original",
+  c(original = "Base",
     fixed = paste0("Fixed MultiQT (eta=", value("fixed"), "*S0)"),
     leaky = paste0("Leaky MultiQT (eta=", value("leaky"), "*S0, leak ", par_of("leaky", "leak"),
       ")"),
+    fixed_log = paste0("Fixed MultiQT, log1p tracker (eta=", par_of("fixed_log",
+      "fixed_multiplier"), "*S0)"),
+    leaky_log = paste0("Leaky MultiQT, log1p tracker (eta=", par_of("leaky_log",
+      "leaky_multiplier"), "*S0, leak ", par_of("leaky_log", "leak"), ")"),
     ref_op = paste0("Delphi REF-op (sqrt, eta=", par_of("ref_op", "ref_op_multiplier"), "*Q90 of ",
       par_of("ref_op", "ref_op_window"), ", slow ", par_of("ref_op", "ref_op_slow_multiplier"),
       ", leak ", par_of("ref_op", "ref_op_fast_decay"), ")"),
@@ -142,15 +145,16 @@ method_labels <- function(p) {
       H_of("shared_common_outer"), ", ", outer("shared_common_outer"), ")"),
     restart_persistent = paste0("First start only (m=", p$restart_multiplier, ")"),
     restart_uniform = paste0("Weekly starts: equal (m=", p$restart_multiplier, ")"),
-    restart_weighted = paste0("Weekly starts: learned (m=", p$restart_multiplier, ", ",
+    restart_weighted = paste0("Weekly starts: learned + sharing (m=", p$restart_multiplier, ", ",
       H_of("restart_weighted"), ")"),
     restart_uniform_outer = paste0("Starts equal + outer (", outer("restart_uniform_outer"), ")"),
-    restart_weighted_outer = paste0("Starts learned + outer (", H_of("restart_weighted_outer"),
-      ", ", outer("restart_weighted_outer"), ")"),
+    restart_weighted_outer = paste0("Starts learned + sharing + outer (",
+      H_of("restart_weighted_outer"), ", ", outer("restart_weighted_outer"), ")"),
     restart_recent = paste0("Weekly starts: most recent ", p$restart_recent_k,
-      ", equal (m=", p$restart_multiplier, ")"),
-    decline = paste0("Decline MultiQT (eta=", par_of("decline", "decline_multiplier"),
-      "*S0, declining context, delta=", p$context_delta, ")"),
+      ", learned + sharing (m=", p$restart_multiplier, ", ", H_of("restart_recent"), ")"),
+    restart_recent_dual = paste0("Weekly starts: most recent ", p$restart_recent_k,
+      ", slow + fast, learned + sharing (m=", paste(par_of("restart_recent_dual",
+        "restart_dual_multipliers"), collapse = " + "), ", ", H_of("restart_recent_dual"), ")"),
     score_equal = "Score experts: equal weights",
     score_learned = paste0("Score experts: learned weights per level (", H_of("score_learned"),
       ")"),
@@ -265,15 +269,18 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
 # One page per location and expert bank, one column per mixture. Rows alpha = 0.1-0.9: one
 # weight vector per quantile level; below alpha = 0.2, 0.5 and 0.8, that level's forecasts:
 # the latest reported counts (black), every expert in its weight colour and the issued
-# mixture (thick, in its colour of the other plots; dashed: the common-weight variant of the
-# last row). Last row: one weight vector for all levels. The weights mix the forecasts before
-# crossing repair or an outer correction; the outer methods keep their underlying ensemble's
-# weights. Expert colours: the base gray, the rate grid by multiplier, the weekly starts in
-# one palette per multiplier from dark (first start) to light (last start), the score
-# experts in one qualitative palette. Score experts: equal weights for all levels (row 'All
-# levels'), learned weights per level, and the learned weights backing off to the original
-# with G (the context row: G and c).
+# mixture (a thin dashed line in its colour of the other plots, so that it hides none of
+# them). Last two rows 'All levels': the column's
+# mixture with one weight vector for all levels (the mixture itself, or its common-weight
+# variant): its weights and its forecasts at alpha = 0.5. The weights mix the forecasts
+# before crossing repair or an outer correction; the outer methods keep their underlying
+# ensemble's weights. Expert colours: the base gray, the rate grid by multiplier, the weekly
+# starts in one palette per multiplier from dark (first start) to light (last start), the
+# score experts in one qualitative palette. A mixture with one weight vector for all levels
+# (the equal weights of the score experts) shows it in every level row and in the rows 'All
+# levels'.
 weight_forecast_levels <- c(.2, .5, .8)
+common_forecast_level <- .5
 weight_pages <- list(
   "Frozen rate-grid weights" = data.frame(method = c("uniform", "weighted", "shared"),
     common_method = c("uniform", "weighted_common", "shared_common"),
@@ -283,19 +290,30 @@ weight_pages <- list(
     title = c("Equal weights", "Learned weights")),
   "Weekly-start weights" = data.frame(
     method = c("restart_uniform", "restart_weighted", "restart_recent"),
-    common_method = NA, title = c("Equal weights", "Learned", "Most recent starts: equal")))
+    common_method = NA, title = c("Equal weights", "Learned + sharing",
+      "Most recent starts: learned + sharing")),
+  "Weekly-start weights: slow + fast copies" = data.frame(method = "restart_recent_dual",
+    common_method = NA, title = "Most recent starts, slow + fast: learned + sharing"))
 # Experts named by their methods where they are methods (the score experts).
 expert_names <- function(experts) ifelse(experts %in% names(method_short_labels),
   method_short_labels[experts], experts)
 restart_palettes <- c("Purples 3", "Blues 3", "Reds 3", "Oranges", "Greens 3")  # By multiplier.
-# The colour of every expert of a page, named by expert, in stacking order (bottom first).
-expert_fills <- function(run, page) {
-  if (page != "Weekly-start weights") {
-    experts <- dimnames(run$expert_forecasts[[weight_pages[[page]]$method[1]]])[[2]]
+weekly_start_page <- function(page) startsWith(page, "Weekly-start weights")
+# The weekly-start copies a mixture weighs, from their names ("start=<date>;m=<multiplier>").
+start_copies <- function(run, method) {
+  experts <- dimnames(run$expert_forecasts[[method]])[[2]]
+  data.frame(expert = experts, start_date = as.Date(sub("^start=([^;]+);.*$", "\\1", experts)),
+    multiplier = as.numeric(sub("^.*;m=", "", experts)))
+}
+# The colour of every expert of a page (its experts: those of its first mixture `method`),
+# named by expert, in stacking order (bottom first).
+expert_fills <- function(run, page, method) {
+  if (!weekly_start_page(page)) {
+    experts <- dimnames(run$expert_forecasts[[method]])[[2]]
     return(setNames(c("gray45", hcl.colors(length(experts) - 1L,
       if (page == "Score-based expert weights") "Dark 3" else "Viridis")), experts))
   }
-  experts <- run$restart_experts$experts
+  experts <- start_copies(run, method)
   experts <- experts[order(experts$multiplier, experts$start_date), ]
   multipliers <- unique(experts$multiplier)
   stopifnot(length(multipliers) <= length(restart_palettes))
@@ -308,7 +326,7 @@ expert_fills <- function(run, page) {
 plot_weight_distribution <- function(run, weights, fills, title, row_label, first_column, last_row,
                                      dates = run$case$target_date) {
   times <- as.numeric(dates)
-  par(mar = c(if (last_row) 2.4 else .3, if (first_column) 3.7 else 2.2, 1.5, .6))
+  par(mar = c(if (last_row) 2.4 else .3, if (first_column) first_margin else 2.2, 1.5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = c(0, 1),
     xaxs = "i", yaxs = "i", xaxt = "n", yaxt = "n", xlab = "",
     ylab = if (first_column) row_label else "", main = title)
@@ -345,43 +363,40 @@ plot_weight_distribution <- function(run, weights, fills, title, row_label, firs
   if (last_row) axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .8)
   box(col = "gray70")
 }
-# One level's forecasts in a mixture's column: the latest reported counts, every expert in
-# its weight colour and the issued mixture (thick; dashed: its common-weight variant). key:
-# name the mixture's lines in the panel; title: the column title (first row of a page).
-plot_mixture_forecasts <- function(run, method, common_method, level, fills, ylim,
-                                   first_column, key, title = "") {
+# One level's forecasts of a mixture: every expert in its weight colour, the issued mixture
+# (a thin dashed line in its colour, so that it hides none of the experts) and the latest
+# reported counts. key: name the mixture in the panel; title: the column title (first row of
+# a page).
+mixture_lwd <- 1.2
+mixture_lty <- "22"
+plot_mixture_forecasts <- function(run, method, level, fills, ylim, row_label, first_column,
+                                   key, title = "") {
   dates <- run$case$target_date
   times <- as.numeric(dates)
   a <- match(level, run$case$alpha)
   experts <- run$expert_forecasts[[method]]
   experts <- matrix(experts[, , a], nrow(experts), dimnames = dimnames(experts)[1:2])
-  mixtures <- c(method, if (!is.na(common_method) && common_method != method) common_method)
-  issued <- sapply(mixtures, function(m) run$predictions[[m]][, a])
   truth <- run$case$truth_latest / run$scaling$scale
-  par(mar = c(2.2, if (first_column) 3.7 else 2.2, if (nzchar(title)) 1.5 else .5, .6))
+  par(mar = c(2.2, if (first_column) first_margin else 2.2, if (nzchar(title)) 1.5 else .5, .6))
   plot(NA, xlim = range(times) + c(-.5, .5) * 7, ylim = ylim, xaxs = "i", xaxt = "n",
-    xlab = "", ylab = if (first_column) paste0("Forecast, alpha = ", level, "\n(",
-      score_units, ")") else "", las = 1, cex.axis = .75, main = title)
+    xlab = "", ylab = if (first_column) row_label else "", las = 1, cex.axis = .75,
+    main = title)
   abline(v = as.numeric(run$case$peaks$peak_date), col = "gray30", lty = 3)
-  broken <- break_gaps(dates, experts, issued, truth)    # Lines break at gaps.
+  broken <- break_gaps(dates, experts, run$predictions[[method]][, a], truth)   # Gaps break lines.
   many <- ncol(experts) > 40L
   for (k in seq_len(ncol(experts))) lines(broken$dates, broken[[2]][, k],
     col = adjustcolor(fills[colnames(experts)[k]], if (many) .6 else .9), lwd = if (many) .35 else .8)
+  lines(broken$dates, broken[[3]], col = colours[[method]], lwd = mixture_lwd, lty = mixture_lty)
   lines(broken$dates, broken[[4]], col = "black", lwd = .8)
   points(dates, truth, pch = 16, cex = .4)
-  for (k in seq_along(mixtures)) {
-    lines(broken$dates, broken[[3]][, k], col = "white", lwd = 4.2)
-    lines(broken$dates, broken[[3]][, k], col = colours[mixtures[k]], lwd = 2, lty = k)
-  }
-  if (key) legend("topleft", method_short_labels[mixtures], col = colours[mixtures],
-    lwd = 2, lty = seq_along(mixtures), bty = "o", box.col = NA,
+  if (key) legend("topleft", method_short_labels[method], col = colours[[method]],
+    lwd = mixture_lwd, lty = mixture_lty, seg.len = 3, bty = "o", box.col = NA,
     bg = adjustcolor("white", .85), cex = .75, inset = c(.005, .02))
   axis.Date(1, at = date_ticks(dates), format = "%b %Y", cex.axis = .75)
   box(col = "gray70")
 }
 # Key of the weekly starts: one ramp per multiplier, first start (dark) to last start (light).
-draw_start_ramps <- function(run, fills, single) {
-  experts <- run$restart_experts$experts
+draw_start_ramps <- function(experts, fills) {
   multipliers <- sort(unique(experts$multiplier))
   for (i in seq_along(multipliers)) {
     starts <- experts[experts$multiplier == multipliers[i], ]
@@ -389,22 +404,34 @@ draw_start_ramps <- function(run, fills, single) {
     y <- .8 - (i - 1) * .3
     x <- seq(.17, .37, length.out = length(names) + 1L)
     rect(x[-length(x)], y - .1, x[-1], y + .1, col = fills[names], border = NA)
-    text(.165, y, paste0("Weekly starts, m=", multipliers[i],
-      if (multipliers[i] %in% single) " (all columns)" else " (grid only)"), adj = 1, cex = .95)
+    text(.165, y, paste0("Weekly starts, m=", multipliers[i]), adj = 1, cex = .95)
     text(.375, y, paste("first start", format(min(starts$start_date), "%b %Y"), "(dark) to last",
       format(max(starts$start_date), "%b %Y"), "(light)"), adj = 0, cex = .85)
   }
 }
 # Rows of a page: each level's weights (only if a mixture of the page has one weight vector
-# per level; empty for the others), below 0.2, 0.5 and 0.8 the forecasts at that level, then
-# the weights that are not quantile specific: the vector for all levels of each mixture (or
-# of its common-weight variant).
-row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25)
-row_titles <- c(common = "All levels:\nweights")
+# per level; a mixture with one vector for all levels shows it at every level), below 0.2,
+# 0.5 and 0.8 the forecasts at that level, then the mixture with one weight vector for all
+# levels of each column (the column's mixture, or its common-weight variant): its weights
+# and its forecasts at alpha = 0.5.
+row_inches <- c(weights = 1.25, forecasts = 2.3, common = 1.25, common_forecasts = 2.3)
+axis_inches <- .45            # Added to a last weight row for its date axis.
+first_margin <- 5             # Left margin (lines) of the first column: three-line row labels.
+row_labels <- function(kind, level) switch(kind,
+  weights = paste("alpha =", level),
+  forecasts = paste0("Forecast, alpha = ", level, "\n(", score_units, ")"),
+  common = "All levels:\nweights",
+  common_forecasts = paste0("All levels:\nforecast, alpha = ", level, "\n(", score_units, ")"))
 weight_page_height <- sum(row_inches[c(rep("weights", length(plot_levels)),
-  rep("forecasts", length(weight_forecast_levels)), "common")]) + 1.2 + 3.7
+  rep("forecasts", length(weight_forecast_levels)), "common", "common_forecasts")]) +
+  axis_inches + 1.2 + 3.7
 per_level <- function(run, method) dim(run$weights[[method]])[3] > 1L
-page_rows <- function(run, columns) {
+# The mixture of a column with one weight vector for all levels: the column's own, or its
+# common-weight variant (NA: none).
+common_mixture <- function(run, method, common_method)
+  if (!per_level(run, method)) method else if (!is.na(common_method) &&
+    common_method %in% names(run$weights)) common_method else NA_character_
+page_rows <- function(run, columns, common_mixtures) {
   common <- !vapply(columns$method, function(m) per_level(run, m), logical(1))
   kind <- level <- NULL
   for (a in plot_levels) {
@@ -412,13 +439,16 @@ page_rows <- function(run, columns) {
     kind <- c(kind, shown)
     level <- c(level, rep(a, length(shown)))
   }
-  extra <- if (any(common) || any(!is.na(columns$common_method))) "common"
-  data.frame(kind = c(kind, extra), level = c(level, rep(NA, length(extra))))
+  if (any(!is.na(common_mixtures))) {
+    kind <- c(kind, "common", "common_forecasts")
+    level <- c(level, NA, common_forecast_level)
+  }
+  data.frame(kind, level)
 }
 # An empty cell with the margins of a weight panel: the column title in a page's first row
 # and the row label in its first column, so empty mixtures never hide them.
 blank_cell <- function(title, label, first_column) {
-  par(mar = c(.3, if (first_column) 3.7 else 2.2, 1.5, .6))
+  par(mar = c(.3, if (first_column) first_margin else 2.2, 1.5, .6))
   plot.new()
   if (nzchar(title)) title(main = title)
   if (first_column) mtext(label, side = 2, line = 2, cex = .9)
@@ -427,81 +457,81 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
   columns <- weight_pages[[page]]
   columns <- columns[columns$method %in% names(run$weights), ]
   if (!nrow(columns)) next
-  fills <- expert_fills(run, page)
-  rows <- page_rows(run, columns)
-  has_common <- any(!is.na(columns$common_method) & columns$common_method != columns$method)
+  fills <- expert_fills(run, page, columns$method[1])
+  common_mixtures <- vapply(seq_len(nrow(columns)), function(j)
+    common_mixture(run, columns$method[j], columns$common_method[j]), "")
+  rows <- page_rows(run, columns, common_mixtures)
   last_row <- nrow(rows)
-  # One axis per forecast row, shared by its columns.
+  # One axis per forecast level, shared by its rows and columns.
   limits <- lapply(setNames(weight_forecast_levels, weight_forecast_levels), function(level) {
     a <- match(level, run$case$alpha)
-    range(run$case$truth_latest / run$scaling$scale, lapply(seq_len(nrow(columns)), function(j)
-      c(run$expert_forecasts[[columns$method[j]]][, , a], sapply(na.omit(c(columns$method[j],
-        columns$common_method[j])), function(m) run$predictions[[m]][, a]))), finite = TRUE)
+    shown <- c(columns$method, if (level == common_forecast_level) na.omit(common_mixtures))
+    range(run$case$truth_latest / run$scaling$scale, lapply(shown, function(m)
+      c(run$expert_forecasts[[m]][, , a], run$predictions[[m]][, a])), finite = TRUE)
   })
   panel_ids <- matrix(seq_len(nrow(rows) * nrow(columns)), ncol = nrow(columns), byrow = TRUE)
   # Rows in inches; a shorter page keeps the free space below its key.
   heights <- c(row_inches[rows$kind], 1.2)
+  if (rows$kind[last_row] %in% c("weights", "common"))
+    heights[last_row] <- heights[last_row] + axis_inches
   layout(rbind(panel_ids, max(panel_ids) + 1L, max(panel_ids) + 2L),
     heights = c(lcm(2.54 * heights), 1))
   par(oma = c(4.8, .8, 5.2, .8), mgp = c(2, .4, 0), cex = .9)
   for (row in seq_len(nrow(rows))) for (j in seq_len(nrow(columns))) {
     kind <- rows$kind[row]
     level <- rows$level[row]
-    method <- columns$method[j]
-    if (kind == "forecasts") {
-      plot_mixture_forecasts(run, method, columns$common_method[j], level, fills,
-        limits[[as.character(level)]], j == 1L, level == weight_forecast_levels[1],
-        if (row == 1L) columns$title[j] else "")
+    label <- row_labels(kind, level)
+    title <- if (row == 1L) columns$title[j] else ""
+    # The rows 'All levels' show the column's mixture with one weight vector for all levels.
+    method <- if (kind %in% c("common", "common_forecasts")) common_mixtures[j] else
+      columns$method[j]
+    if (is.na(method)) {                                 # No such mixture in this column.
+      blank_cell(title, label, j == 1L)
       next
     }
-    weights <- switch(kind,
-      weights = if (per_level(run, method)) run$weights[[method]][, , match(level, run$case$alpha)],
-      common = if (!per_level(run, method)) run$weights[[method]][, , 1] else
-        if (!is.na(columns$common_method[j])) run$weights[[columns$common_method[j]]][, , 1])
-    if (is.null(weights)) {                              # Not this mixture's kind of weights.
-      blank_cell(if (row == 1L) columns$title[j] else "", if (kind == "weights")
-        paste("alpha =", level) else row_titles[[kind]], j == 1L)
+    if (kind %in% c("forecasts", "common_forecasts")) {
+      plot_mixture_forecasts(run, method, level, fills, limits[[as.character(level)]], label,
+        j == 1L, key = kind == "common_forecasts" || level == weight_forecast_levels[1], title)
       next
     }
-    weights <- matrix(weights, nrow(run$weights[[method]]),
-      dimnames = dimnames(run$weights[[method]])[1:2])
+    # A mixture with one weight vector for all levels: that vector at every level.
+    weights <- run$weights[[method]]
+    weights <- matrix(weights[, , if (kind == "weights" && per_level(run, method))
+      match(level, run$case$alpha) else 1], nrow(weights), dimnames = dimnames(weights)[1:2])
     stack <- intersect(names(fills), colnames(weights))
     stopifnot(length(stack) == ncol(weights))
-    plot_weight_distribution(run, weights[, stack, drop = FALSE], fills[stack],
-      if (row == 1L) columns$title[j] else "",
-      if (kind == "weights") paste("alpha =", level) else row_titles[[kind]],
+    plot_weight_distribution(run, weights[, stack, drop = FALSE], fills[stack], title, label,
       first_column = j == 1L, last_row = row == last_row)
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  if (page == "Weekly-start weights") {
-    single <- unique(run$restart_experts$experts$multiplier[run$restart_experts$experts$expert %in%
-      colnames(run$weights[[columns$method[1]]])])
-    draw_start_ramps(run, fills, single)
-  } else legend(0, .5, expert_names(names(fills)), fill = fills, border = NA, yjust = .5,
+  if (weekly_start_page(page)) draw_start_ramps(start_copies(run, columns$method[1]), fills)
+  else legend(0, .5, expert_names(names(fills)), fill = fills, border = NA, yjust = .5,
     ncol = ceiling(length(fills) / 2), bty = "n", cex = .95,
     title = "Experts: weights and forecasts", title.adj = 0, title.font = 2)
   legend(1, .5, c("Latest reported counts", "Each expert: its weight colour",
-    "Mixture: thick, in the colour of its method", if (has_common)
-      "Common-weight variant: dashed"), xjust = 1, yjust = .5,
-    col = c("black", "gray55", "gray25", if (has_common) "gray25"),
-    lty = c(1, 1, 1, if (has_common) 2), lwd = c(.8, .8, 2, if (has_common) 2),
-    pch = c(16, NA, NA, if (has_common) NA), pt.cex = .6, bty = "n", cex = .95)
+    "Mixture: dashed, in the colour of its method"), xjust = 1, yjust = .5,
+    col = c("black", "gray55", "gray25"), lwd = c(.8, .8, mixture_lwd),
+    lty = c("solid", "solid", mixture_lty), seg.len = 3, pch = c(16, NA, NA), pt.cex = .6,
+    bty = "n", cex = .95)
   plot.new()                                             # The free space of a shorter page.
   mtext(page, side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.3)
   mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
   mtext("Target date | Weight at issuance for each target | Vertical dotted lines: peaks",
     side = 1, outer = TRUE, line = .4, cex = .85)
-  mtext(paste("Rows alpha = 0.1-0.9 (mixtures with one weight vector per level): the weights of",
-    "each level; below alpha = 0.2, 0.5 and 0.8 the forecasts at that level (per-level mixtures",
-    "after crossing repair, before any outer correction)."), side = 1, outer = TRUE, line = 1.6,
-    cex = .8)
-  mtext(paste("Rows 'All levels': one weight vector for all levels (the mixture, or its",
-    "common-weight variant), learned from the mean quantile loss over the levels (equal",
-    "weights: not learned); context: G (line) and c (points) of the target signal."),
-    side = 1, outer = TRUE, line = 2.7, cex = .8)
-  if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a CMU forecast, filled with",
-    "the latest earlier CMU forecast of the same target week."), side = 1, outer = TRUE,
+  mtext(paste("Rows alpha = 0.1-0.9: the weights of each level (one weight vector for all",
+    "levels: the same at every level); below alpha = 0.2, 0.5 and 0.8 the forecasts at that",
+    "level (after crossing repair, before any outer correction)."), side = 1, outer = TRUE,
+    line = 1.6, cex = .8)
+  if ("common" %in% rows$kind) mtext(paste("Rows 'All levels': the mixture with one weight",
+    "vector for all levels (the column's mixture, or its common-weight variant), learned from",
+    "the mean quantile loss over the levels (equal weights: not learned); its weights and its",
+    "forecasts at alpha =", paste0(common_forecast_level, ".")), side = 1, outer = TRUE,
+    line = 2.7, cex = .8)
+  base_label <- c(cmu_submission = "CMU", windowed_seasonal = "windowed_seasonal")[[run$case$base_name]]
+  if (any(run$case$filled)) mtext(paste("Lighter bars: rounds without a", base_label,
+    "forecast, filled with the latest earlier", base_label, "forecast of the same target week."),
+    side = 1, outer = TRUE,
     line = 3.8, cex = .8)
 }
 
@@ -545,13 +575,7 @@ run_results <- function(runs, run_params) list(
   expert_grid = do.call(rbind, lapply(runs, function(run)
     with_case(run, run$rate_experts$experts))),
   restart_experts = do.call(rbind, lapply(runs, function(run) with_case(run,
-    data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))),
-  # The target signal of the score experts (target_signal() in R/03: D, c and G, 0 without
-  # a signal), by which Decline MultiQT acts.
-  score_gate = do.call(rbind, lapply(runs, function(run) if (!is.null(run$score_gate))
-    with_case(run, data.frame(reference_date = run$case$reference_date,
-      target_date = run$case$target_date, signal = run$score_gate$signal,
-      context = run$score_gate$context, gate = run$score_gate$gate)))))
+    data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))))
 plotted <- parallel::mclapply(seq_len(nrow(combinations)), function(i) {
   disease <- combinations$disease[i]
   horizon <- combinations$horizon[i]
@@ -618,11 +642,10 @@ write_result(results$scores_by_level, "summary_scores_by_level.csv")
 write_result(results$scales, "scales.csv")
 write_result(results$expert_grid, "expert_grid.csv")
 write_result(results$restart_experts, "restart_experts.csv")
-write_result(results$score_gate, "score_gate.csv")
 
 # 8. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
-# Per disease of score_diseases: one page per location, after a first page with all prepared
-# locations except the US. Columns:
+# Per disease of score_diseases: one page per location, after two pages with all prepared
+# locations except the US (with the single locations, then the means only). Columns:
 # horizons; rows: the feedback designs of tradeoff_feedback, each with its three windows.
 # Every method in each panel. The loss is scored on the tracker's scale: log(counts + 1)
 # for the log1p tracker, counts per 100k residents for raw counts. Each feedback design
@@ -661,18 +684,13 @@ legend_height <- 2.6
 draw_tradeoff_pages <- function(disease) {
   page_params <- tuned_for(settings$feedback_delay, settings$feedback_revisions, disease)
   labels <- method_labels(page_params)
-  base_width <- paste0(round(100 * diff(page_params$median_base_levels)), "%")
   all_locations <- setdiff(locations_of(disease), settings$summary_exclude)
-  tradeoff_scores <- all_scores[all_scores$disease == disease & all_scores$season == "all" &
+  tradeoff_scores <- all_scores[all_scores$disease == disease &
     all_scores$method %in% tradeoff_methods, ]
   # Duplicates (identical forecasts) of a drawn method are not drawn; those hidden in
-  # every case also leave the legend, and a footnote names each pair of the location pages.
+  # every case also leave the legend.
   tradeoff_scores$hidden <- tradeoff_scores$duplicate_of %in% tradeoff_methods
   hidden_everywhere <- names(which(tapply(tradeoff_scores$hidden, tradeoff_scores$method, all)))
-  hidden_rows <- tradeoff_scores[tradeoff_scores$hidden &
-    tradeoff_scores$location %in% settings$location_ids, ]
-  hidden_pairs <- unique(paste(labels[hidden_rows$method], "=", labels[hidden_rows$duplicate_of],
-    recycle0 = TRUE))
   # Legend: one column per group, headed by the group name; the two studentized groups
   # share a column, so the legend fits the page width.
   legend_groups <- lapply(setNames(names(method_groups), names(method_groups)), function(group_name)
@@ -693,37 +711,23 @@ draw_tradeoff_pages <- function(disease) {
         " (", location, ")"), "| evaluation:", evaluation_label, "|",
     if (transform == "log1p") "log1p(counts) updates, loss of log(counts + 1)" else
       paste("raw-count updates, loss in", score_units))
-  # One page; location NULL: all prepared locations except the US (pooled_rows()). Every
-  # panel has its own axis ranges; a loss beyond the axis is drawn at its edge as ">".
-  draw_tradeoff_page <- function(location = NULL) {
+  # One page; location NULL: all prepared locations except the US (pooled_rows()), with every
+  # location as a small symbol or, means_only, only the means over locations. Every panel
+  # has its own axis ranges; a loss beyond the axis is drawn at its edge as ">".
+  draw_tradeoff_page <- function(location = NULL, means_only = FALSE) {
     all_page <- is.null(location)
+    single_locations <- all_page && !means_only
     page <- if (all_page) pooled_rows(tradeoff_scores[!tradeoff_scores$method %in%
       hidden_everywhere, ], settings) else
       tradeoff_scores[tradeoff_scores$location == location & !tradeoff_scores$hidden, ]
-    page <- page[order(page$method == "original"), ]   # Original last, on top of the others.
+    page <- page[order(page$method == "original"), ]   # The base last, on top of the others.
     # Notes below the legend, one per line; the bottom margin fits them.
     notes <- c("Calibration error (CE): mean absolute coverage residual after averaging weeks within each quantile level.",
-      paste("Open circle: original forecasts. Filled circle: weights per quantile level; triangle: one",
+      paste("Open circle: base forecasts. Filled circle: weights per quantile level; triangle: one",
         "weight vector shared by all levels; square / diamond: the same + outer MultiQT."),
-      # A long list of identical pairs on several lines (labels only: no relabelled words).
-      if (length(hidden_pairs)) strwrap(paste("Not drawn (identical forecasts):",
-        paste(hidden_pairs, collapse = "; ")), width = 200),
       paste0("Each feedback design uses the settings tuned with it; the values in the legend are ",
         "those of feedback ", feedback_label(settings$feedback_delay, settings$feedback_revisions),
-        " (all: output/results/tuning)."),
-      paste0("Feedback: Wednesday issue cutoffs (actual ",
-        "generation dates where known); S0 and the weighting loss scale from the first ",
-        settings$warmup_rounds, " released rows in hindsight, frozen for the re-runs."),
-      # Studentized median: what sigma_t is, and the first weeks without a residual sigma_t,
-      # which are the original base (e.g. most of the flu up-to-peak window).
-      paste0("Studentized median methods: sigma_t = RMS of the last ", page_params$median_window,
-        " released median residuals, or the base's ", base_width, " interval width / ",
-        round(diff(qnorm(page_params$median_base_levels)), 3), " (a normal sd)."),
-      paste("With residuals, the original base is issued until sigma_t exists; these weeks are",
-        "scored as the base. Median start: all quantiles start at the median (offsets 0)."),
-      paste0("Studentized full base: offsets start at the base; level RMS = the RMS of each ",
-        "level's last ", page_params$median_window,
-        " released residuals (weighted isotonic projection)."))
+        " (all: ", file.path(settings$output_dir, "results", "tuning"), ")."))
     n_panels <- nrow(panel_rows) * length(settings$horizons)
     layout(rbind(matrix(seq_len(n_panels), nrow(panel_rows), byrow = TRUE), n_panels + 1L),
       heights = c(rep(panel_height, nrow(panel_rows)), legend_height))
@@ -739,7 +743,7 @@ draw_tradeoff_pages <- function(disease) {
       drawn <- if (all_page) aggregate(rows[c(tradeoff_loss, "coverage_error")], rows["method"],
         mean, na.rm = TRUE) else rows
       drawn <- drawn[order(drawn$method == "original"), ]
-      spread <- function(x) if (all_page) quantile(x, c(.01, .99), na.rm = TRUE)
+      spread <- function(x) if (single_locations) quantile(x, c(.01, .99), na.rm = TRUE)
       xlim <- panel_limits(c(spread(rows[[tradeoff_loss]]), drawn[[tradeoff_loss]]),
         drawn[[tradeoff_loss]][drawn$method == "original"])
       ylim <- panel_limits(c(spread(rows$coverage_error), drawn$coverage_error))
@@ -749,10 +753,10 @@ draw_tradeoff_pages <- function(disease) {
       mtext(window_titles[phase], side = 3, line = 1.4, font = 2, cex = .75)
       mtext(paste0("Horizon ", horizon, " | ", feedback_names[k], " | ",
         if (all_page) paste(length(unique(rows$location)), "locations") else
-          paste(rows$n_weeks[1], "weeks"), if (any(beyond)) " | >: beyond 4x the original's"),
+          paste(rows$n_weeks[1], "weeks"), if (any(beyond)) " | >: beyond 4x the base's"),
         side = 3, line = .3, cex = .65)
       grid(col = "gray90")
-      if (all_page) points(rows[[tradeoff_loss]], rows$coverage_error,
+      if (single_locations) points(rows[[tradeoff_loss]], rows$coverage_error,
         pch = tradeoff_shapes[rows$method], cex = .5 * tradeoff_sizes[rows$method],
         col = adjustcolor(tradeoff_colours[rows$method], alpha.f = .35))
       points(pmin(drawn[[tradeoff_loss]], xlim[2]), drawn$coverage_error,
@@ -791,15 +795,18 @@ draw_tradeoff_pages <- function(disease) {
       side = 3, outer = TRUE, line = .5, at = (j - .5) / length(settings$horizons), font = 2,
       cex = 1.2)
     mtext(tradeoff_title(location), side = 3, outer = TRUE, line = 5.9, font = 2, cex = 1.45)
-    mtext(paste0("Rows: feedback design (delay d: learn ",
-      "once, d weeks after the first report, from the report current then; re-run: re-run ",
-      "every week on the reports known then) and window; columns: horizon."), side = 3,
-      outer = TRUE, line = 3.9, cex = 1.05)
-    if (all_page) mtext(paste("Small: single locations; large: means over locations;",
-      "axes: 1st to 99th percentile of both."), side = 3, outer = TRUE, line = 2.5, cex = 1.05)
+    if (means_only) mtext("Means over locations only; axes fitted to the means.", side = 3,
+      outer = TRUE, line = 3.9, cex = 1.05) else if (all_page) mtext(paste("Small: single",
+      "locations; large: means over locations; axes: 1st to 99th percentile of both."),
+      side = 3, outer = TRUE, line = 3.9, cex = 1.05) else
+      mtext(paste0("Rows: feedback design (delay d: learn ",
+        "once, d weeks after the first report, from the report current then; re-run: re-run ",
+        "every week on the reports known then) and window; columns: horizon."), side = 3,
+        outer = TRUE, line = 3.9, cex = 1.05)
     mtext(notes, side = 1, outer = TRUE, line = .6 + 1.3 * (seq_along(notes) - 1), cex = .95)
   }
   draw_tradeoff_page()
+  draw_tradeoff_page(means_only = TRUE)
   for (location in intersect(settings$location_ids, tradeoff_scores$location))
     draw_tradeoff_page(location)
 }

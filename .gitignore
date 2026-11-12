@@ -12,9 +12,11 @@ slides/multivariate_calibration_files/
 *.snm
 *.toc
 *.vrb
-# PDFs: only the workflow plots directly in output/pdf/ are tracked.
+# PDFs: only the workflow plots directly in output/pdf/ (base cmu_submission) and
+# output/windowed_seasonal/pdf/ (base windowed_seasonal) are tracked.
 *.pdf
 !/output/pdf/*.pdf
+!/output/windowed_seasonal/pdf/*.pdf
 !/notes/*.pdf
 *.png
 *.csv

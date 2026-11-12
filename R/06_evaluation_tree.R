@@ -1,25 +1,30 @@
-# Purpose: an overview of where the recalibration methods gain against the original
+# Purpose: an overview of where the recalibration methods gain against the base
 # forecasts. One tree per disease (covid and flu stay separate): the root pools all
 # horizons, feedback designs and locations, the next levels split by feedback design and
 # then by horizon. Every node shows three bar charts, overall, up to peak and after peak:
-# the loss reduction against the original forecasts, each with the coverage error of the
+# the loss reduction against the base forecasts, each with the coverage error of the
 # same methods below it. First page per disease: all locations except the US pooled
 # (pooled_rows()); next pages: the locations of multiqt_settings() (US, California, Texas,
 # New York, Pennsylvania), one location each. Each page draws its own best methods.
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
-# feedback design of both diseases: Rscript R/06_evaluation_tree.R
+# feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
+# multiqt_feedback_bars.pdf: every method under each feedback design, side by side.
 # Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
 source("R/03_functions.R")
 
 # 1. SETTINGS -----------------------------------------------------------------
 settings <- multiqt_settings()
-prepared <- readRDS("output/data/peak_aligned.rds")
-scores <- read.csv("output/results/peak_reasoning/summary_scores_all_locations.csv",
+prepared <- read_prepared(settings)       # The base model's prepared data and output folder.
+scores <- read.csv(file.path(settings$output_dir, "results", "peak_reasoning",
+  "summary_scores_all_locations.csv"),
   colClasses = c(location = "character"))
 # Scores and prepared data of another feedback protocol (R/03_functions.R) are not combined.
 check_feedback_protocol(scores$feedback_protocol, "summary_scores_all_locations.csv",
   "Rscript R/04_methods.R")
-check_feedback_protocol(prepared$settings$feedback_protocol$id, "output/data/peak_aligned.rds",
+# Older tables also scored each season: pooled here, their weeks would count twice.
+if ("season" %in% names(scores)) stop("summary_scores_all_locations.csv has scores per ",
+  "season (an older R/04_methods.R). Rerun Rscript R/04_methods.R.")
+check_feedback_protocol(prepared$settings$feedback_protocol$id, prepared_path(settings),
   "Rscript R/01_data_overview.R")
 diseases <- c("covid", "flu")
 missing <- setdiff(diseases, scores$disease)
@@ -37,7 +42,7 @@ loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
   paste("loss in", count_scale_label(settings$scale_method))
 # Methods drawn (the csv has every method): on each page the n_tree_methods with the
 # largest loss reduction in the window selection_phase (after peak) at the root of that page
-# (all its feedback designs, horizons and locations; the same original loss for every
+# (all its feedback designs, horizons and locations; the same base loss for every
 # method, so the smallest pooled loss), among the methods of 04's plots (method_groups in
 # R/03) except the target oracle (hindsight); best first, so the pages of a disease can draw
 # different methods. Chosen on the evaluation period itself: a ranking, not a choice of
@@ -68,16 +73,15 @@ key_note <- function(methods) c("Colours as in the trade-off plots of R/04.",
 window_titles <- c(overall = "Overall",
   before = paste0("Up to peak (weeks -", settings$weeks_before_peak - 1, " to 0)"),
   after = paste0("After peak (weeks 1 to ", settings$weeks_after_peak, ")"))
-result_dir <- "output/results/peak_reasoning"
-figure_dir <- "output/pdf"
+result_dir <- file.path(settings$output_dir, "results", "peak_reasoning")
+figure_dir <- file.path(settings$output_dir, "pdf")
 dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 
 # 2. LOSS REDUCTION AND COVERAGE ERROR PER NODE -------------------------------
-# A case is one location, horizon and feedback design, scored over the evaluation seasons
-# together. Feedback designs: "delay d" (learn once from the report d weeks after the first
-# one) or "re-run" (re-run every week on the reports known then).
-scores <- scores[scores$season == "all" & scores$phase %in% phases &
-  is.finite(scores[[loss_column]]), ]
+# A case is one location, horizon and feedback design, scored over the evaluation period.
+# Feedback designs: "delay d" (learn once from the report d weeks after the first one) or
+# "re-run" (re-run every week on the reports known then).
+scores <- scores[scores$phase %in% phases & is.finite(scores[[loss_column]]), ]
 scores$feedback <- ifelse(scores$feedback_revisions, ifelse(scores$feedback_delay > 0,
   paste("re-run, delay", scores$feedback_delay), "re-run"), paste("delay", scores$feedback_delay))
 feedback_levels <- unique(scores$feedback[order(scores$feedback_revisions, scores$feedback_delay)])
@@ -89,11 +93,11 @@ scores <- merge(scores[scores$method != "original", ], original, by = case_colum
 split_values <- list(feedback = feedback_levels, horizon = sort(unique(scores$horizon)))
 split_names <- function(split, value) if (split == "horizon") paste("horizon", value) else value
 
-# Reduction in %: 100 * (1 - pooled loss / pooled original loss), each case's mean loss
+# Reduction in %: 100 * (1 - pooled loss / pooled base loss), each case's mean loss
 # weighted by its number of weeks; share_improved: the share of cases in which the method's
-# loss is below the original's. Coverage error (per case the mean over the levels of
+# loss is below the base's. Coverage error (per case the mean over the levels of
 # |coverage - alpha| over the weeks of the window) is pooled the same way, weighted by
-# the weeks, for the method and for the original.
+# the weeks, for the method and for the base.
 node_summary <- function(rows) do.call(rbind, lapply(split(rows, list(rows$method,
   rows$phase), drop = TRUE), function(s) data.frame(method = s$method[1], phase = s$phase[1],
     cases = nrow(s), weeks = sum(s$n_weeks),
@@ -161,8 +165,7 @@ write.csv(do.call(rbind, lapply(seq_len(nrow(pages)), function(p)
 # method whose forecasts equal an earlier one's (method_names order), the first such method
 # (duplicate_of); two methods are identical in a case if they lead to the same first method.
 # Each pair identical in all of the page's cases of a feedback design, with those designs
-# (pairs identical only in some cases are left out: at horizon -1, without a target signal,
-# Decline MultiQT gives the original forecast, which the second line says once).
+# (pairs identical only in some cases are left out).
 twin_note <- function(rows, methods) {
   rows <- rows[rows$phase == "overall" & rows$method %in% names(methods), ]
   rows$first <- ifelse(is.na(rows$duplicate_of), rows$method, rows$duplicate_of)
@@ -175,12 +178,9 @@ twin_note <- function(rows, methods) {
     n <- table(factor(feedback, feedback_levels))
     names(n)[n > 0 & n == cases[names(n)]]
   }))
-  context <- intersect(names(methods), "decline")
-  c(if (length(pairs)) paste("Identical forecasts in every case of a design:",
+  if (length(pairs)) paste("Identical forecasts in every case of a design:",
     paste(paste0(names(pairs), " (", vapply(pairs, paste, "", collapse = ", "), ")"),
-      collapse = "; ")),
-    if (length(context)) paste("At horizon -1 (no target signal) Decline MultiQT gives the",
-      "original forecast."))
+      collapse = "; "))
 }
 
 # 3. PLOT ---------------------------------------------------------------------
@@ -231,7 +231,7 @@ draw_panel <- function(s, xlim, show_share, methods, style) {
     las = 1, line = .15, cex = .38, col = "gray25")
 }
 # The CE panel below a loss panel: the same methods and bars, from 0; dashed: the
-# original's CE pooled over all the node's cases. Its right margin is the loss panel's, so
+# base's CE pooled over all the node's cases. Its right margin is the loss panel's, so
 # the two panels line up.
 draw_ce_panel <- function(s, xlim, show_share, methods, style) {
   values <- s$coverage_error[match(names(methods), s$method)]
@@ -267,7 +267,7 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
   xlim <- c(-1, 1) * limit
   if (min(values, na.rm = TRUE) > -limit / 4) xlim[1] <- -limit / 4   # Room for gains first.
   if (max(values, na.rm = TRUE) < limit / 4) xlim[2] <- limit / 4
-  # CE axis: 0 to the largest CE drawn, of the methods or of the original.
+  # CE axis: 0 to the largest CE drawn, of the methods or of the base.
   ce_values <- unlist(lapply(nodes, function(node) c(node$summary$coverage_error[
     node$summary$method %in% names(methods)], node$summary$original_coverage_error)))
   ce_xlim <- c(0, 1.04 * max(ce_values, na.rm = TRUE))
@@ -303,15 +303,34 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
       draw_ce_panel(s, ce_xlim, show_share, methods, style)
     }
   }
+  # The key above the root: a two-line title, the methods and the notes, left-aligned, at
+  # the largest text size up to 1.2 at which all of it fits the free space.
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  key <- legend("center", unname(methods), fill = style$fill, border = style$border,
-    bty = "n", cex = 1.2, y.intersp = 1.3,
-    title = paste("Bars, top to bottom: the", length(methods), "best on this page",
-      paste0("(quantile loss ", tolower(sub(" \\(.*", "", window_titles[[selection_phase]])),
-        ", all designs and horizons)")), title.font = 2)
-  text(key$rect$left, key$rect$top - key$rect$h, paste(key_note(names(methods)),
-    collapse = "\n"), adj = c(0, 1), cex = .95, col = "gray25")
+  key_title <- c(paste("Bars, top to bottom: the", length(methods), "best on this page"),
+    paste0("(quantile loss ", tolower(sub(" \\(.*", "", window_titles[[selection_phase]])),
+      ", all designs and horizons)"))
+  notes <- key_note(names(methods))
+  key <- function(cex, x = "center", y = NULL, plot = TRUE) legend(x, y, unname(methods),
+    fill = style$fill, border = style$border, bty = "n", cex = cex, y.intersp = 1.3,
+    xjust = 0, yjust = 1, plot = plot)
+  key_size <- function(cex) {
+    line <- 1.3 * strheight("M", cex = cex)
+    box <- key(cex, plot = FALSE)$rect
+    c(line = line, legend = box$h, width = max(box$w, strwidth(key_title, cex = cex, font = 2),
+      strwidth(notes, cex = .8 * cex)), height = box$h + (length(key_title) + length(notes)) * line)
+  }
+  key_cex <- 1.2
+  while (key_cex > .5 && any(key_size(key_cex)[c("width", "height")] > .96))
+    key_cex <- key_cex - .05
+  size <- key_size(key_cex)
+  left <- (1 - size[["width"]]) / 2
+  top <- (1 + size[["height"]]) / 2
+  text(left, top - (seq_along(key_title) - .5) * size[["line"]], key_title, adj = c(0, .5),
+    font = 2, cex = key_cex)
+  key(key_cex, left, top - length(key_title) * size[["line"]])
+  if (length(notes)) text(left, top - (length(key_title) + seq_along(notes) - .5) *
+    size[["line"]] - size[["legend"]], notes, adj = c(0, .5), cex = .8 * key_cex, col = "gray25")
   # Connectors from each node to its children, on top of the whole page.
   par(oma = c(0, 0, 0, 0))
   par(fig = c(0, 1, 0, 1), mar = c(0, 0, 0, 0), new = TRUE)
@@ -328,15 +347,15 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
       col = "gray45", lwd = 1.2)
   }
   mtext(page_title(disease, location), side = 3, line = -2, font = 2, cex = 1.35)
-  notes <- c(paste("Loss bar: 100 * (1 - pooled loss / pooled loss of the original), pooled over",
+  notes <- c(paste("Loss bar: 100 * (1 - pooled loss / pooled loss of the base), pooled over",
     "the node's cases (location x horizon x feedback design), each case's mean loss weighted by",
-    "its number of weeks; to the right: positive = smaller loss than the original."),
+    "its number of weeks; to the right: positive = smaller loss than the base."),
     paste0("Numbers right of each loss panel: share of the node's cases in which the method's ",
-      "loss is below the original's (nodes with at least ", min_cases, " cases). Up to peak / ",
+      "loss is below the base's (nodes with at least ", min_cases, " cases). Up to peak / ",
       "after peak: the weeks around every local peak of the latest counts."),
     paste("Below each loss panel: coverage error, the mean over the quantile levels of",
       "|coverage - alpha| over the weeks of the window, averaged over the cases of the node",
-      "weighted by their weeks; dashed: the original forecasts."),
+      "weighted by their weeks; dashed: the base forecasts."),
     twins)
   mtext(notes, side = 1, line = -4.25 + 1.05 * (seq_along(notes) - 1), cex = .8)
 }
@@ -346,4 +365,111 @@ cairo_pdf(file.path(figure_dir, "multiqt_evaluation_tree.pdf"), width = sum(widt
   family = "DejaVu Sans")
 for (p in seq_len(nrow(pages))) draw_tree_page(trees[[p]], tree_methods[[p]],
   twin_note(page_rows[[p]], tree_methods[[p]]), pages$disease[p], pages$location[p])
+dev.off()
+
+# 4. EVERY METHOD UNDER EACH FEEDBACK DESIGN -----------------------------------
+# Pages as the tree's (all locations except the US pooled, then each location of
+# settings$location_ids): every method of 04's plots (tree_candidates, in the order of
+# method_groups) with one bar per feedback design, side by side, and the tree's values
+# (node_summary() of the page's cases of each design) and axes: loss panels, overall, up to
+# and after peaks, with the loss reduction against the base (positive = smaller loss) on
+# one axis per page, up to 1.15 times the 95th percentile of the absolute reductions (a
+# bar beyond it ends in "<" or ">"), and the share of cases with a smaller loss than the
+# base to the right; coverage-error panels on one axis from 0, dashed: the base. Colours:
+# tradeoff_colours (R/03), lighter for the later designs.
+bar_methods <- intersect(unique(unlist(method_groups)), tree_candidates)
+design_tint <- setNames(c(1, .55, .25), feedback_levels)   # Share of the method colour.
+tint <- function(colour, share) colorRampPalette(c("white", colour))(101)[1 + round(100 * share)]
+# Rows of a page: the methods by group, a header row before each group.
+bar_rows <- do.call(rbind, lapply(names(method_groups), function(group) {
+  members <- intersect(bar_methods, names(home_group)[home_group == group])
+  if (length(members)) data.frame(method = c(NA, members), group = group)
+}))
+draw_bar_page <- function(disease, location) {
+  rows <- scores[scores$disease == disease, ]
+  rows <- if (is.na(location)) pooled_rows(rows, settings) else rows[rows$location == location, ]
+  summary <- do.call(rbind, lapply(feedback_levels, function(feedback) {
+    s <- node_summary(rows[rows$feedback == feedback, ])
+    if (!is.null(s)) cbind(s, feedback = feedback)
+  }))
+  summary <- summary[summary$method %in% bar_methods, ]
+  # The tree's axes: one for the loss reductions, one for the coverage errors, per page.
+  values <- summary$reduction
+  limit <- min(max(abs(values), na.rm = TRUE), 1.15 * quantile(abs(values), .95, na.rm = TRUE))
+  xlim <- c(-1, 1) * limit
+  if (min(values, na.rm = TRUE) > -limit / 4) xlim[1] <- -limit / 4
+  if (max(values, na.rm = TRUE) < limit / 4) xlim[2] <- limit / 4
+  ce_xlim <- c(0, 1.04 * max(summary$coverage_error, summary$original_coverage_error,
+    na.rm = TRUE))
+  n_slot <- length(feedback_levels) + 1L                  # Bars of a method plus a gap.
+  y_top <- cumsum(ifelse(is.na(bar_rows$method), 1.4, n_slot))
+  ylim <- c(max(y_top) + .5, .5)
+  bar_y <- function(r, d) y_top[r] - n_slot + d
+  layout(matrix(seq_len(2L * length(phases) + 2L), 1),
+    widths = c(3.1, rep(c(2.5, 2.1), each = length(phases)), .1))
+  par(oma = c(5.4, .5, 4.4, .5))
+  # Method labels.
+  par(mar = c(2.2, 0, 2.2, 0))
+  plot(NA, xlim = c(0, 1), ylim = ylim, xaxs = "i", yaxs = "i", axes = FALSE, xlab = "", ylab = "")
+  for (r in seq_len(nrow(bar_rows))) if (is.na(bar_rows$method[r])) {
+    text(0, y_top[r] - .3, bar_rows$group[r], adj = c(0, .5), font = 2, cex = .9)
+  } else text(.99, y_top[r] - n_slot / 2, method_short_labels[bar_rows$method[r]],
+    adj = c(1, .5), cex = .8)
+  draw_bars <- function(phase, value) {
+    loss <- value == "reduction"
+    limits <- if (loss) xlim else ce_xlim
+    par(mar = c(2.2, .6, 2.2, if (loss) 2 else .6), mgp = c(1, .3, 0), tcl = -.2)
+    plot(NA, xlim = limits, ylim = ylim, xaxs = "i", yaxs = "i", yaxt = "n", xaxt = "n",
+      xlab = "", ylab = "", main = paste(if (loss) "Loss reduction:" else "Coverage error:",
+        tolower(window_titles[[phase]])), cex.main = .85)
+    ticks <- pretty(limits, n = if (loss) 5 else 4)
+    abline(v = ticks, col = "gray90")
+    axis(1, at = ticks, labels = if (loss) paste0(ticks, "%") else ticks, cex.axis = .7)
+    for (r in which(!is.na(bar_rows$method))) for (d in seq_along(feedback_levels)) {
+      method <- bar_rows$method[r]
+      s <- summary[summary$method == method & summary$feedback == feedback_levels[d] &
+        summary$phase == phase, ]
+      if (!nrow(s) || !is.finite(s[[value]])) next
+      y <- bar_y(r, d)
+      x <- s[[value]]
+      shown <- min(max(x, limits[1]), limits[2])
+      rect(0, y - .42, shown, y + .42, border = tradeoff_colours[[method]], lwd = .6,
+        col = tint(tradeoff_colours[[method]], design_tint[[d]]))
+      if (x > limits[2] || x < limits[1]) text(shown, y, if (x > limits[2]) ">" else "<",
+        adj = c(as.numeric(x > limits[2]), .5), cex = .6, font = 2)
+      if (loss && s$cases >= min_cases) mtext(sprintf("%.0f%%", 100 * s$share_improved),
+        side = 4, at = y, las = 1, line = .15, cex = .32, col = "gray25")
+    }
+    if (loss) abline(v = 0, col = "gray30") else {
+      base <- summary$original_coverage_error[summary$phase == phase]
+      if (length(base)) abline(v = base[which.max(summary$cases[summary$phase == phase])],
+        lty = 2, lwd = .9)
+    }
+    box(col = "gray60")
+  }
+  for (phase in phases) draw_bars(phase, "reduction")
+  for (phase in phases) draw_bars(phase, "coverage_error")
+  par(mar = c(0, 0, 0, 0))
+  plot.new()
+  mtext(paste(page_title(disease, location), "| every method under each feedback design"),
+    side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.15)
+  par(xpd = NA)
+  legend(grconvertX(.5, "ndc", "user"), grconvertY(1 - .2 / par("din")[2], "ndc", "user"),
+    paste("Feedback", feedback_levels), fill = tint("gray30", design_tint), border = "gray30",
+    horiz = TRUE, bty = "n", xjust = .5, yjust = 1, cex = .95)
+  par(xpd = FALSE)
+  mtext(c(paste("Values and axes as in the evaluation tree. Loss bars: 100 * (1 - pooled loss /",
+    "pooled loss of the base) over the page's cases of a design, each case's mean loss weighted",
+    "by its weeks; positive = smaller loss."),
+    paste0("Numbers right of the loss panels: share of the cases in which the method's loss is ",
+      "below the base's (at least ", min_cases, " cases). Coverage error: mean over the levels ",
+      "of |coverage - alpha|, weighted by the weeks; dashed: the base."),
+    paste("Top to bottom within a method: feedback", paste(feedback_levels, collapse = ", "),
+      "(darker to lighter). Each design uses the settings tuned with it.")),
+    side = 1, outer = TRUE, line = c(1.2, 2.4, 3.6), cex = .8)
+}
+cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars.pdf"), width = 18.5,
+  height = .125 * (sum(ifelse(is.na(bar_rows$method), 1.4, length(feedback_levels) + 1L))) + 2.4,
+  onefile = TRUE, family = "DejaVu Sans")
+for (p in seq_len(nrow(pages))) draw_bar_page(pages$disease[p], pages$location[p])
 dev.off()

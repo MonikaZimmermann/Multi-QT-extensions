@@ -164,20 +164,25 @@ available_then <- epix_as_of(archive, cutoff)
 print(available_then)
 
 # 5. PREPARE THE DATA FOR SCRIPTS 02 AND 04 ------------------------------------
-# Keep every location's full forecast chronology in raw count units, from the first
-# round of the design on. Seasons run from October to September and are set by the
-# target week. Each row belongs to a period by its target week: "tuning" (R/05 chooses
-# the methods' settings there, and every method warms up there), "evaluation" (scored
-# by 02 and 04) or "other". Two designs:
-#   "hub_first_months": the CMU hub forecasts of both diseases from 2024-11-23 (real
-#     horizon -1 nowcasts, report versions throughout); tuning on the target weeks
-#     through hub_tuning_through (the first six months), evaluation on the later
-#     weeks of the evaluation seasons (June 2025 to September 2026).
-#   "seasons": the base per disease (`base`) from 2023-10-14; tuning on the 2023/24
-#     season, evaluation on the 2024/25 and 2025/26 seasons. Nothing is forecast from
-#     May to November 2024, so the methods carry their 2023/24 state across that gap.
+# Keep every location's full forecast chronology in raw count units, from start_date on.
+# base_model chooses the base forecasts of both diseases, and explicit dates the periods
+# of the target weeks: "tuning", the target weeks through tuning_through, the first months
+# of forecasts (R/05 chooses the methods' settings there, and every method warms up
+# there); "evaluation", the later target weeks through evaluation_through, scored by 02
+# and 04 overall and in the windows around the peaks; or "other". base_model is set in
+# multiqt_settings() (R/03_functions.R), which also gives each base its output folder and
+# its evaluated horizons (windowed_seasonal: 0 to 3). The dates per base:
+#   "cmu_submission": the CMU-TimeSeries hub submissions from 2024-11-23 (real horizon -1
+#     nowcasts, NHSN report versions throughout); tuning through 2025-05-31 (the first
+#     six months), evaluation June 2025 to September 2026.
+#   "windowed_seasonal": a longer history, our windowed_seasonal forecasts (R/00) from
+#     2023-10-14, made from the HHS reports in 2023/24 and the NHSN reports after; tuning
+#     through 2024-04-27 (the first forecasts, October 2023 to April 2024, up to the pause
+#     in mandatory reporting), evaluation November 2024 to September 2026. Nothing is
+#     forecast from May to November 2024, so the methods carry their state across that gap.
 # Peaks only label weeks in hindsight; they do not affect online feedback. A peak is a
-# local maximum of the latest-reported weekly counts (find_peaks() below): the largest
+# local maximum of the scoring truth, the latest-reported weekly counts (with HHS reports:
+# the last HHS report for the weeks that have one; find_peaks() below): the largest
 # value within peak_halfwidth weeks on either side, whose counts fall by at least
 # peak_drop of its height on both sides before any higher week, by at least
 # peak_min_prominence of the location's largest forecast-week count, on the centred
@@ -194,14 +199,16 @@ print(available_then)
 # (as_of, cutoff_source), every stored report of each row's target week (report_versions,
 # for the feedback and the re-run design), the online feedback per delay with its audit
 # (feedback_by_delay; all cases in one table: feedback_audit() in R/03_functions.R),
-# latest-vintage truth for scoring, dates, seasons and periods, peak-relative week labels,
+# latest-vintage truth for scoring, dates and periods, peak-relative week labels,
 # the population (counts per 100k residents) and the historical counts for other
 # scalings. Scripts 02/04 choose the scaling without reopening the data files.
 # US remains a separate case and must not be counted as an additional state.
 #
-# base: the base forecasts per disease. "windowed_seasonal": R/00_base_forecasts.R,
-#   Delphi's forecaster, made on Wednesdays (the generation date) from the reports as
-#   of that day. "cmu_hub": the CMU-TimeSeries submissions (covid from 2024-11-23 only).
+# base: the base forecasts per disease (base_model for both). "windowed_seasonal":
+#   R/00_base_forecasts.R, Delphi's forecaster, made on Wednesdays (the generation date)
+#   from the reports as of that day (HHS reports before 2024-11-19, see hhs_reports
+#   below). "cmu_submission": the CMU-TimeSeries submissions to the hubs (covid from
+#   2024-11-23 only).
 # Issue cutoff of a round (notes/notes.tex, Section 2): what is known just before its
 #   forecasts are issued, the as-of date of its reports and of its feedback. The base's
 #   actual generation date where known (windowed_seasonal: its generation_date; CMU hub:
@@ -214,13 +221,23 @@ print(available_then)
 #   after the Wednesday deadline (flu's first round, the holidays), from the production
 #   schedule in pipelines/<disease>_hosp_prod.R of the Delphi code pinned in
 #   R/00_base_forecasts.R (the same dates as the windowed_seasonal generation dates).
-# final_data_through: there are no report versions before 2024-11-19. Target weeks
-#   ending by this date get a first report with their latest value on the Wednesday
-#   after the week (target_end_date + 4), so in 2023/24 MultiQT learns from final
-#   counts, as the windowed_seasonal forecasts were made from final counts. These
-#   synthetic reports have source "synthetic_final"; archived versions "archive", and
-#   the archive's first version (2024-11-19, a bulk load of all older weeks, without their
-#   original publication dates) "archive_start".
+# Reports: NHSN's report versions begin on 2024-11-19 with a bulk load of all older
+#   weeks (source "archive_start", without their original publication dates); later
+#   versions have source "archive". hhs_reports (TRUE for windowed_seasonal): before
+#   that, the weekly HHS reports of hhs_vintages_epidata.parquet (source "hhs"), rebuilt
+#   by R/00_base_forecasts.R from the daily HHS issues with Delphi's
+#   scripts/one_offs/hhs_2023_24_archive.R: every issue at its actual date, a week
+#   reported once all its days are, the same reports the windowed_seasonal forecasts
+#   were trained on. So in 2023/24 MultiQT learns, and the re-run re-learns, from the
+#   HHS reports and their revisions, and from 2024-11-19 on from NHSN's. Weeks with an HHS
+#   report are scored against their last HHS report (HHS counts are 2-6 % below NHSN's in
+#   2023/24, up to about 20 % in some states), the others against NHSN's latest report. A
+#   week without an HHS report has no report before NHSN's first version: it is learned
+#   from that.
+# final_data_through (only without hhs_reports): target weeks ending by this date get a
+#   synthetic first report with their latest value on the Wednesday after the week
+#   (target_end_date + 4), source "synthetic_final". No row of cmu_submission learns
+#   from them: its first target week is later.
 # incomplete_weeks: mandatory hospital reporting paused from 2024-05-01 to 2024-10-31,
 #   so the counts of these target weeks are incomplete (Texas covid: 643, 274, 8, 2 in
 #   the weeks ending 2024-04-27 to 2024-05-18). Forecasts of them are dropped: never
@@ -241,16 +258,16 @@ print(available_then)
 #   from their reports current at each later cutoff.
 # fill_gaps_up_to: fill gaps of at most this many missing rounds (0: no filling),
 #   see fill_missing_rounds() below; the gap from May to November 2024 stays.
-design <- "hub_first_months"                  # "hub_first_months" or "seasons".
-prepare_settings <- list(design = design,
-                         base = if (design == "seasons")
-                           c(covid = "windowed_seasonal", flu = "cmu_hub") else
-                           c(covid = "cmu_hub", flu = "cmu_hub"),
-                         start_date = as.Date(if (design == "seasons") "2023-10-14" else
-                           "2024-11-23"), season_start_month = 10L,
-                         tuning_seasons = "2023/24",                         # "seasons"
-                         hub_tuning_through = as.Date("2025-05-31"),         # "hub_first_months"
-                         evaluation_seasons = c("2024/25", "2025/26"),
+shared <- multiqt_settings()                  # base_model and output_dir (R/03_functions.R).
+base_model <- shared$base_model               # "cmu_submission" or "windowed_seasonal".
+prepare_settings <- list(base_model = base_model,
+                         base = c(covid = base_model, flu = base_model),
+                         hhs_reports = base_model == "windowed_seasonal",
+                         start_date = as.Date(c(cmu_submission = "2024-11-23",
+                           windowed_seasonal = "2023-10-14")[[base_model]]),
+                         tuning_through = as.Date(c(cmu_submission = "2025-05-31",
+                           windowed_seasonal = "2024-04-27")[[base_model]]),
+                         evaluation_through = as.Date("2026-09-30"),
                          peak_halfwidth = 8L, peak_drop = .3, peak_min_prominence = .1,
                          peak_smooth = 3L,
                          final_data_through = as.Date("2024-04-27"),
@@ -271,13 +288,6 @@ prepare_settings <- list(design = design,
                              "2025-12-29"))),
                          horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
-# Season of a date (October to September, e.g. "2024/25") and its half season.
-season_of <- function(date, start_month = 10L) {
-  year <- as.integer(format(date, "%Y")) - (as.integer(format(date, "%m")) < start_month)
-  paste0(year, "/", substr(year + 1L, 3L, 4L))
-}
-half_season_of <- function(date, start_month = 10L)
-  ifelse((as.integer(format(date, "%m")) - start_month) %% 12L < 6L, "winter", "summer")
 # Peaks of a weekly series x: local maxima of its centred `smooth`-week mean s that are
 # the largest value of s within `halfwidth` weeks on either side (ties: the earliest) and
 # whose prominence is at least `drop` times their height and `min_prominence` times
@@ -344,7 +354,7 @@ fill_missing_rounds <- function(forecasts, max_gap) {
   rbind(forecasts, do.call(rbind, filled))
 }
 
-prepare_data <- function(forecasts, vintages, settings) {
+prepare_data <- function(forecasts, vintages, settings, hhs_vintages = NULL) {
   forecast_columns <- c("disease", "location", "horizon", "reference_date",
                         "target_end_date", "quantile_level", "value", "truth_finalized")
   selected <- as.data.frame(forecasts[forecasts$horizon %in% settings$horizons &
@@ -355,7 +365,7 @@ prepare_data <- function(forecasts, vintages, settings) {
   # like a missing round; a dropped first round stays missing.
   bad <- settings$invalid_submissions
   broken <- Reduce(`|`, lapply(seq_len(nrow(bad)), function(i)
-    settings$base[selected$disease] == "cmu_hub" & selected$disease == bad$disease[i] &
+    settings$base[selected$disease] == "cmu_submission" & selected$disease == bad$disease[i] &
       selected$reference_date == bad$reference_date[i] &
       (is.na(bad$location[i]) | selected$location == bad$location[i]) &
       (is.na(bad$horizon[i]) | selected$horizon == bad$horizon[i])), FALSE)
@@ -381,7 +391,7 @@ prepare_data <- function(forecasts, vintages, settings) {
     c("disease", "reference_date", "generation_date")]))
   generation$source <- rep("generation_date", nrow(generation))
   hub <- settings$hub_generation_dates
-  hub <- hub[settings$base[hub$disease] == "cmu_hub", , drop = FALSE]
+  hub <- hub[settings$base[hub$disease] == "cmu_submission", , drop = FALSE]
   generation <- rbind(generation, data.frame(hub,
     source = rep("delphi_production_schedule", nrow(hub))))
   stopifnot(!anyDuplicated(generation[c("disease", "reference_date")]),
@@ -402,29 +412,40 @@ prepare_data <- function(forecasts, vintages, settings) {
     c("disease", "location", "geo_value", "target_end_date", "version", "value")]))
   settings$report_exclusions <- reviewed_report_exclusions()
   reports$source <- ifelse(reports$version == min(reports$version), "archive_start", "archive")
-  # Final counts before the report versions: a synthetic first report of the latest value
-  # on the Wednesday after the week, before every stored version.
   reports <- reports[order(reports$disease, reports$location, reports$target_end_date,
     reports$version), , drop = FALSE]
+  # HHS reports (settings$hhs_reports): every weekly HHS version, all of them before
+  # NHSN's first version, which supersedes them.
+  hhs <- reports[0, , drop = FALSE]
+  if (isTRUE(settings$hhs_reports)) {
+    hhs <- filter_reports(as.data.frame(hhs_vintages[!is.na(hhs_vintages$location),
+      c("disease", "location", "geo_value", "target_end_date", "version", "value")]))
+    hhs$source <- rep("hhs", nrow(hhs))
+    stopifnot(nrow(hhs) > 0, all(hhs$version < min(reports$version)))
+  }
+  # Without HHS reports, final counts before the report versions: a synthetic first report
+  # of the latest value on the Wednesday after the week, before every stored version.
+  # With HHS reports there are none: a week without an HHS report stays unreported (no
+  # feedback) until NHSN's first version.
   final <- reports[!duplicated(reports[c("disease", "location", "target_end_date")],
-    fromLast = TRUE) & reports$target_end_date <= settings$final_data_through, , drop = FALSE]
+    fromLast = TRUE) & reports$target_end_date <= settings$final_data_through &
+    !isTRUE(settings$hhs_reports), , drop = FALSE]
   final$version <- final$target_end_date + 4
   final$source <- rep("synthetic_final", nrow(final))
   stopifnot(all(final$version < min(reports$version)))
-  reports <- rbind(final, reports)
-  # Scoring truth: the latest report of each week, the archive's last version.
+  reports <- rbind(final, hhs, reports)
+  # Scoring truth: the latest report of each week, the archive's last version; with HHS
+  # reports, the last HHS report for the weeks that have one.
   settings$truth_version <- max(reports$version)
+  settings$truth <- if (isTRUE(settings$hhs_reports))
+    "last HHS report where there is one, else the latest NHSN report" else "latest NHSN report"
   settings$feedback_protocol <- feedback_protocol()
   group_key <- function(x) paste(x$disease, x$location, sep = "_")
   forecast_groups <- split(seq_len(nrow(selected)), group_key(selected))
   report_groups <- split(seq_len(nrow(reports)), group_key(reports))
-  # Period of a target week (see the designs above).
-  period_of <- function(date) {
-    season <- season_of(date, settings$season_start_month)
-    tuning <- if (settings$design == "seasons") season %in% settings$tuning_seasons else
-      date <= settings$hub_tuning_through
-    ifelse(tuning, "tuning", ifelse(season %in% settings$evaluation_seasons, "evaluation", "other"))
-  }
+  # Period of a target week (see the dates above).
+  period_of <- function(date) ifelse(date <= settings$tuning_through, "tuning",
+    ifelse(date <= settings$evaluation_through, "evaluation", "other"))
   cases <- peaks <- list()
   for (key in names(forecast_groups)) {
     f <- selected[forecast_groups[[key]], , drop = FALSE]
@@ -447,6 +468,14 @@ prepare_data <- function(forecasts, vintages, settings) {
     # Choose latest vintages first; missing newest values never fall back to an
     # older finite vintage. This ordering also applies to scaling and feedback.
     latest <- r[!duplicated(r$target_end_date, fromLast = TRUE), , drop = FALSE]
+    # With HHS reports, a week with an HHS report is scored against its last HHS report:
+    # the series the base forecasts were trained on and the methods learn from in 2023/24,
+    # not NHSN's later bulk-loaded value.
+    if (isTRUE(settings$hhs_reports)) {
+      last_hhs <- r[r$source == "hhs", , drop = FALSE]
+      last_hhs <- last_hhs[!duplicated(last_hhs$target_end_date, fromLast = TRUE), , drop = FALSE]
+      latest[match(last_hhs$target_end_date, latest$target_end_date), ] <- last_hhs
+    }
     latest$value[!valid_report(latest$value)] <- NA_real_
 
     # Peaks: local maxima of the latest reports of all weeks (find_peaks()), without the
@@ -463,11 +492,8 @@ prepare_data <- function(forecasts, vintages, settings) {
       series$target_end_date[found$row] <= max(f$target_end_date), , drop = FALSE]
     peak_date <- series$target_end_date[found$row]
     location_peaks <- if (nrow(found)) data.frame(disease, location = r$location[1],
-      geo_value = r$geo_value[1], location_name,
-      season = season_of(peak_date, settings$season_start_month),
-      half = half_season_of(peak_date, settings$season_start_month),
-      period = period_of(peak_date), peak_date, peak_value = series$value[found$row],
-      relative_prominence = found$relative_prominence,
+      geo_value = r$geo_value[1], location_name, period = period_of(peak_date), peak_date,
+      peak_value = series$value[found$row], relative_prominence = found$relative_prominence,
       forecast_week = peak_date %in% f$target_end_date)
     if (is.null(location_peaks)) {
       warning("No forecast peak for ", key, ": no before/after windows.", call. = FALSE)
@@ -514,7 +540,6 @@ prepare_data <- function(forecasts, vintages, settings) {
       feedback_by_delay <- lapply(setNames(settings$feedback_delays, settings$feedback_delays),
         function(delay) feedback_schedule(versions, cutoff$date, delay, reference_date))
 
-      season <- season_of(target_date, settings$season_start_month)
       nearest <- if (is.null(location_peaks)) rep(NA_integer_, length(target_date)) else
         apply(abs(outer(as.numeric(target_date), as.numeric(location_peaks$peak_date), "-")),
           1, which.min)
@@ -545,8 +570,8 @@ prepare_data <- function(forecasts, vintages, settings) {
         # The base, and the issue cutoff of each round (the as-of date of its reports and
         # feedback) with its source.
         base_name = settings$base[[disease]], as_of = cutoff$date, cutoff_source = cutoff$source,
-        # Season of the target week and its period: "tuning", "evaluation" or "other".
-        season = season, period = period_of(target_date),
+        # Period of the target week: "tuning", "evaluation" or "other".
+        period = period_of(target_date),
         # This location's peaks, and per week the nearest one (hindsight labels only).
         peaks = location_peaks, peak_index = nearest,
         peak_date = nearest_date, relative_week = relative_week,
@@ -561,10 +586,17 @@ prepare_data <- function(forecasts, vintages, settings) {
 }
 
 # Base forecasts per disease (prepare_settings$base); windowed_seasonal_forecasts.parquet
-# is written by R/00_base_forecasts.R. Both tables have the same columns.
+# and hhs_vintages_epidata.parquet are written by R/00_base_forecasts.R. Both forecast
+# tables have the same columns. Own forecasts must come from the same report filter and
+# the same HHS reports (hhs_reports_id) as the feedback.
+hhs_vintages_path <- "hhs_vintages_epidata.parquet"
+hhs_vintages <- if (prepare_settings$hhs_reports) {
+  if (!file.exists(hhs_vintages_path)) stop("No HHS reports: run Rscript R/00_base_forecasts.R.")
+  nanoparquet::read_parquet(hhs_vintages_path)
+}
 base_forecasts <- bind_rows(lapply(names(prepare_settings$base), function(disease) {
   name <- prepare_settings$base[[disease]]
-  table <- if (name == "cmu_hub") forecasts else
+  table <- if (name == "cmu_submission") forecasts else
     nanoparquet::read_parquet("windowed_seasonal_forecasts.parquet")
   table <- table[table$disease == disease, ]
   if (!nrow(table)) stop("No ", name, " forecasts for ", disease, ". See R/00_base_forecasts.R.")
@@ -572,34 +604,53 @@ base_forecasts <- bind_rows(lapply(names(prepare_settings$base), function(diseas
       (is.null(table$report_filter_id) || anyNA(table$report_filter_id) ||
         any(table$report_filter_id != report_filter_id())))
     stop("Own forecasts use another report filter. Rerun Rscript R/00_base_forecasts.R.")
+  if (name == "windowed_seasonal" && prepare_settings$hhs_reports &&
+      (is.null(table$hhs_reports_id) || !all(table$hhs_reports_id %in%
+        paste0("hhs-", unname(tools::md5sum(hhs_vintages_path))))))
+    stop("Own forecasts were not made from hhs_vintages_epidata.parquet. ",
+      "Rerun Rscript R/00_base_forecasts.R.")
+  if (name == "windowed_seasonal" && (is.null(table$forecast_id) ||
+      is.null(table$missing_rounds) || any(table$missing_rounds != 0)))
+    stop("Own ", disease, " forecasts are incomplete or without their identity (",
+      max(c(0, table$missing_rounds)), " missing rounds). Rerun Rscript R/00_base_forecasts.R: ",
+      "it forecasts the missing rounds again.")
   if (!"generation_date" %in% names(table)) table$generation_date <- as.Date(NA)
   table
 }))
-# Labels of the periods for the plots of 02, 04 and 05.
-prepare_settings$tuning_label <- if (design == "seasons")
-  paste("season", paste(prepare_settings$tuning_seasons, collapse = " and ")) else
-  paste(format(prepare_settings$start_date, "%b %Y"), "to",
-    format(prepare_settings$hub_tuning_through, "%b %Y"))
-# The last evaluation season ends in the month before the next season starts.
-evaluation_end <- as.Date(sprintf("%d-%02d-01", as.integer(substr(tail(
-  prepare_settings$evaluation_seasons, 1), 1, 4)) + 1L, prepare_settings$season_start_month)) - 1
-prepare_settings$evaluation_label <- if (design == "seasons")
-  paste("seasons", paste(prepare_settings$evaluation_seasons, collapse = " and ")) else
-  paste(format(prepare_settings$hub_tuning_through + 1, "%b %Y"), "to",
-    format(evaluation_end, "%b %Y"))
-peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings)
-dir.create("output/data", recursive = TRUE, showWarnings = FALSE)
-saveRDS(peak_aligned, "output/data/peak_aligned.rds")
+peak_aligned <- prepare_data(base_forecasts, vintages, prepare_settings, hhs_vintages)
+# Labels of the periods for the plots of 02, 04 and 05: the months of their first and last
+# target week (e.g. "Jun 2025 to Sep 2026").
+period_label <- function(period) {
+  dates <- do.call(c, lapply(peak_aligned$cases, function(case)
+    case$target_date[case$period == period]))
+  paste(format(min(dates), "%b %Y"), "to", format(max(dates), "%b %Y"))
+}
+peak_aligned$settings$tuning_label <- period_label("tuning")
+peak_aligned$settings$evaluation_label <- period_label("evaluation")
+data_dir <- file.path(shared$output_dir, "data")
+dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
+saveRDS(peak_aligned, prepared_path(shared))
 write.csv(peak_aligned$settings$report_exclusions,
-  "output/data/reviewed_report_exclusions.csv", row.names = FALSE)
+  file.path(data_dir, "reviewed_report_exclusions.csv"), row.names = FALSE)
+# Large revisions (revision_review_flags() in R/03_functions.R) only flag reports for
+# review; a report is excluded only after review, as a row of reviewed_report_exclusions().
+revision_flags <- revision_review_flags(filter_reports(as.data.frame(vintages[
+  !is.na(vintages$location), c("disease", "location", "target_end_date", "version", "value")])))
+write.csv(revision_flags, file.path(data_dir, "report_revision_flags.csv"), row.names = FALSE)
+cat("\nREVIEWED REPORT EXCLUSIONS (masked as missing reports; raw values kept)\n")
+print(peak_aligned$settings$report_exclusions[c("disease", "location", "target_end_date",
+  "version", "value", "correction_value", "reason", "cleaning")], row.names = FALSE)
+cat("\nLARGE REVISIONS (factor > 2 and >= 10 admissions between successive versions):",
+  "flags for review, not exclusions.", file.path(data_dir, "report_revision_flags.csv"), "\n")
+print(table(revision_flags$disease, revision_flags$status))
 # The feedback schedules, all locations and horizons: rows with a valid report, consumed
-# rows, rows learned from a synthetic final report, horizon -1 style rows whose first
-# report is known at their own issue (learned at the next round at the earliest), consumed
-# rows learned from a revision instead of their first report, consumed rows that waited
-# at a round after the delay because their current report was invalid, rows consumed a
-# week or more after the delay and their own issue (missing rounds, invalid reports, the
-# off-season), and rows with a valid report never consumed (the last rounds; reports
-# invalid ever since).
+# rows, rows learned from an HHS report or a synthetic final report, horizon -1 style
+# rows whose first report is known at their own issue (learned at the next round at the
+# earliest), consumed rows learned from a revision instead of their first report,
+# consumed rows that waited at a round after the delay because their current report was
+# invalid, rows consumed a week or more after the delay and their own issue (missing
+# rounds, invalid reports, the off-season), and rows with a valid report never consumed
+# (the last rounds; reports invalid ever since).
 feedback_rows <- feedback_audit(peak_aligned)
 cat("\nFEEDBACK SCHEDULES (", feedback_protocol()$id, ")\n", feedback_protocol()$cutoff, "\n",
   feedback_protocol()$vintage, "\n", sep = "")
@@ -608,6 +659,7 @@ print(do.call(rbind, lapply(split(feedback_rows, list(feedback_rows$delay,
   consumed <- !is.na(a$consumed_row)
   data.frame(disease = a$disease[1], delay = a$delay[1], rows = nrow(a),
     with_valid_report = sum(!is.na(a$first_report)), consumed = sum(consumed),
+    hhs = sum(consumed & a$selected_source %in% "hhs"),
     synthetic_final = sum(consumed & a$selected_source %in% "synthetic_final"),
     known_at_issue = sum(a$first_report <= a$issue_cutoff, na.rm = TRUE),
     learned_revision = sum(consumed & a$selected_version != a$first_report),
