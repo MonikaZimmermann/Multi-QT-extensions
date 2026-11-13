@@ -122,8 +122,8 @@ forecast but updates the unprojected state:
  &=\tilde\theta_t^\alpha-\eta(\cov_t^{\std,\alpha}-\alpha).
  \label{eq:standard-update}
 \end{align}
-For a score $S_t(y)$, let $r_t=S_t(y_t)$ be its observed value,
-$c_t$ its threshold and $\delta=1-\alpha$ the target miscoverage.
+For a score $S_t(y)$, let $r_t=S_t(y_t)$ be its observed value and
+$c_t$ its threshold; the target miscoverage is $1-\alpha$.
 The scalar score tracker of Angelopoulos et al.~\cite{pid} uses
 \begin{equation}
  \mathcal P_t=\{y:S_t(y)\le c_t\},\qquad
@@ -132,7 +132,7 @@ The scalar score tracker of Angelopoulos et al.~\cite{pid} uses
 \end{equation}
 and updates
 \begin{equation}
- c_{t+1}=c_t+\eta(\mathrm{err}_t-\delta)
+ c_{t+1}=c_t+\eta\bigl(\mathrm{err}_t-(1-\alpha)\bigr)
  =c_t-\eta\bigl(\ind\{r_t\le c_t\}-\alpha\bigr).
  \label{eq:pid-update}
 \end{equation}
@@ -373,147 +373,520 @@ with the level and break its lower-tail bound in almost every week
 (Section~\ref{sec:score-stationarity}): the exact transform keeps inward
 flow, its derivative version does not.
 
-\paragraph{Transforms of Uniejewski (2025).} Uniejewski~\cite{vst} standardizes the
-series by the median and the median absolute deviation of the
-calibration window, $z=(x-m)/s$, and applies one of: the parametrized
-asinh $\operatorname{sgn}(z)[\operatorname{asinh}(|z|+a)-
-\operatorname{asinh}(a)]$, $a=\sqrt{1/c^2-1}$, with slope $c$ at the
-origin ($c=1$: asinh); a symmetric Box-Cox
-$\operatorname{sgn}(z)\{(|z|+1)^\lambda-1\}/\lambda$; the mirror log
-$\operatorname{sgn}(z)\log(1+c|z|)$; or a PIT with a $t$ distribution,
-$G_\nu^{-1}(\hat F(x))$. With $m_t$ and $s_t$ fixed at the cutoff (here
-the base median $b_t^{.5}$ and half the base interquartile range), each
-$\psi_t(y)=T((y-m_t)/s_t)$ is strictly increasing, so all are scores of
-the form~\eqref{eq:transform-score}, with the guarantee above. Their
-derivative scales are U-shaped around $m_t$:
-$\sqrt{s_t^2+(b_t^\alpha-m_t)^2}$ for asinh, $s_t(1+|z|)^{1-\lambda}$
-for Box-Cox and $s_t/c+|b_t^\alpha-m_t|$ for the mirror log. The band
-allows that shape, and they stay in it more often than per-level Box-Cox
-scales. The empirical distribution function of the $t$-PIT is only
-nondecreasing: the score is flat between and beyond the observed values,
-so the forecast cannot leave the range of the window's counts unless
-$\hat F$ is smoothed with tails. It is the PIT of past counts, not of the
-base forecast.
-
-\paragraph{The scores at a glance.}
-Table~\ref{tab:score-summary} lists every score of these notes. Scores
-with one transform or one scale for all levels keep inward flow; per-level
-scales need the band~\eqref{eq:scale-band}. Their drift over time is
-compared in Section~\ref{sec:score-stationarity}.
-
-\begin{center}\footnotesize
-\renewcommand{\arraystretch}{1.25}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{.17\textwidth}>{\raggedright\arraybackslash}p{.28\textwidth}>{\raggedright\arraybackslash}p{.12\textwidth}>{\raggedright\arraybackslash}p{.1\textwidth}>{\raggedright\arraybackslash}p{.23\textwidth}@{}}
-\toprule
-Score & $S_t^\alpha(y)$ & Kind & Inward flow & Methods\\
-\midrule
-Identity & $y-b_t^\alpha$ & additive & always & \texttt{fixed}, \texttt{leaky}\\
-\texttt{log1p} & $\log(1+y)-\log(1+b_t^\alpha)$ & transform & always & \texttt{fixed\_\allowbreak log}, \texttt{leaky\_\allowbreak log}\\
-Square root & $\sqrt y-\sqrt{b_t^\alpha}$ & transform & always & \texttt{ref\_op}, \texttt{sqrt\_\allowbreak constant}\\
-Box-Cox & $\psi_\lambda(y)-\psi_\lambda(b_t^\alpha)$ & transform & always & ---\\
-Power of the median (Box-Cox scale at the median, $p=1-\lambda$) & $(y-b_t^\alpha)/(1+b_t^{.5})^p$ & common scale & always & \texttt{studentized\_\allowbreak power} ($p=.5$) and its mixtures\\
-Power per level & $(y-b_t^\alpha)/(1+b_t^\alpha)^p$ & per-level scale & band & ---\\
-$t$-PIT at the median & $(y-b_t^\alpha)/\sigma_{t,\mathrm{tpit}}$ & common scale & always & \texttt{studentized\_\allowbreak tpit} and its mixtures\\
-Spread per level (centred Box-Cox) & $(y-b_t^\alpha)/\sigma_{t,\mathrm{spr}}^\alpha$ & per-level scale & band & \texttt{studentized\_\allowbreak spread} and its mixtures\\
-Revisions of the base & $(y-b_t^\alpha)/\sigma_{t,\mathrm{rev}}$ & common scale & always & ---\\
-Base width & $(y-b_t^\alpha)/\sigma_{t,\mathrm{base}}$ & common scale & always & \texttt{studentized\_\allowbreak full}\\
-Median, common scale & $(y-b_t^{.5})/\sigma_t$, $\sigma_t$ residual, base width or constant & common scale & always & \texttt{studentized}, \texttt{studentized\_\allowbreak base}, \texttt{median\_\allowbreak constant}\\
-Level RMS & $(y-b_t^\alpha)/\sigma_{t,\mathrm{res}}^\alpha$ & per-level scale & band & \texttt{studentized\_\allowbreak level\_\allowbreak rms}\\
-Level RMS in the band & as above, scales projected onto~\eqref{eq:scale-band} & per-level scale & always & \texttt{studentized\_\allowbreak level\_\allowbreak band}\\
-PIT of the base & $F_{b_t}(y)-\alpha$, $F_{b_t}$ the base's distribution function & transform & always, clip aside & \texttt{studentized\_\allowbreak pit}\\
-Centred asinh, Box-Cox, mirror log & $T(z_t(y))-T(z_t(b_t^\alpha))$, $z_t(x)=(x-b_t^{.5})/s_t$ & transform & always & ---\\
-\bottomrule
-\end{tabular}
-\end{center}
-\refstepcounter{table}\label{tab:score-summary}
-\begin{center}\small Table \thetable: The scores of these notes. Kind:
-one increasing transform of $y$ and $b_t^\alpha$ (transform), one scale for
-all levels (common scale) or a scale per level. ``Band'': inward flow only
-if the scales satisfy~\eqref{eq:scale-band}. The PIT keeps its levels in
-$[10^{-4},1-10^{-4}]$; at that clip an outcome beyond the extreme base
-quantile pushes outwards. ---: not a method yet.
-\end{center}
+The transforms of Uniejewski~\cite{vst} and the other scores tested, with
+their origins, the methods that use them and whether they keep inward flow,
+are collected in Section~\ref{sec:scores-tested}.
 
 \subsubsection{What the tracker needs from a score}
 \label{sec:quantile-stability}
-Fix a level $\alpha$ and write $S_t=S_t^\alpha(y_t)$ for the realized
-score, $u_t$ for the threshold of round $t$ and $h_t=\ind\{S_t\le u_t\}$
-for its coverage. Let $\mathcal F_{t-1}$ be the information at the cutoff
-of round $t$ (the reports and forecasts known then, so also $b_t$ and
-$\sigma_t$), and
+The pathwise view of Section~\ref{sec:notation} needs no model. To see what
+a score must do for a small rate to suffice, this subsection alone treats
+the outcomes as random. Fix a level $\alpha$ and a score $S_t^\alpha$ of
+the form \eqref{eq:student-score} or \eqref{eq:transform-score}, and drop
+$\alpha$ from the notation: $r_t=S_t^\alpha(y_t)$ is the realized score,
+$\tilde u_t$ the hidden threshold, $u_t$ its projected version and
+$\cov_t=\ind\{r_t\le u_t\}$ the coverage, as in
+\eqref{eq:student-inversion}. Leave out the projection and the feedback
+delay, which change the round at which $\cov_t$ enters but not the
+argument, so that $u_t=\tilde u_t$. Let $\mathcal I_t$ be the information
+at the cutoff of round $t$ (the reports and forecasts known then, so also
+$b_t$ and $\sigma_t$), and
 \[
- F_t(s)=P(S_t\le s\mid\mathcal F_{t-1})
+ F_t(s)=P(r_t\le s\mid\mathcal I_t),\qquad u_t^\star=F_t^{-1}(\alpha),
 \]
-the conditional distribution function of the score. Leaving out the
-projection and the feedback delay, which change the round at which $h_t$
-enters but not the argument, the update~\eqref{eq:student-update} is
+the conditional distribution function of the score and its conditional
+$\alpha$-quantile, with density $f_t=F_t'$. The update
+\eqref{eq:student-update} is
 \begin{equation}
- u_{t+1}=u_t+\eta(\alpha-h_t),\qquad
- \mathbb E\bigl[u_{t+1}-u_t\mid\mathcal F_{t-1}\bigr]=\eta\bigl(\alpha-F_t(u_t)\bigr).
+ \tilde u_{t+1}=\tilde u_t+\eta(\alpha-\cov_t),\qquad
+ \mathbb E\bigl[\tilde u_{t+1}-\tilde u_t\mid\mathcal I_t\bigr]
+ =\eta\bigl(\alpha-F_t(\tilde u_t)\bigr).
  \label{eq:mean-step}
 \end{equation}
-The mean step depends on $F_t$ only through its value at $u_t$: it is
-zero at the conditional $\alpha$-quantile $q_t^\star=F_t^{-1}(\alpha)$,
-positive below it and negative above it. The tracker is a stochastic
-approximation of the root $q_t^\star$ and uses nothing else of $F_t$.
+The mean step depends on $F_t$ only through its value at $\tilde u_t$: it
+is zero at $u_t^\star$, positive below it and negative above it. The
+tracker is a stochastic approximation of the root
+$u_t^\star$~\cite{robbins-monro}: its step is the subgradient
+\eqref{eq:score-gradient} of the quantile loss, whose expectation is
+minimized at the conditional quantile~\cite{koenker-bassett}, and it uses
+nothing else of $F_t$. The same recursion is the adaptive specification of
+CAViaR~\cite{caviar}; adaptive conformal inference~\cite{aci} applies it to
+the level of a conformal quantile.
 
 \paragraph{Quantile stability.} Call the score quantile-stable at level
-$\alpha$ if $q_t^\star=q^\star$ for every $t$. The mean, spread, shape and
+$\alpha$ if $u_t^\star=u^\star$ for every $t$. The mean, spread, shape and
 the other quantiles of $F_t$ may change; only the $\alpha$-quantile must
 stay put. Stationarity, the same $F_t$ in every round, is far stronger.
-Under quantile stability every round has the same target. If $F_t$
-rises through $\alpha$ at $q^\star$ with slope at least $f>0$ in every
-round, the mean step~\eqref{eq:mean-step} points towards $q^\star$ from
-both sides, and $u_t$ settles near $q^\star$, fluctuating with an amplitude
-of order $\sqrt\eta$; with decreasing steps ($\sum_t\eta_t=\infty$,
-$\sum_t\eta_t^2<\infty$) it converges to $q^\star$ (Robbins and
-Monro~\cite{robbins-monro}). Coverage then holds round by round, not only
-on average: $P(h_t=1\mid\mathcal F_{t-1})=F_t(u_t)\approx
-\alpha+f_t(q^\star)(u_t-q^\star)$.
+Under quantile stability every round has the same target. If
+$f_t(u^\star)\ge f>0$ in every round, the mean step~\eqref{eq:mean-step}
+points towards $u^\star$ from both sides: with decreasing steps
+($\sum_t\eta_t=\infty$, $\sum_t\eta_t^2<\infty$) $\tilde u_t$ converges to
+$u^\star$~\cite{robbins-monro,tierney}; with a constant rate it settles near
+$u^\star$ and fluctuates around it. Coverage then holds round by round, not
+only on average: $P(\cov_t=1\mid\mathcal I_t)=F_t(\tilde u_t)\approx
+\alpha+f_t(u^\star)(\tilde u_t-u^\star)$.
+
+\paragraph{Why the fluctuation is of order $\sqrt\eta$.} Write
+$e_t=\tilde u_t-u^\star$ for the error of the threshold and
+$\xi_t=\cov_t-F_t(\tilde u_t)$ for the surprise in the coverage, a
+martingale difference with conditional variance
+$F_t(\tilde u_t)\{1-F_t(\tilde u_t)\}\approx\alpha(1-\alpha)$. Near the
+root $F_t(\tilde u_t)\approx\alpha+fe_t$, and the update becomes
+\begin{equation}
+ e_{t+1}=e_t-\eta\bigl(F_t(\tilde u_t)-\alpha\bigr)-\eta\xi_t
+ \approx(1-\eta f)\,e_t-\eta\xi_t,
+ \label{eq:threshold-ar}
+\end{equation}
+an autoregression with coefficient $1-\eta f$ and innovations of standard
+deviation $\eta\sqrt{\alpha(1-\alpha)}$. Its stationary variance is
+\begin{equation}
+ \operatorname{Var}(e_t)\approx\frac{\eta^2\alpha(1-\alpha)}{1-(1-\eta f)^2}
+ =\frac{\eta\,\alpha(1-\alpha)}{f\,(2-\eta f)}
+ \approx\frac{\eta\,\alpha(1-\alpha)}{2f}.
+ \label{eq:threshold-variance}
+\end{equation}
+Each step has size $\eta\alpha$ or $\eta(1-\alpha)$ and a random sign, and
+the pull towards $u^\star$ removes the share $\eta f$ of the error per
+round, so the threshold remembers about $1/(\eta f)$ rounds; a random walk
+of $1/(\eta f)$ steps of size $\eta$ spreads by
+$\eta/\sqrt{\eta f}=\sqrt{\eta/f}$. In coverage the error is $fe_t$, with
+standard deviation $\sqrt{\eta f\alpha(1-\alpha)/2}$: calibrated on
+average, the coverage of a given round differs from $\alpha$ by an amount
+that shrinks only like $\sqrt\eta$. This is the stationary behaviour of
+constant-step stochastic approximation: the iterates form a Markov chain
+whose stationary distribution concentrates at the root with a spread of
+order $\sqrt\eta$~\cite{kushner-yin,dieuleveut}.
 
 \paragraph{A moving quantile.} Without quantile stability the tracker
-chases a moving root. With $e_t=u_t-q_t^\star$ and a slope $f_t\approx f$
-near the root, \eqref{eq:mean-step} gives to first order
+chases a moving root. With $e_t=\tilde u_t-u_t^\star$ and the move of the
+root $\Delta_t=u_{t+1}^\star-u_t^\star$, \eqref{eq:threshold-ar} gives to
+first order
 \begin{equation}
- \mathbb E[e_{t+1}\mid\mathcal F_{t-1}]\approx(1-\eta f)\,e_t-(q_{t+1}^\star-q_t^\star).
+ \mathbb E[e_{t+1}\mid\mathcal I_t]\approx(1-\eta f)\,e_t-\Delta_t.
  \label{eq:tracking-lag}
 \end{equation}
-A root that moves by $d$ per round leaves the threshold behind by
-$d/(\eta f)$, a coverage error of about $|d|/\eta$, while the noise grows
-like $\sqrt\eta$: the rate trades lag against noise, as in the rate grid
-of Section~\ref{sec:results-fixed-rates}. A scale $\sigma_t$ that keeps
-$q_t^\star$ constant removes the lag and lets the rate be small; this is
-what the choice of scale is for.
+A root that moves by $\Delta$ per round leaves the threshold behind by
+$\Delta/(\eta f)$, a coverage error of about $|\Delta|/\eta$, while the
+noise~\eqref{eq:threshold-variance} grows like $\sqrt\eta$. The mean squared
+error of the threshold, $\eta\alpha(1-\alpha)/(2f)+\Delta^2/(\eta f)^2$, is
+smallest at
+\[
+ \eta^\star=\Bigl(\frac{4\Delta^2}{f\,\alpha(1-\alpha)}\Bigr)^{1/3}:
+\]
+the rate trades lag against noise, as in the rate grid of
+Section~\ref{sec:results-fixed-rates}; the best rate grows with the drift
+and depends on the density $f$ of the score, so on its scale. This
+lag--noise trade-off of constant steps is classical in adaptive
+filtering~\cite{widrow-lms,benveniste}; for the step size of adaptive
+conformal inference Zaffran et al.~\cite{agaci} and Gibbs and
+Cand\`es~\cite{dtaci} combine several step sizes by expert weighting, as
+the rate-grid mixtures do here. A scale $\sigma_t$ that keeps $u_t^\star$
+constant sets $\Delta=0$, removes the lag and lets the rate be small; this
+is what the choice of scale is for. A rate proportional to the spread of
+the recent errors, $\eta_t\propto1/f$ like Delphi's adaptive
+rate~\eqref{eq:ref-op-rates}, keeps both terms proportional to that spread:
+the same trade-off at every level of incidence, but no adaptation to the
+drift $\Delta$.
 
-\paragraph{What the drift ratio tests.} Under quantile stability, the
-hits of the constant threshold, $h_t^\star=\ind\{S_t\le q^\star\}$, satisfy
-$\mathbb E[h_t^\star\mid\mathcal F_{t-1}]=\alpha$: $h_t^\star-\alpha$ is a martingale
-difference sequence, uncorrelated over time with conditional variance
-$\alpha(1-\alpha)$, so its window averages vary as much as those of
-independent draws, or of the same hits in permuted order. The drift ratio
-of Section~\ref{sec:score-stationarity}, with the hindsight
-$\alpha$-quantile in place of $q^\star$, is then close to one. A moving
+\paragraph{What the drift ratio tests.} Under quantile stability, the hits
+of the constant threshold, $\cov_t^\star=\ind\{r_t\le u^\star\}$, satisfy
+$\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$: $\cov_t^\star-\alpha$ is
+a martingale difference sequence, uncorrelated over time with conditional
+variance $\alpha(1-\alpha)$, so its window averages vary as much as those
+of independent draws, or of the same hits in permuted order. The drift
+ratio of Section~\ref{sec:score-stationarity}, with the hindsight
+$\alpha$-quantile in place of $u^\star$, is then close to one. A moving
 root and misses that come in runs both break
-$\mathbb E[h_t^\star\mid\mathcal F_{t-1}]=\alpha$ and raise it. This is the
+$\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$ and raise it. This is the
 conditional-coverage hypothesis of hit-sequence backtests
-(Christoffersen~\cite{christoffersen}; Engle and
-Manganelli~\cite{caviar}).
+(Christoffersen~\cite{christoffersen}; the dynamic quantile test of Engle
+and Manganelli~\cite{caviar}).
 
 \paragraph{Why MultiQT is still needed.} Quantile stability makes the
-target constant, not known. The base is calibrated at level $\alpha$
-only if $q^\star=0$ ($S_t\le0$ exactly when $y_t\le b_t^\alpha$); its
-miscalibration is the unknown $q^\star$, which has to be learned from the
+target constant, not known. The base is calibrated at level $\alpha$ only
+if $u^\star=0$ ($r_t\le0$ exactly when $y_t\le b_t^\alpha$); its
+miscalibration is the unknown $u^\star$, which has to be learned from the
 reports as they arrive. Under quantile stability the natural estimator is
 the empirical $\alpha$-quantile of all past scores, which the tracker
 approaches with decreasing steps; a static recalibration
-$q_t^\alpha=b_t^\alpha+\sigma_t\hat q^\star$, as in split conformal
-prediction, would then be enough. A constant rate gives up some of that
-efficiency in exchange for following the drift the scale leaves behind,
-and its guarantee (Section~\ref{sec:notation}) needs no stability at all;
-the projection also keeps the levels ordered. A good scale thus turns the
-tracker's task from tracking a moving target into estimating a constant,
-and the tracker remains the safeguard where the scale falls short.
+$q_t^\alpha=b_t^\alpha+\sigma_t\hat u^\star$, as in split conformal
+prediction with normalized scores~\cite{lei-conformal}, would then be
+enough. A constant rate gives up some of that efficiency in exchange for
+following the drift the scale leaves behind, and its guarantee
+(Section~\ref{sec:notation}) needs no stability at all; the projection also
+keeps the levels ordered. A good scale thus turns the tracker's task from
+tracking a moving target into estimating a constant, and the tracker
+remains the safeguard where the scale falls short.
+
+\paragraph{Relation to the literature.} Each piece of this subsection is
+standard: the stochastic approximation of a
+quantile~\cite{robbins-monro,tierney}, the $\sqrt\eta$ noise and the
+$\Delta/\eta$ lag of constant steps~\cite{widrow-lms,benveniste,kushner-yin},
+and the hit-sequence tests~\cite{christoffersen,caviar}. As far as we know,
+using quantile stability as the criterion for choosing the score of the
+tracker (Section~\ref{sec:score-stationarity}) is the only addition.
+
+\subsection{The leak as a ridge penalty}
+\label{sec:leak-ridge}
+Delphi's leak (\texttt{leaky}, \eqref{eq:leaky-update}) shrinks the hidden
+state by the share $\delta$ before each update. For one level and one
+report per round, leaving out the projection,
+\begin{equation}
+ \tilde\theta_{t+1}=(1-\delta)\tilde\theta_t-\eta g_t,\qquad g_t=\cov_t-\alpha.
+ \label{eq:leak-update}
+\end{equation}
+This is exactly the subgradient step with step $\eta$ on the quantile loss
+plus a ridge penalty:
+\begin{equation}
+ \ell_t^\lambda(\theta)=\rho_\alpha(b_t+\theta,y_t)+\frac\lambda2\theta^2,
+ \qquad
+ \tilde\theta_t-\eta\bigl(g_t+\lambda\tilde\theta_t\bigr)
+ =(1-\eta\lambda)\tilde\theta_t-\eta g_t,\qquad \delta=\eta\lambda.
+ \label{eq:leak-ridge}
+\end{equation}
+Over all levels the penalty is $\frac\lambda2\norm{\tilde\theta}^2$, and
+the projection is unchanged; for a studentized score the same holds for
+$\tilde u_t$ in units of $\sigma_t$. The leak is thus weight decay, a
+Tikhonov penalty that pulls the correction towards zero, that is towards
+the base. In adaptive filtering the same device is the leaky LMS
+algorithm, which minimizes the mean squared error plus a ridge
+term~\cite{leaky-lms}. Four consequences:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item \textbf{Bounded correction.} Since $|g_t|\le\max(\alpha,1-\alpha)$,
+\eqref{eq:leak-update} started at zero keeps
+$|\tilde\theta_t|\le(\eta/\delta)\max(\alpha,1-\alpha)
+=\max(\alpha,1-\alpha)/\lambda$: with $\delta=.1$ and $\eta=\kappa S_0$ no
+level moves by more than $10\kappa S_0\max(\alpha,1-\alpha)$ (more only
+when several reports arrive in one round).
+\item \textbf{Shrinkage.} In expectation the leaky tracker settles where
+$\alpha-F_t(\theta)=\lambda\theta$ ($F_t$ the conditional distribution of
+the residual $y_t-b_t^\alpha$, as in Section~\ref{sec:quantile-stability}):
+not at the $\alpha$-quantile $\theta^\star$ of the residual but between it
+and the base. With density $f$ at $\theta^\star$,
+$\theta_\lambda\approx\theta^\star/(1+\lambda/f)$: the leak keeps the share
+$1/(1+\lambda/f)$ of the correction the base needs and trades calibration
+for stability.
+\item \textbf{Finite memory.} Unrolled from zero,
+$\tilde\theta_t=-\eta\sum_{s<t}(1-\delta)^{t-1-s}g_s$, an exponentially
+weighted sum of the past coverage errors with effective memory
+$1/\delta=10$ rounds (half-life $\log2/(-\log.9)\approx6.6$ rounds). The
+weekly starts of \texttt{restart\_recent}, which keep the last eight
+copies, are a sharp-cutoff version of the same idea.
+\item \textbf{Bayesian view.} With the asymmetric Laplace likelihood
+$p(y_t\mid\theta)\propto\exp\{-\rho_\alpha(b_t+\theta,y_t)/\tau\}$ of
+Bayesian quantile regression~\cite{yu-moyeed} and the prior
+$\theta\sim N(0,\tau/\lambda)$, $\ell_t^\lambda/\tau$ is the negative log
+posterior of one round: the leaky tracker is an online stochastic-gradient
+estimate of the posterior mode, with the prior centred at the base, and
+$\lambda$ is the prior precision relative to the likelihood scale $\tau$.
+\end{itemize}
+
+\paragraph{Choosing the penalty.} The leak has one parameter,
+$\lambda=\delta/\eta$; Delphi fixes $\delta=.1$. Three routes:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item \textbf{Criteria for the batch problem.} On a window of $W$ rounds,
+the constant correction minimizing
+$\sum_s\rho_\alpha(b_s+\theta,y_s)+\frac\lambda2W\theta^2$ is a
+ridge-penalized quantile regression with an intercept only; $\lambda$ could
+be chosen by the Schwarz criterion with the number of interpolated
+observations as degrees of freedom~\cite{koenker-ng-portnoy}, by
+generalized approximate cross-validation~\cite{yuan-gacv}, or through a
+prior on $\lambda$ in the Bayesian model~\cite{li-xi-lin}. With one offset
+per level and 20 rounds these criteria have little to choose from (the
+effective degrees of freedom lie between 0 and 1); they would matter if
+the correction had more parameters, for example one per season phase.
+\item \textbf{Prequential choice}, the natural one online: replay the
+tracker over the last 20 rounds for a small grid of $\delta$ and keep the
+value whose issued forecasts had the smallest quantile loss, re-chosen
+every week~\cite{dawid-prequential}: a rolling tuning without a separate
+tuning season.
+\item \textbf{Mixtures}: run leaky trackers with several $\delta$ as
+experts and weight them by their recent losses, as the rate-grid mixtures
+do for $\eta$ (Section~\ref{sec:expert-weighting}).
+\end{itemize}
+With an adaptive rate $\eta_t$, a fixed $\delta$ means the penalty
+$\lambda_t=\delta/\eta_t$, which weakens when the errors grow; a fixed
+ridge penalty needs $\delta_t=\lambda\eta_t$ instead. REF-op
+(Section~\ref{sec:reference-benchmarks}) penalizes only its fast offset;
+its slow offset is unpenalized, so the ridge decides how much of the
+correction the fast part may hold.
+
+\subsection{Revised reports as labels: corrected labels}
+\label{sec:corrected-labels}
+The update \eqref{eq:standard-update} uses the outcome only through the
+coverage indicator. With delayed feedback
+(Section~\ref{sec:feedback-designs}) that indicator is computed from the
+report current when row $s$ is learned, which is revised later, while the
+forecasts are scored against the latest count, $Y_s$. The pathwise
+guarantee of Section~\ref{sec:notation} holds for the sequence the tracker
+learns from: at delay 0 the tracker is calibrated for first reports, not
+for $Y_s$. First reports are low (median $0.93$ of the latest count,
+Section~\ref{sec:results-feedback}), so the tracker learns to forecast too
+low. Delay 1 improves the labels at the cost of one week; the weekly
+re-run improves those of older rows but learns the newest from its first
+report. This subsection keeps the timing of delay 0 and corrects the label
+instead: the indicator of a young report is replaced by the probability
+that the count lies at or below the forecast, given the reports.
+
+\paragraph{Reports as measurements of one count.} The reports of a target
+week are not independent draws around $Y_s$. They are nested (a later
+report adds late admissions to an earlier one) and almost always low: on
+the horizon-0 rows of the 10 states, $2$--$3\%$ of first reports lie above
+the latest count, and the median ratio of first report to latest count is
+$0.91$--$0.94$ up to peaks, after peaks and elsewhere, and $0.97$--$0.99$
+one week later. In the terms of the literature on data
+revisions~\cite{mankiw-shapiro}, the reports are neither \emph{noise}
+(count plus an independent error) nor \emph{news} (the best estimate so
+far, with unpredictable revisions): the revisions are predictable, the
+right truncation that epidemic nowcasting
+models~\cite{hoehle-nowcasting,nobbs}. A report of age $a$ (days since the
+row's first report), $y_s^{(a)}$, is thus a measurement of $Y_s$ whose
+error depends on $a$ and can be learned from rows whose reports have
+matured.
+
+\paragraph{Corrected labels.} Let $\mathcal I_s$ be everything published
+by the cutoff at which row $s$ is learned; $q_s$ was issued earlier and is
+part of it. Replace the indicator by a probability
+$\hat p_s(z)\approx P(Y_s\le z\mid\mathcal I_s)$ at the issued forecast:
+\begin{equation}
+ \tilde\theta^\alpha\leftarrow\tilde\theta^\alpha
+ -\eta\bigl(\hat p_s(q_s^\alpha)-\alpha\bigr).
+ \label{eq:corrected-update}
+\end{equation}
+The test below estimates $\hat p_s$ from the location's own revisions:
+for the last $K$ rows $j$ whose first report is at least $M$ weeks old at
+the cutoff $\iota$, with $y_j^{(a)}$ their report at the age of
+$y_s^{(a)}$ and $y_j^{[\iota]}$ their current report,
+\begin{equation}
+ d_j=\log\frac{1+y_j^{[\iota]}}{1+y_j^{(a)}},\qquad
+ \tilde y_{s,j}=(1+y_s^{(a)})\,e^{d_j}-1,\qquad
+ \hat p_s(z)=\frac1K\sum_j\ind\{\tilde y_{s,j}\le z\},
+ \label{eq:corrected-label}
+\end{equation}
+with $K=26$ and $M=2$; a report at least $M$ weeks old, or one with fewer
+than $8$ matured rows behind it, keeps its indicator. The plausible counts
+$\tilde y_{s,j}$ are samples of the unknown count, drawn from the current
+report and the past revisions rather than from the successive reports
+themselves. Three properties make \eqref{eq:corrected-update} an ordinary
+MultiQT step in disguise: it is the average of $K$ standard steps, one per
+plausible count, each with rate $\eta/K$; $\hat p_s$ is nondecreasing in
+$z$, so the levels stay ordered; and $\hat p_s$ is $1$ above every
+plausible count and $0$ below, so the state is pushed back as with bounded
+outcomes. Since first reports are lower bounds, a first report above
+$q_s^\alpha$ gives $\hat p_s(q_s^\alpha)=0$ in practice: the miss is known
+at once, as for a right-censored observation in censored quantile
+regression~\cite{portnoy}, and only ``covered'' is uncertain. A nowcasting
+model~\cite{hoehle-nowcasting,nobbs} could replace
+\eqref{eq:corrected-label}.
+
+\paragraph{Later reports.} Two ways bring in the reports that arrive later.
+(i) \emph{Corrected now, replaced at delay $d$} (stateful): learn
+\eqref{eq:corrected-update} at $\tau_0(s)$ and, at $\tau_d(s)$, take the
+step
+\begin{equation}
+ \tilde\theta^\alpha\leftarrow\tilde\theta^\alpha-\eta\Bigl(
+ \ind\bigl\{y_s^{[\iota_{\tau_d(s)}]}\le q_s^\alpha\bigr\}
+ -\hat p_s(q_s^\alpha)\Bigr).
+ \label{eq:corrected-replacement}
+\end{equation}
+Since $q_s$ is the issued forecast, the two steps add up to the delay-$d$
+step \eqref{eq:delayed-standard-update}: the corrected label moves part of
+it forward. This is the reduction of delayed to optimistic online
+learning~\cite{flaspohler}, with the expected step of a row whose feedback
+is outstanding as the hint.
+(ii) \emph{Re-run with corrected labels}: in
+\eqref{eq:rerun-standard-update}, rows whose current report is younger
+than $M$ weeks take $\hat p_s$ from that report instead of the indicator.
+
+\begin{proposition}[Coverage with corrected labels]
+\label{prop:corrected-labels}
+Fix a level $\alpha$ and number the learned rows $s=1,\dots,n$ in the
+order they are learned. Row $s$ is learned once, with a label
+$\ell_s\in[0,1]$ (a corrected label $\hat p_s(q_s^\alpha)$ or an
+indicator), and $C_s=\ind\{Y_s\le q_s^\alpha\}$ is its coverage of the
+count it is scored against. If the hidden state stays bounded,
+$|\tilde\theta_t^\alpha|\le B$, then
+\begin{equation}
+ \frac1n\sum_{s=1}^n(C_s-\alpha)
+ =\underbrace{\frac1n\sum_{s=1}^n(\ell_s-\alpha)}_{\text{tracker term}}
+ +\underbrace{\frac1n\sum_{s=1}^n(C_s-\ell_s)}_{\text{label error }\bar e_n},
+ \label{eq:corrected-decomposition}
+\end{equation}
+and:
+\begin{enumerate}[label=(\alph*),leftmargin=*,itemsep=2pt]
+\item the tracker term is at most $2B/(\eta n)$ in absolute value, for
+every sequence of labels and counts;
+\item if the labels are calibrated, $E[C_s\mid\mathcal I_s]=\ell_s$, then
+$E[\bar e_n]=0$; if moreover $Y_s$ is known by the time row $s+L$ is
+learned ($C_s$ is $\mathcal I_{s+L}$-measurable), then
+$\operatorname{Var}(\bar e_n)\le(2L+1)/(4n)$, so the coverage of the
+latest counts approaches $\alpha$ up to a label error of order
+$\sqrt{L/n}$;
+\item with the indicator of the first report,
+$\ell_s=\ind\{y_s^{(0)}\le q_s^\alpha\}$,
+\[
+ \bar e_n=\frac1n\#\{s:Y_s\le q_s^\alpha<y_s^{(0)}\}
+ -\frac1n\#\{s:y_s^{(0)}\le q_s^\alpha<Y_s\},
+\]
+so with low first reports the coverage of the latest counts falls short
+of $\alpha$ by the share of rows whose quantile lies between the first
+report and the count;
+\item with the replacement (i), the rows replaced so far carry the net
+label $\ind\{y_s^{[\iota_{\tau_d(s)}]}\le q_s^\alpha\}$, and their
+tracker term is at most $(2B/\eta+P)/n$ with $P$ rows still pending: the
+long-run coverage is that of delay $d$, with the label error of the
+delay-$d$ report.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+The hidden state is not projected, so learning row $s$ moves it by
+$-\eta(\ell_s-\alpha)$, and
+$\tilde\theta_{\mathrm{end}}^\alpha-\tilde\theta_1^\alpha
+=-\eta\sum_s(\ell_s-\alpha)$; with $|\tilde\theta^\alpha|\le B$ this
+gives (a). For (b), $\ell_s$ is $\mathcal I_s$-measurable, so
+$E[C_s-\ell_s]=E\bigl[E[C_s\mid\mathcal I_s]-\ell_s\bigr]=0$. Let
+$\xi_s=C_s-\ell_s$; then $E[\xi_s\mid\mathcal I_s]=0$ and
+$\operatorname{Var}(\xi_s)=E[\ell_s(1-\ell_s)]\le1/4$. For $s'>s+L$,
+$\xi_s$ is $\mathcal I_{s'}$-measurable, so
+$E[\xi_s\xi_{s'}]=E\bigl[\xi_s\,E[\xi_{s'}\mid\mathcal I_{s'}]\bigr]=0$.
+At most $n(2L+1)$ ordered pairs have $|s-s'|\le L$, each with
+$|E[\xi_s\xi_{s'}]|\le1/4$ by Cauchy--Schwarz, so
+$\operatorname{Var}(\sum_s\xi_s)\le n(2L+1)/4$. In (c), $C_s-\ell_s$ is
+$1$ when $Y_s\le q_s^\alpha<y_s^{(0)}$, $-1$ when
+$y_s^{(0)}\le q_s^\alpha<Y_s$ and $0$ otherwise. In (d), the two steps of
+a replaced row add up to
+$-\eta(\ind\{y_s^{[\iota_{\tau_d(s)}]}\le q_s^\alpha\}-\alpha)$, and each
+pending row contributes at most $1$ in absolute value.
+\end{proof}
+
+\begin{remark}
+The bound $B$ is where the counts enter. For one level without projection
+(the quantile tracker of~\cite{pid}), if every plausible count lies within
+$R$ of the base, an offset above $R$ takes only downward steps, except for
+rows issued before it got there, so the state stays within $R$ plus the
+steps of the rows still pending. For MultiQT, Theorem~1
+of~\cite{multiqt} bounds the hidden state for outcomes within $R$ of the
+base; a corrected step is an average of such steps, and we expect their
+argument to carry over, but we have not re-derived its constants. Part
+(a) is pathwise, like Section~\ref{sec:notation}. Part (b) is the only
+probabilistic statement, and it concerns the revision model, not the
+counts: a miscalibrated $\hat p$ shifts the long-run coverage by its
+average calibration error
+$\frac1n\sum_s(E[C_s\mid\mathcal I_s]-\ell_s)$, which can be checked on
+past rows (below).
+\end{remark}
+
+\paragraph{Where the pieces come from.}
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item \textbf{Unbiased steps.} The decomposition
+\eqref{eq:corrected-decomposition} into a pathwise tracker term and a
+martingale-difference label error is the standard analysis of stochastic
+approximation with noisy, unbiased steps~\cite{robbins-monro,kushner-yin}.
+Condition (b) asks that the corrected step be an unbiased estimate, given
+$\mathcal I_s$, of the step with $Y_s$; replacing the indicator by its
+conditional expectation also lowers the variance of the step
+(Rao--Blackwell).
+\item \textbf{Delayed feedback.} In online learning the regret grows with
+the delay~\cite{joulani}; optimistic hints for the rounds whose feedback
+is outstanding recover part of it~\cite{flaspohler}, there for subseasonal
+climate forecasts. (i) is that reduction with the corrected step as the
+hint.
+\item \textbf{Corrupted feedback.} Online conformal prediction whose
+coverage indicators are flipped by an unknown process keeps a long-run
+guarantee by compensating the expected flips~\cite{corrupted-feedback}. A
+low first report flips ``missed'' to ``covered'' whenever the quantile
+lies between report and count, as in (c).
+\item \textbf{Labels that arrive late.} In online advertising a
+conversion can follow a click by weeks; the label is modelled jointly with
+its delay rather than taken at face value~\cite{chapelle}.
+\item \textbf{Lower bounds and nowcasts.} Censored quantile regression
+uses lower bounds as observations~\cite{portnoy}; nowcasting models give
+the distribution of the count from incomplete
+reports~\cite{hoehle-nowcasting,nobbs}.
+\item \textbf{Delphi.} Delphi's calibration notebooks compare learning
+from finalized values, from the value at the reveal round (stateful) and
+the weekly re-run (E00), extra delays of 0 to 3 weeks at each rate (E09),
+and the gap between the learned and the final value (E21); production
+re-runs with one extra week. None corrects the learned value; Delphi's
+NHSN nowcasts (an evaluation of the \texttt{baselinenowcast} package) and
+revision-aware forecasters are separate from the
+tracker~\cite{delphi-calibration}.
+\end{itemize}
+We have not found the combination, a nowcast of the count as the
+tracker's label with coverage of the latest counts, in this literature or
+in Delphi's code; each piece is standard.
+
+\paragraph{First test.} Fixed MultiQT at equal rates in the three designs,
+the corrected variants and a hindsight reference that learns the latest
+count at the timing of delay 0; the 10 states, horizons $-1$ to $3$,
+evaluation period, scored against the latest counts, cases weighted by
+their weeks as in script 02. Table~\ref{tab:corrected-labels} gives the
+overall change of loss and calibration error in \% of the base's
+(negative is better).
+
+\begin{table}[ht]
+\centering\small
+\caption{Corrected labels: overall loss and calibration error (CE) change
+versus the base (\%), Fixed MultiQT at equal rates $\kappa$.}
+\label{tab:corrected-labels}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & \multicolumn{4}{c}{COVID} & \multicolumn{4}{c}{Flu}\\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+ & \multicolumn{2}{c}{$\kappa=.01$} & \multicolumn{2}{c}{$\kappa=.03$}
+ & \multicolumn{2}{c}{$\kappa=.01$} & \multicolumn{2}{c}{$\kappa=.03$}\\
+Design & loss & CE & loss & CE & loss & CE & loss & CE\\
+\midrule
+delay 0 & $+4.0$ & $+15$ & $+9.7$ & $-3$ & $+0.9$ & $-45$ & $+6.7$ & $-33$\\
+delay 1 & $+3.4$ & $-25$ & $+11.5$ & $-38$ & $+1.2$ & $-55$ & $+8.4$ & $-46$\\
+re-run & $+3.0$ & $-38$ & $+9.7$ & $-46$ & $+1.1$ & $-51$ & $+7.1$ & $-53$\\
+delay 0, corrected labels & $+2.5$ & $-32$ & $+8.8$ & $-52$ & $+1.0$ & $-47$ & $+6.8$ & $-56$\\
+(i) corrected, replaced at delay 1 & $+2.8$ & $-26$ & $+9.5$ & $-40$ & $+0.9$ & $-57$ & $+6.9$ & $-52$\\
+(ii) re-run, corrected labels & $+2.9$ & $-39$ & $+9.2$ & $-55$ & $+1.1$ & $-47$ & $+7.1$ & $-54$\\
+\midrule
+delay 0, latest counts (hindsight) & $+3.2$ & $-36$ & $+10.5$ & $-54$ & $+1.2$ & $-45$ & $+7.1$ & $-60$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item \textbf{The corrected labels are calibrated.} At the base quantiles
+of the evaluation rows, the label error $\bar e_n$, averaged in absolute
+value over the levels, is $.009$ (COVID) and $.007$ (flu), against $.051$
+and $.045$ for the first report and $.022$ and $.024$ for the report one
+week later.
+\item \textbf{Learned at delay 0, they calibrate like the re-run or
+better and lose least overall.} For COVID at $\kappa=.03$: CE $-52\%$
+against $-3\%$ (delay 0), $-38\%$ (delay 1) and $-46\%$ (re-run), loss
+$+8.8\%$ against $+9.7\%$, $+11.5\%$ and $+9.7\%$. Over
+$\kappa=.005,.01,.03,.1$ and both diseases they beat delay 1 on CE in 6 of
+8 cells (not flu at $\kappa\le.01$) and on loss in 7 of 8, and come close
+to the hindsight reference.
+\item \textbf{(i) calibrates like delay 1}, as
+Proposition~\ref{prop:corrected-labels}(d) says: its long-run label is the
+report one week later, still $1$--$3\%$ low. It loses less than delay 1
+(COVID at $\kappa=.03$: $+9.5\%$ against $+11.5\%$).
+\item \textbf{(ii) improves the re-run a little}: COVID CE $-39\%$ and
+$-55\%$ against $-38\%$ and $-46\%$; flu only from $\kappa=.03$ on.
+\item \textbf{After peaks the corrected labels lose what delay 0 gains
+there.} Delay 0's low labels push its forecasts down, which helps when
+the base is too high; with corrected labels the after-peak scores are
+those of the re-run (COVID at $\kappa=.01$: $+7.1\%$ loss against $+4.7\%$
+at delay 0 and $+8.1\%$ in the re-run; hindsight reference $+8.9\%$).
+The late reaction after peaks is the dead time of $h+1$ weeks between the
+newest reported week and the target, which no label removes.
+\end{itemize}
+\emph{Plots and scripts.}
+\path{agent/outputs/soft_labels/soft_labels_tradeoff.pdf}: loss change
+against CE along the rates, per disease and phase;
+\path{agent/outputs/soft_labels/soft_labels_examples.pdf}: four example
+cases (COVID California and Texas, flu California and New York, $h=2$).
+\path{agent/scripts/soft_labels/run.R} (with checks against
+\texttt{multiqt()} and the re-run of R/03),
+\path{agent/scripts/lib/soft_labels.R}. Not in R/; open choices are $K$,
+$M$, pooling the revisions over states and a nowcasting model for
+$\hat p$.
 
 \subsection{Questions and ideas}
 Which property of the base forecast should another score recalibrate?
@@ -535,6 +908,50 @@ a longer history (the \texttt{windowed\_seasonal} base starts in October
 rates, compare with the untuned adaptive rates
 (Section~\ref{sec:reference-benchmarks}), and recheck the comparisons of
 methods once the tuning is settled.
+
+\paragraph{Towards untuned rates.} The results support dropping the
+tuning, but not for Delphi's adaptive rate as such. For dropping it: one
+tuning season asks for rates that are too large (above); the elbow rule is
+unstable, pooling 10 states instead of 52 locations moved Fixed MultiQT's
+COVID rate at delay 0 from $.01$ to $.1$, and several methods sit at the
+edge of their grids (Table~\ref{tab:tuned-rates}); a small rate does
+better without tuning: Fixed MultiQT at $\kappa=.01$, the low end of the
+grid of script 02, beats the tuned Fixed MultiQT on both loss and
+calibration error in every flu design and loses 15 to 42 points less for
+COVID, at a smaller calibration gain
+(Tables~\ref{tab:fixed-rate-summary} and~\ref{tab:results-trackers}).
+Delphi's adaptive rate is not what helps: it is the fixed multiplier $.03$
+on a rolling $S_0$, the 90\% quantile of the last 20 absolute errors, so it
+adapts to the size of the errors, not to their drift
+(Section~\ref{sec:quantile-stability}). On counts it raises the rate at
+the peaks, where the errors are largest, and \texttt{fixed\_adaptive} is
+beaten on both loss and calibration error by Fixed MultiQT at $\kappa=.01$
+in all six cells (COVID at delay 0: $+9.1\%$ loss and $+60\%$ CE against
+$+4.0\%$ and $+16\%$); on square-root counts, too, Delphi's constant rate
+(\texttt{sqrt\_constant}) loses less than the adaptive one
+(\texttt{sqrt\_adaptive}) in every cell. For a studentized tracker, whose
+score is already in units of its scale, the rolling quantile of the scores
+is nearly constant, and the adaptive rate is close to a fixed rate in units
+of $\sigma_t$. To do: replace R/05 by small fixed multipliers chosen once,
+not tuned (for example $\kappa=.01$ on counts and in units of the scaled
+methods' scales, Delphi's constants for its trackers), keep the replay of
+the first 20 weeks for $S_0$, choose the leak prequentially or by a mixture
+(Section~\ref{sec:leak-ridge}), and rerun.
+
+\paragraph{Idea: scores with a seasonal centre.} No positive scale can
+remove the drift of the scores (Section~\ref{sec:score-stationarity}): the
+base under-forecasts on the rise and over-forecasts after the peak, so the
+$\alpha$-quantile of the residual changes sign at the peak, and a scale
+only rescales the residual. A seasonal scale (for example from the same
+weeks of earlier seasons) has the same limit. What could help is a
+seasonal centre: a score $(y-b_t^\alpha-\mu_t^\alpha)/\sigma_t$ with an
+expected bias $\mu_t^\alpha$ for the phase of the wave, learned on earlier
+seasons. It needs the phase at the cutoff, which is known only in
+hindsight: real-time proxies (the base's own trend, the growth of the
+reports, the forecast-path indicators of R/02) are least reliable at the peak,
+where the sign changes, and one or two seasons are little to learn a bias
+profile from. The removed Decline MultiQT, which learned only in declining
+context, was a step in this direction.
 
 \paragraph{Open issue: the exploding $t$-PIT scale (to do).} The $t$-PIT
 scale \eqref{eq:scale-tpit} divides by the kernel density of the recent
@@ -1136,6 +1553,36 @@ Gap dates are listed in Section~\ref{sec:data-issues}.
 The methods below use the preceding data, feedback, tuning and evaluation
 conventions unless stated otherwise.
 
+\paragraph{Methods not run.} Since 13 November 2026, 28 of the 52 methods
+stay in the code but are not run (\texttt{paused\_methods} in
+\texttt{R/03\_functions.R}; deleting a name runs the method again), chosen
+from the run of 12 November (Section~\ref{sec:results}): the median
+rebuilds \texttt{studentized}, \texttt{studentized\_zero},
+\texttt{studentized\_base}, \texttt{median\_constant} and
+\texttt{median\_constant\_zero} ($+37\%$ to $+60\%$; their question is
+answered in Section~\ref{sec:results-median}) and
+\texttt{studentized\_full}; the $t$-PIT scale with its four mixtures, until
+its explosion is fixed (Section~\ref{sec:results-scaled}); the equal-weight
+rate grids and equal-weight recent starts of the power and spread scales
+(no better than the learned ones); the rate grids with sharing and the outer
+MultiQT (\texttt{shared}, \texttt{shared\_common}, \texttt{shared\_outer},
+\texttt{shared\_common\_outer}; sharing costs 5 to 6 points);
+\texttt{restart\_persistent}, \texttt{restart\_weighted} and the outer
+weekly starts (\texttt{restart\_uniform} and \texttt{restart\_recent} keep
+the comparison of all starts with the eight youngest); \texttt{score\_equal}
+(alike \texttt{score\_learned}); \texttt{oracle\_target} (its point is made);
+and \texttt{leaky\_log}, \texttt{fixed\_log\_adaptive} and
+\texttt{sqrt\_adaptive}, which lie between other trackers. The 23 methods
+run besides the base are Fixed and Leaky MultiQT with their adaptive
+versions, REF-op, \texttt{sqrt\_constant}, \texttt{fixed\_log},
+\texttt{leaky\_log\_adaptive}, \texttt{studentized\_level\_rms},
+\texttt{studentized\_pit}, the power and spread trackers with their learned
+rate grids and recent starts, \texttt{uniform}, \texttt{weighted},
+\texttt{weighted\_\allowbreak common}, \texttt{restart\_\allowbreak uniform},
+\texttt{restart\_\allowbreak recent}, \texttt{restart\_\allowbreak recent\_\allowbreak dual} and
+\texttt{score\_learned}. The results of Section~\ref{sec:results} still
+include the methods not run; the next run will not.
+
 \subsubsection{Single trackers}
 \label{sec:single-trackers}
 These methods maintain one MultiQT tracker for each case.
@@ -1425,6 +1872,147 @@ for the square-root trackers $\chi$ of \texttt{ref\_op} and
 $1/\chi'(b_t^\alpha)$ is a multiple of $\sqrt{b_t^\alpha}$, in between.
 Section~\ref{sec:base-width-failure} shows what level-tied scales do
 after peaks.
+
+\paragraph{Scores and scales tested.}
+\label{sec:scores-tested}
+Table~\ref{tab:scores-tested} lists every score of the base that was tested
+for a stable $\alpha$-quantile (Section~\ref{sec:quantile-stability}),
+whether a method uses it, and where it came from. A score is a transform
+$\psi_t(y)-\psi_t(b_t^\alpha)$ \eqref{eq:transform-score}, which always
+keeps inward flow, or a residual divided by a scale \eqref{eq:student-score},
+common to all levels (always inward flow) or one per level (only inside the
+band~\eqref{eq:scale-band}). \texttt{R/07\_score\_selection.R} computes all
+of them (\texttt{score\_candidates} and \texttt{candidate\_scores()} in
+\texttt{R/03\_functions.R}) and compares them by the drift of their hindsight
+threshold, by their peak-aligned coverage and by the running quantile
+(Sections~\ref{sec:score-stationarity} and~\ref{sec:scale-checks}). The
+candidates come from six sources.
+
+\subparagraph{Trackers in use.} Standard MultiQT corrects additively, the
+identity score. Delphi's production trackers work on square-root counts
+(Section~\ref{sec:reference-benchmarks}), and Delphi's calibration
+experiments also used \texttt{log1p}: for counts whose variance grows with
+their level, these scales make errors at high and low incidence comparable
+(Section~\ref{sec:log-tracker-scale}).
+
+\subparagraph{Recent errors.} The first studentized methods divide the
+residual by the spread of the last five errors, per level (level RMS,
+\eqref{eq:studentized-level-rms}) or around the median with normal
+quantiles (median rebuild, \eqref{eq:studentized-median-rms}). They learn
+the size of the errors from the reports and so lag the turn of a wave by
+the feedback delay. The level RMS scales projected into the band
+(\texttt{studentized\_level\_band}) drifted like the unprojected ones; that
+method was removed on 12 November 2026.
+
+\subparagraph{Spread of the forecast.} The base's own width is known at
+the cutoff, without feedback lag: its central 80\% interval in normal units
+(base width, \eqref{eq:studentized-base-width}), half its interquartile
+range, and the spread per level \eqref{eq:scale-spread}. The PIT of the
+base expresses the outcome in the base's own probability units.
+
+\subparagraph{Level of the forecast.} Errors grow with incidence. The
+Box-Cox family on counts, $\psi_\lambda$ (Section~\ref{sec:transform-scores}),
+runs from the identity ($\lambda=1$) through the square root (up to a shift,
+$\lambda=.5$) to \texttt{log1p} ($\lambda=0$). Its derivative at the forecast
+median is the scale $(1+b_t^{.5})^p$ with $p=1-\lambda$: a power of the
+forecast median, tested for $p$ from $-1$ to $2$, per level and as the exact
+transform.
+
+\subparagraph{Revisions of the forecast.} The forecasts of one target week
+at successive cutoffs, that is at different horizons, disagree roughly as
+much as the base errs. The revision scale is the median absolute difference
+between this cutoff's median for a target week and the medians issued for
+it at earlier cutoffs, over every target of the cutoff or only the row's
+own target (none at the longest horizon): a scale from the forecasts alone,
+known at the cutoff (\texttt{revision\_sigma()}). The method
+\texttt{studentized\_revision} was removed on 12 November 2026.
+
+\subparagraph{Transforms of Uniejewski (2025).} Uniejewski~\cite{vst}
+standardizes the series by the median and the median absolute deviation of
+the calibration window, $z=(x-m)/s$, and applies one of: the parametrized
+asinh $\operatorname{sgn}(z)[\operatorname{asinh}(|z|+a)-
+\operatorname{asinh}(a)]$, $a=\sqrt{1/c^2-1}$, with slope $c$ at the
+origin ($c=1$: asinh); a symmetric Box-Cox
+$\operatorname{sgn}(z)\{(|z|+1)^\lambda-1\}/\lambda$; the mirror log
+$\operatorname{sgn}(z)\log(1+c|z|)$; or a PIT with a $t$ distribution,
+$G_\nu^{-1}(\hat F(x))$. Here $m$ and $s$ come from the last 26 reports
+known at the cutoff (``window'', as in the paper; $z_w$ below) or from the
+forecast, the median $b_t^{.5}$ and half the base interquartile range $s_t$
+(``centred''; $z_c$). With $m$ and $s$ fixed at the cutoff, each
+$\psi_t(y)=T(z(y))$ is strictly increasing, so all are scores of the
+form~\eqref{eq:transform-score}. Their derivatives give scales: at the
+forecast median one common scale $s/T'(z(b_t^{.5}))$; per level U-shaped
+around $m$, $\sqrt{s^2+(b_t^\alpha-m)^2}$ for asinh, $s(1+|z|)^{1-\lambda}$
+for Box-Cox and $s/c+|b_t^\alpha-m|$ for the mirror log. Centred at the
+forecast median, every derivative scale at the median is proportional to
+$s_t$. The empirical distribution function of the window is only
+nondecreasing, flat between and beyond the reports; smoothed with a normal
+kernel, as in \texttt{tpit\_sigma()}, it has a derivative, and the
+$t$-PIT scale at the median measures where the forecast median lies among
+the recent reports. The paper's parameter grids (asinh $c=.1,\ldots,1$,
+Box-Cox $\lambda=0,\ldots,1$, mirror log $c=.1,\ldots,1$, $t$-PIT
+$\nu=9,\ldots,49$, each exact, at the median and per level) were explored
+first (\path{agent/scripts/residual_scales.R}); the parameter changed the
+drift by at most $0.03$, and R/07 keeps one or two members of each.
+
+\begingroup
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{1.22}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{.23\textwidth}
+ >{\raggedright\arraybackslash}p{.26\textwidth}
+ >{\raggedright\arraybackslash}p{.11\textwidth}
+ >{\raggedright\arraybackslash}p{.095\textwidth}
+ >{\raggedright\arraybackslash}p{.225\textwidth}@{}}
+\caption{Scores and scales tested. Kind: transform (inward flow always),
+common scale (always) or scale per level (only in the
+band~\eqref{eq:scale-band}). Tested: D drift ratio and peak-aligned
+coverage, R running quantile (both R/07), M MultiQT with the finalist
+scales (Section~\ref{sec:scale-multiqt}), W a method of R/04.
+$z_w(x)=(x-m_w)/s_w$ with the median $m_w$ and median absolute deviation
+$s_w$ of the last 26 reports; $z_c(x)=(x-b_t^{.5})/s_t$ with half the base
+interquartile range $s_t$.}
+\label{tab:scores-tested}\\
+\toprule
+Score or scale & $S_t^\alpha(y)$ & Kind & Tested & Methods\\
+\midrule
+\endfirsthead
+\multicolumn{5}{l}{\tablename\ \thetable\ (continued)}\\
+\toprule
+Score or scale & $S_t^\alpha(y)$ & Kind & Tested & Methods\\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+\multicolumn{5}{@{}l}{\emph{Trackers in use}}\\
+Identity & $y-b_t^\alpha$ & transform & D R M W & \texttt{fixed}, \texttt{leaky}\\
+Square root & $\sqrt y-\sqrt{b_t^\alpha}$ & transform & D R W & \texttt{ref\_op}, \texttt{sqrt\_\allowbreak constant}\\
+\texttt{log1p} & $\log(1+y)-\log(1+b_t^\alpha)$ & transform & D R W & \texttt{fixed\_log}, \texttt{leaky\_log}\\
+\multicolumn{5}{@{}l}{\emph{Level of the forecast}}\\
+Box-Cox on counts, $\lambda=.25,.75$ & $\psi_\lambda(y)-\psi_\lambda(b_t^\alpha)$ & transform & D R & ---\\
+Power of the median, $p=-1,.25,.5,.75,1,1.5,2$ & $(y-b_t^\alpha)/(1+b_t^{.5})^p$ & common scale & D R M W & \texttt{studentized\_\allowbreak power} ($p=.5$) and its mixtures\\
+Power per level, $p=.75$ & $(y-b_t^\alpha)/(1+b_t^\alpha)^p$ & per level & D R & ---\\
+\multicolumn{5}{@{}l}{\emph{Recent errors}}\\
+Level RMS & $(y-b_t^\alpha)/\sigma_{t,\mathrm{res}}^\alpha$ & per level & D R W & \texttt{studentized\_\allowbreak level\_rms}\\
+Level RMS in the band & scales $\sigma_{t,\mathrm{res}}^\alpha$ projected onto~\eqref{eq:scale-band} & per level & D (earlier) & \texttt{studentized\_\allowbreak level\_band}, removed\\
+Median rebuild & $(y-b_t^{.5})/\sigma_{t,\mathrm{med}}-\Phi^{-1}(\alpha)$ & common scale & D R W & \texttt{studentized}, \texttt{studentized\_\allowbreak zero} (not run)\\
+\multicolumn{5}{@{}l}{\emph{Spread of the forecast}}\\
+Base width & $(y-b_t^\alpha)/\sigma_{t,\mathrm{base}}$ & common scale & D R M W & \texttt{studentized\_\allowbreak full}, \texttt{studentized\_\allowbreak base} (not run)\\
+Half the base IQR & $(y-b_t^\alpha)/s_t$ & common scale & D R & ---\\
+Spread per level & $(y-b_t^\alpha)/\sigma_{t,\mathrm{spr}}^\alpha$ & per level, U-shaped & D R W & \texttt{studentized\_\allowbreak spread} and its mixtures\\
+PIT of the base & $F_{b_t}(y)-\alpha$ & transform & D R W & \texttt{studentized\_\allowbreak pit}\\
+\multicolumn{5}{@{}l}{\emph{Revisions of the forecast}}\\
+Revisions, every target or own target & $(y-b_t^\alpha)/\sigma_{t,\mathrm{rev}}$ & common scale & D R & \texttt{studentized\_\allowbreak revision}, removed\\
+\multicolumn{5}{@{}l}{\emph{Transforms of Uniejewski (2025)}}\\
+asinh ($c=1$), window, exact & $T(z_w(y))-T(z_w(b_t^\alpha))$ & transform & D R M & ---\\
+asinh ($c=1$), Box-Cox ($\lambda=0$), mirror log ($c=.3$): window, at the median & $(y-b_t^\alpha)\,T'(z_w(b_t^{.5}))/s_w$ & common scale & D R M & ---\\
+$t$-PIT ($\nu=25,49$), window, at the median & $(y-b_t^\alpha)/\sigma_{t,\mathrm{tpit}}$ & common scale & D R W & \texttt{studentized\_\allowbreak tpit} ($\nu=25$; not run, explodes)\\
+asinh ($c=1$), mirror log ($c=1/3$): centred, exact & $T(z_c(y))-T(z_c(b_t^\alpha))$ & transform & D R & ---\\
+\end{longtable}
+\endgroup
 
 \subsubsection{Weighted experts}
 \setcounter{secnumdepth}{4}
@@ -2306,7 +2894,7 @@ versus the base (\%), mean over the six disease--design cells.
 
 No studentized method beats the base in pooled loss. The best,
 \texttt{studentized\_pit} (MultiQT on the PIT of the base,
-Table~\ref{tab:score-summary}), costs $+19.1\%$, less than Fixed
+Table~\ref{tab:scores-tested}), costs $+19.1\%$, less than Fixed
 ($+21.4\%$), and is the only one that gains up to peaks ($-6.0\%$); after
 peaks it loses $43\%$. Its rate sits at the upper edge of its grid in
 five of six cells (Table~\ref{tab:tuned-rates}).
@@ -2381,167 +2969,151 @@ The three facts are computed from the prepared forecasts and counts (the
 plot shows the base width around peaks yet
 (\path{multiqt_base_forecast_paths.pdf} shows the base medians).
 
-\subsubsection{Which score of the base is most stationary?}
+\subsubsection{Which score keeps a stable \texorpdfstring{$\alpha$}{alpha}-quantile?}
 \label{sec:score-stationarity}
-A tracker follows the $\alpha$-quantile of its score; for a stationary
-score, a constant threshold would stay calibrated. For each case
-(disease, location, horizon) and level, the hindsight $\alpha$-quantile
-of the realized scores $S_t^\alpha(y_t)$ of the base over all scored
-weeks (latest reports, November 2024 to September 2026) is the best
-constant threshold. Its drift is the mean over windows of 8 consecutive
-weeks of $|\text{coverage}-\alpha|$, its noise the same with the weeks
-permuted; their ratio, averaged over the 23 levels, is 1 without drift.
-Coverage of a constant threshold is unchanged by any fixed increasing map
-of the score, so the scores differ only in how the forecast enters them
-(Section~\ref{sec:transform-scores}); the ratio tests quantile stability
-(Section~\ref{sec:quantile-stability}). Every score of a case uses the same
-weeks.
+\paragraph{How the scores were selected.} A tracker gets by with a small
+rate only if the $\alpha$-quantile of its score stays put, quantile
+stability (Section~\ref{sec:quantile-stability}). Every candidate of
+Table~\ref{tab:scores-tested} was therefore judged by how much its best
+constant threshold drifts. For each case (disease, location, horizon) and
+level, the hindsight $\alpha$-quantile of the realized scores
+$S_t^\alpha(y_t)$ over all scored weeks (latest reports, November 2024 to
+September 2026) is the best constant threshold. Its drift is the mean over
+windows of 8 consecutive weeks and over the 23 levels of
+$|\text{coverage}-\alpha|$, its noise the same with the weeks permuted;
+their ratio is 1 without drift. Coverage of a constant threshold is
+unchanged by any fixed increasing map of the score, so the scores differ
+only in how the forecast enters them (Section~\ref{sec:transform-scores}).
+All candidates of a case use the same weeks (a finite score for each, so
+at least 8 reports for the window transforms; filled rounds left out); the
+own-target revisions, undefined at the longest horizon, use horizons $-1$
+to $2$. The search went in three steps: the scores of the trackers in use
+and of the studentized methods; scales as functions of the forecast
+(powers of the median, the revisions, the transforms of Uniejewski with
+their parameter grids); then the best of them in two checks
+(Section~\ref{sec:scale-checks}) and in MultiQT
+(Section~\ref{sec:scale-multiqt}). One scale per idea became a method: the
+power $p=.5$ of the median (the level), the $t$-PIT (where the forecast
+median lies among the recent reports) and the spread per level (the
+forecast's own spread).
 
 \begin{center}\small
-\renewcommand{\arraystretch}{1.15}
+\renewcommand{\arraystretch}{1.08}
 \begin{tabular}{@{}lrrrr@{}}
 \toprule
  & \multicolumn{2}{c}{COVID} & \multicolumn{2}{c}{Flu}\\
 \cmidrule(lr){2-3}\cmidrule(l){4-5}
-Score & Ratio & Less drift & Ratio & Less drift\\
+Score or scale & Ratio & Less drift & Ratio & Less drift\\
 \midrule
-Identity, $y-b_t^\alpha$ & 1.67 & --- & 1.46 & ---\\
-Box-Cox $\lambda=.75$ & 1.65 & 66\% & 1.43 & 72\%\\
-Square root & 1.62 & 66\% & 1.39 & 72\%\\
-Box-Cox $\lambda=.25$ & 1.61 & 66\% & 1.38 & 76\%\\
-\texttt{log1p} & 1.61 & 62\% & 1.38 & 64\%\\
-Scale $1+b_t^{.5}$ (Box-Cox $\lambda=0$ at the median) & 1.61 & 62\% & 1.36 & 70\%\\
-Scale $1+b_t^\alpha$ (Box-Cox $\lambda=0$ per level) & 1.61 & 62\% & 1.38 & 64\%\\
-Base width (\texttt{studentized\_full}) & 1.64 & 58\% & 1.33 & 88\%\\
-Level RMS (\texttt{studentized\_level\_rms}) & 1.64 & 56\% & 1.41 & 70\%\\
-Level RMS in the band & 1.64 & 58\% & 1.41 & 70\%\\
-PIT of the base & 1.63 & 64\% & 1.35 & 80\%\\
-asinh ($c=1$), centred & 1.64 & 58\% & 1.32 & 86\%\\
-Mirror log ($c=1/3$), centred & 1.63 & 58\% & 1.32 & 86\%\\
+\multicolumn{5}{@{}l}{\emph{Trackers in use}}\\
+Identity, $y-b_t^\alpha$ & 1.67 & --- & 1.42 & ---\\
+Square root & 1.62 & 62\% & 1.37 & 70\%\\
+\texttt{log1p} & 1.62 & 62\% & 1.39 & 56\%\\
+\multicolumn{5}{@{}l}{\emph{Level of the forecast}}\\
+Box-Cox $\lambda=.25$ on counts & 1.62 & 58\% & 1.37 & 60\%\\
+Box-Cox $\lambda=.75$ on counts & 1.64 & 68\% & 1.39 & 60\%\\
+$(1+b_t^{.5})^p$, $p=-1$ & 1.77 & 24\% & 1.49 & 28\%\\
+\quad $p=.25$ & 1.64 & 70\% & 1.38 & 68\%\\
+\quad $p=.5$ (\texttt{studentized\_power}) & 1.62 & 62\% & 1.37 & 68\%\\
+\quad $p=.75$ & 1.61 & 60\% & 1.36 & 68\%\\
+\quad $p=1$ & 1.61 & 66\% & 1.37 & 64\%\\
+\quad $p=1.5$ & 1.65 & 56\% & 1.42 & 52\%\\
+\quad $p=2$ & 1.67 & 46\% & 1.45 & 56\%\\
+$(1+b_t^\alpha)^{.75}$ per level & 1.61 & 64\% & 1.37 & 62\%\\
+\multicolumn{5}{@{}l}{\emph{Recent errors}}\\
+Level RMS (\texttt{studentized\_level\_rms}) & 1.64 & 50\% & 1.38 & 64\%\\
+Median rebuild (\texttt{studentized}) & 1.64 & 48\% & 1.47 & 34\%\\
+\multicolumn{5}{@{}l}{\emph{Spread of the forecast}}\\
+Base width (\texttt{studentized\_full}) & 1.64 & 52\% & 1.31 & 86\%\\
+Half the base IQR & 1.64 & 52\% & 1.32 & 78\%\\
+Spread per level (\texttt{studentized\_spread}) & 1.64 & 62\% & 1.32 & 78\%\\
+PIT of the base (\texttt{studentized\_pit}) & 1.63 & 66\% & 1.33 & 76\%\\
+\multicolumn{5}{@{}l}{\emph{Revisions of the forecast}}\\
+Revisions, every target & 1.62 & 60\% & 1.35 & 82\%\\
+Revisions, own target ($h\le2$) & 1.56 & 53\% & 1.30 & 80\%\\
+\multicolumn{5}{@{}l}{\emph{Transforms of Uniejewski (2025)}}\\
+asinh ($c=1$), window, exact & 1.62 & 68\% & 1.35 & 76\%\\
+asinh ($c=1$), window, at the median & 1.64 & 54\% & 1.35 & 76\%\\
+Box-Cox ($\lambda=0$), window, at the median & 1.64 & 52\% & 1.35 & 74\%\\
+Mirror log ($c=.3$), window, at the median & 1.65 & 50\% & 1.37 & 70\%\\
+$t$-PIT ($\nu=25$), window, at the median (\texttt{studentized\_tpit}) & 1.65 & 52\% & 1.32 & 86\%\\
+$t$-PIT ($\nu=49$), window, at the median & 1.64 & 50\% & 1.31 & 86\%\\
+asinh ($c=1$), centred, exact & 1.63 & 56\% & 1.32 & 80\%\\
+Mirror log ($c=1/3$), centred, exact & 1.64 & 58\% & 1.32 & 80\%\\
 \bottomrule
 \end{tabular}
 \end{center}
 \refstepcounter{table}\label{tab:score-stationarity}
-\begin{center}\small Table \thetable: Drift of the base's scores: ratio
-drift/noise, mean over the 10 largest states without Florida and
-horizons $-1$ to $3$ (50 cases per disease); less drift: share of cases
-in which the score drifts less than the identity score.
+\begin{center}\small Table \thetable: Drift of the scores of the base:
+ratio drift/noise, mean over the 10 largest states without Florida and
+horizons $-1$ to $3$ (50 cases per disease; own-target revisions: horizons
+$-1$ to $2$, 40 cases); less drift: share of cases in which the score
+drifts less than the identity score. 1: no drift beyond chance.
+\texttt{R/07\_score\_selection.R}.
 \end{center}
 
-No score is stationary: even the best constant threshold drifts about
-$60\%$ beyond chance for COVID and $30\%$ for flu, more at longer
-horizons (mean over the scores: COVID $1.30$ at $h=0$, $1.84$ at $h=3$;
-flu $1.29$ and $1.46$).
-Over time, every score swings with the waves: the base's errors are
-seasonal, and no fixed transformation removes that. The scores differ
-much less than they drift. The additive score drifts most; relative
-scores drift less in most cases: for COVID the log-type scores (the
-scale $1+b_t^{.5}$, \texttt{log1p}, Box-Cox $\lambda$ up to $.25$; $1.61$),
-for flu the centred transforms of~\cite{vst} ($1.32$), the base width
-($1.33$), the PIT of the base ($1.35$) and the scale $1+b_t^{.5}$
-($1.36$). A scale at the median and its per-level version drift alike;
-per-level Box-Cox scales are almost never in the band (under $1\%$ of the
-weeks), the centred asinh in $56\%$ (flu $65\%$), the centred mirror log
-in $93\%$ ($95\%$) and the level RMS scales in $43\%$ ($44\%$; evaluation
-weeks, $h=2$, delay 0). The level RMS scale
-is among the less stationary scores, and the band does not change that.
-The simplest score that does well for both diseases is the scale
-$1+b_t^{.5}$, which also keeps the band.
+\paragraph{What the table shows.} No score is quantile-stable: even the
+best constant threshold drifts about $55$ to $60\%$ beyond chance for COVID
+and $30\%$ for flu, more at longer horizons (mean over the
+candidates: COVID $1.34$ at $h=0$, $1.84$ at $h=3$; flu
+$1.28$ and $1.48$). The scores differ much less than they drift
+(COVID $1.56$ to $1.77$, flu $1.30$ to $1.49$). The reason is where the drift
+lies: in the location of the residual. The base forecasts too low on the
+rise and too high after the peak (Section~\ref{sec:base-width-failure}), so
+the $\alpha$-quantile of the residual changes sign at the peak. A positive
+scale or an increasing transform cannot change the sign of a residual; it
+only changes how much each week weighs. Scales that grow with the forecast
+shrink the residuals of the high weeks, where the errors are largest, and
+spread the misses more evenly over the season: the relative scores, powers
+$.5$ to $1$ of the median, \texttt{log1p} and the square root, drift less
+than the identity in $60$ to $66\%$ of the COVID cases. Scales that grow
+too fast ($p=1.5$, $2$) drift almost as much as no scale or more, and a
+scale that shrinks with the level ($p=-1$) drifts most. For flu the
+base's own spread is the best yardstick: the base width, half its
+interquartile range, the spread per level, the centred transforms, the PIT
+and the $t$-PIT drift least ($1.31$ to $1.33$, less than the identity in
+$76$ to $86\%$ of the cases).
 
-\emph{Plots and scripts.}
-\path{agent/outputs/score_transforms/scores_over_time.pdf}: p.~1 the
-ratios with their spread over cases, then every score over time for the
-10 states at $h=2$;
-\path{agent/outputs/score_transforms/score_transforms.pdf}: scores against
-their derivative versions, the transforms of~\cite{vst}, Box-Cox scales
-and the band with the ratios of real scales. Scripts
-\path{agent/scripts/score_transforms_over_time.R} and
-\path{agent/scripts/score_transforms_plots.R}.
-
-\subsubsection{Which scale of the residual is most stationary?}
+\paragraph{Scales as functions of the forecast.}
 \label{sec:residual-scales}
-The aim is a scale $\sigma_t$, a function of the forecast known at the
-cutoff, for which the score $(y-b_t^\alpha)/\sigma_t$ drifts least. With
-the drift ratio of Section~\ref{sec:score-stationarity}, the candidates
-are: powers of the forecast median, $\sigma_t=(1+b_t^{.5})^p$ for
-$p=-2,\ldots,2$ (the derivative scale of Box-Cox on counts with
-$\lambda=1-p$), also per level and as the exact Box-Cox score; the
-revisions of the base, the median absolute difference
-$|b_t^{.5}(T)-b_s^{.5}(T)|$ between this cutoff's median for a target week
-$T$ and the medians the base issued for $T$ at earlier cutoffs $s$, over
-every target of the cutoff or only the row's own target (none at the
-longest horizon); and every transform
-of~\cite{vst} with the paper's parameter grids (asinh $c=.1,\ldots,1$,
-Box-Cox $\lambda=0,\ldots,1$, mirror log $c=.1,\ldots,1$, $t$-PIT
-$\nu=9,\ldots,49$), standardized as in the paper by the median $m_w$ and
-the median absolute deviation $s_w$ of the last 26 reported counts known
-at the cutoff, as the exact score, as the derivative scale at the
-forecast median $\sigma_t=s_w/T'((b_t^{.5}-m_w)/s_w)$ and per level. The
-$t$-PIT smooths the window's distribution function with a normal kernel,
-so that $T'$ exists. Centred at the forecast median instead, every
-transform's derivative scale at the median is proportional to the base's
-spread (half its interquartile range). All scores of a case use the same
-weeks: those with at least 8 reported counts, slightly fewer than in
-Table~\ref{tab:score-stationarity}.
+The power of the median has a shallow optimum, for COVID at $p=.75$ to $1$ ($1.61$ against $1.67$ without a scale), for flu at $p=.75$ ($1.36$ against $1.42$); per level and
+as exact Box-Cox scores the same powers drift alike. The own-target
+revisions drift least for both diseases, but they exist only on horizons
+$-1$ to $2$, where the power $p=1$ drifts as little for COVID ($1.55$
+against $1.56$) and the base width for flu ($1.29$ against $1.30$). The
+revisions of every target drift like the power scale for COVID and less
+for flu ($1.35$, less than the identity in $82\%$ of the cases). The window transforms of Uniejewski add
+nothing for COVID; for flu they lie between the power and the spread
+scales, except the $t$-PIT at the median, which reacts to where the
+forecast median lies among the recent reports. Of the scales from recent
+errors, the level RMS is among the less stable, and the median rebuild is
+the least stable for flu. Per-level Box-Cox scales are almost never in the
+band (under $1\%$ of the weeks), the centred asinh in $56\%$ (flu $65\%$),
+the centred mirror log in $93\%$ ($95\%$) and the level RMS scales in
+$43\%$ ($44\%$; evaluation weeks, $h=2$, delay 0, from the earlier search).
 
-\begin{center}\small
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{@{}lrr@{}}
-\toprule
-Scale $\sigma_t$ of $y-b_t^\alpha$ & COVID & Flu\\
-\midrule
-None (identity) & 1.66 & 1.41\\
-$(1+b_t^{.5})^{p}$, $p=-1$ & 1.78 & 1.49\\
-\quad $p=.25$ & 1.64 & 1.38\\
-\quad $p=.5$ & 1.62 & 1.35\\
-\quad $p=.75$ & 1.61 & 1.36\\
-\quad $p=1$ & 1.62 & 1.37\\
-\quad $p=1.5$ & 1.66 & 1.43\\
-\quad $p=2$ & 1.70 & 1.48\\
-Base width (\texttt{studentized\_full}) & 1.64 & 1.31\\
-Half the base IQR & 1.64 & 1.32\\
-Level RMS (\texttt{studentized\_level\_rms}) & 1.64 & 1.38\\
-Revisions, every target of the cutoff & 1.62 & 1.38\\
-Revisions, own target ($h\le2$; $p=.75$ there: 1.56, $p=.5$: 1.32) & 1.56 & 1.35\\
-asinh ($c=1$), window, at the median & 1.64 & 1.35\\
-Box-Cox ($\lambda=0$), window, at the median & 1.64 & 1.36\\
-Mirror log ($c=.3$), window, at the median & 1.65 & 1.36\\
-$t$-PIT ($\nu=49$), window, at the median & 1.65 & 1.31\\
-\bottomrule
-\end{tabular}
-\end{center}
-\refstepcounter{table}\label{tab:residual-scales}
-\begin{center}\small Table \thetable: Drift ratio of the residual's score
-for candidate scales, mean over the 10 largest states without Florida and
-horizons $-1$ to $3$ (50 cases per disease; own-target revisions: $-1$ to
-$2$). 1: no drift beyond chance.
-\end{center}
+\paragraph{No optimal score yet.} The best for COVID, a power $.75$ to $1$
+of the median, is not the best for flu, the forecast's spread, and none
+removes the drift: it is a change of sign, which no scale undoes. A simple
+choice for both diseases is a power of the median between $.5$ and $.75$,
+one scale for all levels, which keeps the band; for flu the forecast's
+spread drifts least. What could remove the drift is a centre that changes
+with the phase of the wave rather than a scale (Section~\ref{sec:open-issues},
+``Idea: scores with a seasonal centre'').
 
-The power of the forecast median has a clear optimum: the drift falls
-from $p=0$ (no scale) to a minimum at $p=.75$ for COVID ($1.61$ against
-$1.66$) and $p=.5$ for flu ($1.35$ against $1.41$), and rises again beyond
-$p=1$; negative powers drift more than no scale at all. A scale growing
-like $(b_t^{.5})^{.5}$ to $(b_t^{.5})^{.75}$, between the square root of a
-Poisson count and the level itself, suits both diseases; the same powers
-per level or as exact Box-Cox scores drift alike. The paper's transforms
-add nothing for COVID ($1.63$ to $1.66$ for every transform, parameter and
-form; the parameter changes the drift by at most $0.03$). For flu the
-spread of the forecast is best: the base width ($1.31$), half its
-interquartile range ($1.32$) and the $t$-PIT scale ($1.31$), which reacts
-to where the forecast median lies in the distribution of recent counts.
-The revisions of the base are no better than the power scale on the same
-horizons ($1.56$ against $1.56$ for COVID, $1.35$ against $1.32$ for flu)
-and spike when the base barely revises. All differences are small next to
-the drift every score shares. A single choice for both diseases is
-$\sigma_t=(1+b_t^{.5})^{p}$ with $p$ between $.5$ and $.75$; it is one
-scale for all levels and so keeps the band.
-
-\emph{Plots and script.} \path{agent/outputs/residual_scales/residual_scales.pdf}:
-pp.~1--2 the drift against each scale's parameter (COVID, flu), then for
-each of the 10 states at $h=2$ the scores over time, with the exact
-transformed residual and the residual divided by the derivative scale in
-one panel for every transform-inspired scale.
-\path{agent/scripts/residual_scales.R}.
+\emph{Plots and script.} \path{multiqt_score_selection.pdf}: p.~1 the
+drift ratio of every candidate with the spread over cases, p.~2 the drift
+against the power $p$, pp.~3--4 the peak-aligned coverage and pp.~5--6 the
+running quantile (Section~\ref{sec:scale-checks});
+\path{multiqt_score_stationarity/}: one PDF per disease and horizon, first
+the pooled scores by week relative to the peak, then each plotted location
+over time. Tables in \path{output/results/score_selection/}; script
+\path{R/07_score_selection.R}. The earlier search with the paper's parameter
+grids, and plots of each transform's exact and derivative score over time:
+\path{agent/scripts/residual_scales.R} and
+\path{agent/scripts/score_transforms_over_time.R} (outputs in
+\path{agent/outputs/residual_scales/} and
+\path{agent/outputs/score_transforms/}).
 
 \subsubsection{Two checks of the scales: around peaks and out of sample}
 \label{sec:scale-checks}
@@ -2565,9 +3137,10 @@ forecast that quantile stability justifies
 (Section~\ref{sec:quantile-stability}), with no rate to tune, scored like
 the methods (latest counts per $100{,}000$, evaluation weeks). The base is
 issued before five scores are reported; crossing levels are sorted; every
-scale is kept within a factor of 20 of the median of its own past values,
+scale is kept within a factor of 20 of the median of its values so far,
 which binds only where a scale explodes ($t$-PIT, when the forecast median
-lies far outside the recent counts).
+lies far outside the recent counts). R/07 computes both checks for every
+candidate; Table~\ref{tab:running-quantile} shows a selection.
 
 \begin{center}\small
 \renewcommand{\arraystretch}{1.15}
@@ -2583,20 +3156,23 @@ $(1+b_t^{.5})^{.5}$ & 7.0 & 51.9 & 5.4 & 2.8 & 3.8 & 5.1 & 15.1 & 28.8\\
 $(1+b_t^{.5})^{.75}$ & 6.6 & 38.5 & 6.0 & 2.6 & 7.8 & $-5.4$ & 29.1 & 48.3\\
 \texttt{log1p}, exact & 5.5 & 27.8 & 5.4 & 1.2 & 20.5 & $-9.7$ & 63.4 & 79.8\\
 Base width & 7.6 & 41.8 & 6.8 & 2.7 & 6.4 & $-5.5$ & 24.2 & 21.1\\
+Spread per level & 7.8 & 34.2 & 8.5 & 3.2 & 11.3 & $-21.3$ & 40.5 & 41.2\\
 Level RMS & 8.8 & 22.6 & 9.3 & 3.4 & 10.1 & $-24.4$ & 20.8 & 43.9\\
-Revisions & 7.8 & 46.2 & 6.1 & $-0.6$ & 9.8 & 6.9 & 30.2 & 19.5\\
+Revisions, every target & 7.8 & 46.2 & 6.1 & $-0.6$ & 9.8 & 6.9 & 30.2 & 19.5\\
+Revisions, own target ($h\le2$) & 5.8 & 34.8 & 4.1 & 0.1 & 8.9 & $-1.3$ & 32.5 & 22.3\\
 PIT of the base & 7.7 & 40.2 & 8.6 & 4.0 & 15.1 & $-16.2$ & 48.7 & 55.4\\
 asinh ($c=1$), window, exact & 5.7 & 30.2 & 3.1 & 1.1 & 1.1 & $-17.6$ & 2.4 & $-2.4$\\
 Box-Cox ($\lambda=0$), window, at the median & 6.7 & 29.8 & 6.4 & 6.5 & 0.7 & $-18.8$ & 2.1 & $-2.9$\\
-$t$-PIT ($\nu=49$), window, at the median & 13.5 & 33.6 & 17.9 & 7.0 & 1.1 & $-24.3$ & 2.9 & $-1.0$\\
+$t$-PIT ($\nu=25$), window, at the median & 13.5 & 33.7 & 17.9 & 7.0 & 1.1 & $-24.5$ & 2.9 & $-1.0$\\
 \bottomrule
 \end{tabular}
 \end{center}
 \refstepcounter{table}\label{tab:running-quantile}
 \begin{center}\small Table \thetable: Running quantile of each scale's
 past scores~\eqref{eq:running-quantile}: pooled change versus the base
-(\%), the 10 largest states without Florida, horizons $-1$ to $3$, delay 0
-(delay 1: similar losses).
+(\%), the 10 largest states without Florida, horizons $-1$ to $3$
+(own-target revisions: $-1$ to $2$), delay 0 (delay 1: similar losses).
+\texttt{R/07\_score\_selection.R}.
 \end{center}
 
 No static recalibration beats the base overall: every scale's quantile
@@ -2612,34 +3188,40 @@ positive scale cannot change the sign of the residual: the choice of
 scale can make the size of the residuals comparable across levels of
 incidence, but it cannot remove a bias that switches from under- to
 overprediction. The peak-aligned drift differs little between scales
-(COVID $0.126$ to $0.147$; flu from $0.129$ for the $t$-PIT scale to
-$0.167$ without a scale).
+(COVID $0.14$ to $0.17$, flu $0.12$ to $0.17$; lowest for the own-target
+revisions and, for flu, the forecast's spread, highest for the median
+rebuild).
 
 Out of sample the scales part more than in the drift ratio. Scales that
 grow with the forecast median ($p=.75$ and $1$, \texttt{log1p}, the PIT,
 the base width) carry the correction learned on the rise into the high
 forecasts just after a flu peak and lose $24$ to $63\%$ there, as in
-Section~\ref{sec:base-width-failure}; $p=.5$ loses $15\%$. The window
+Section~\ref{sec:base-width-failure}, the spread per level and the
+revisions $30$ to $41\%$; $p=.5$ loses $15\%$. The window
 scales of~\cite{vst}, which compare the forecast median with the median
 and spread of the recent counts, are the most robust for flu: overall
-$+0.7\%$ to $+1.1\%$ loss at $18$ to $24\%$ less CE, and $+2\%$ to $+3\%$
+$+0.7\%$ to $+1.1\%$ loss at $18$ to $25\%$ less CE, and $+2\%$ to $+3\%$
 loss after peaks. For COVID the exact \texttt{log1p} and asinh scores lose
-least overall ($+5.5\%$, $+5.7\%$), the asinh also after peaks ($+3.1\%$).
-A 26-week window instead of all past scores loses more for COVID ($+14\%$
-to $+25\%$) and 3 to 11 points less for flu, apart from the window scales
-(unchanged). So the power scale, best by the
+least overall ($+5.5\%$, $+5.7\%$, then the own-target revisions with
+$+5.8\%$), the asinh also after peaks ($+3.1\%$). A 26-week window instead
+of all past scores loses 7 to 21 points more for COVID (median 12) and
+about 5 points less for flu (up to 10), apart from the window scales,
+unchanged for flu. So the power scale, best by the
 drift ratio, is not the most robust after flu peaks, where the drift
 ratio, an average over all weeks of coverage only, gives the costly weeks
 little weight. The window-standardized asinh is the candidate that holds
 up in both checks for both diseases; the final comparison is MultiQT with
 a tuned rate for a few such scales.
 
-\emph{Plots and script.}
-\path{agent/outputs/scale_evaluation/scale_evaluation.pdf}: pp.~1--2 the
-running quantile, loss against CE change per scale (overall, after peaks;
-COVID and flu, delay 0 and 1); pp.~3--4 the coverage by week relative to
-the peak for twelve scales (COVID, flu), hindsight threshold and running
-quantile. \path{agent/scripts/scale_evaluation.R}.
+\emph{Plots and script.} \path{multiqt_score_selection.pdf}: pp.~3--4
+the coverage by week relative to the peak for twelve candidates (COVID,
+flu), hindsight threshold and running quantile; pp.~5--6 the running
+quantile, loss against CE change per candidate (overall, after peaks;
+COVID and flu, delay 0 and 1). Tables
+\path{output/results/score_selection/running_quantile.csv},
+\path{peak_coverage.csv} and \path{peak_drift.csv}; script
+\path{R/07_score_selection.R} (first computed by
+\path{agent/scripts/scale_evaluation.R}).
 
 \subsubsection{MultiQT with the finalist scales}
 \label{sec:scale-multiqt}
@@ -3360,7 +3942,7 @@ rates per location in \path{multiqt_error_tradeoff.pdf}, pp.~2--7.
 % outcomes are needed for scoring, not for these indicators. A gray cell
 % does not mean indicator 0.
 
-\begin{thebibliography}{4}
+\begin{thebibliography}{99}
 \bibitem{multiqt}
 Tiffany Ding, Isaac Gibbs, and Ryan J. Tibshirani.
 \emph{Calibrated Multi-Level Quantile Forecasting}.
@@ -3377,6 +3959,88 @@ Advances in Neural Information Processing Systems 36, 2023.
 Herbert Robbins and Sutton Monro.
 \emph{A Stochastic Approximation Method}.
 The Annals of Mathematical Statistics 22(3):400--407, 1951.
+
+\bibitem{koenker-bassett}
+Roger Koenker and Gilbert Bassett.
+\emph{Regression Quantiles}.
+Econometrica 46(1):33--50, 1978.
+
+\bibitem{tierney}
+Luke Tierney.
+\emph{A Space-Efficient Recursive Procedure for Estimating a Quantile of an
+Unknown Distribution}.
+SIAM Journal on Scientific and Statistical Computing 4(4):706--711, 1983.
+
+\bibitem{aci}
+Isaac Gibbs and Emmanuel J. Cand\`es.
+\emph{Adaptive Conformal Inference Under Distribution Shift}.
+Advances in Neural Information Processing Systems 34, 2021.
+
+\bibitem{agaci}
+Margaux Zaffran, Olivier F\'eron, Yannig Goude, Julie Josse, and Aymeric
+Dieuleveut.
+\emph{Adaptive Conformal Predictions for Time Series}.
+Proceedings of the 39th International Conference on Machine Learning,
+PMLR 162, 2022.
+\href{https://proceedings.mlr.press/v162/zaffran22a.html}{PMLR}.
+
+\bibitem{kushner-yin}
+Harold J. Kushner and G. George Yin.
+\emph{Stochastic Approximation and Recursive Algorithms and Applications},
+2nd edition. Springer, 2003.
+
+\bibitem{dieuleveut}
+Aymeric Dieuleveut, Alain Durmus, and Francis Bach.
+\emph{Bridging the Gap between Constant Step Size Stochastic Gradient
+Descent and Markov Chains}.
+The Annals of Statistics 48(3):1348--1382, 2020.
+
+\bibitem{widrow-lms}
+Bernard Widrow, John M. McCool, Michael G. Larimore, and C. Richard Johnson.
+\emph{Stationary and Nonstationary Learning Characteristics of the LMS
+Adaptive Filter}.
+Proceedings of the IEEE 64(8):1151--1162, 1976.
+
+\bibitem{benveniste}
+Albert Benveniste, Michel M\'etivier, and Pierre Priouret.
+\emph{Adaptive Algorithms and Stochastic Approximations}. Springer, 1990.
+
+\bibitem{lei-conformal}
+Jing Lei, Max G'Sell, Alessandro Rinaldo, Ryan J. Tibshirani, and Larry
+Wasserman.
+\emph{Distribution-Free Predictive Inference for Regression}.
+Journal of the American Statistical Association 113(523):1094--1111, 2018.
+
+\bibitem{leaky-lms}
+Khaled Mayyas and Tyseer Aboulnasr.
+\emph{Leaky LMS Algorithm: MSE Analysis for Gaussian Data}.
+IEEE Transactions on Signal Processing 45(4):927--934, 1997.
+
+\bibitem{yu-moyeed}
+Keming Yu and Rana A. Moyeed.
+\emph{Bayesian Quantile Regression}.
+Statistics \& Probability Letters 54(4):437--447, 2001.
+
+\bibitem{koenker-ng-portnoy}
+Roger Koenker, Pin Ng, and Stephen Portnoy.
+\emph{Quantile Smoothing Splines}.
+Biometrika 81(4):673--680, 1994.
+
+\bibitem{yuan-gacv}
+Ming Yuan.
+\emph{GACV for Quantile Smoothing Splines}.
+Computational Statistics \& Data Analysis 50(3):813--829, 2006.
+
+\bibitem{li-xi-lin}
+Qing Li, Ruibin Xi, and Nan Lin.
+\emph{Bayesian Regularized Quantile Regression}.
+Bayesian Analysis 5(3):533--556, 2010.
+
+\bibitem{dawid-prequential}
+A. Philip Dawid.
+\emph{Present Position and Potential Developments: Some Personal Views.
+Statistical Theory: The Prequential Approach}.
+Journal of the Royal Statistical Society, Series A 147(2):278--292, 1984.
 
 \bibitem{christoffersen}
 Peter F. Christoffersen.
@@ -3407,7 +4071,58 @@ CMU Delphi.
 Pinned source revision \texttt{9abebcfb}, inspected 9--10 November 2026.
 \href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/calibration_experiments/e09_lr_delay.Rmd}{E09: constant learning rate and revision delay};
 \href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/calibration_experiments/e15_wis_sources.Rmd}{E15: median shift and width change};
-\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/R/calibration/qt.R}{tracker implementation}.
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/R/calibration/qt.R}{tracker implementation};
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/calibration_experiments/e00_vintage_backtest.Rmd}{E00: learning from vintages instead of finalized truth};
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/calibration_experiments/e21_data_by_season.Rmd}{E21: the data by season};
+\href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfb/reports/writeups/nowcasting/baseline_nowcast_flu_nhsn.qmd}{baseline nowcast of NHSN flu}.
+
+\bibitem{mankiw-shapiro}
+N. Gregory Mankiw and Matthew D. Shapiro.
+\emph{News or Noise? An Analysis of GNP Revisions}.
+Survey of Current Business 66(5):20--25, 1986.
+
+\bibitem{hoehle-nowcasting}
+Michael H\"ohle and Matthias an der Heiden.
+\emph{Bayesian Nowcasting during the STEC O104:H4 Outbreak in Germany, 2011}.
+Biometrics 70(4):993--1002, 2014.
+
+\bibitem{nobbs}
+Sarah F. McGough, Michael A. Johansson, Marc Lipsitch, and Nicolas A. Menzies.
+\emph{Nowcasting by Bayesian Smoothing: A Flexible, Generalizable Model for
+Real-Time Epidemic Tracking}.
+PLoS Computational Biology 16(4):e1007735, 2020.
+
+\bibitem{portnoy}
+Stephen Portnoy.
+\emph{Censored Regression Quantiles}.
+Journal of the American Statistical Association 98(464):1001--1012, 2003.
+
+\bibitem{joulani}
+Pooria Joulani, Andr\'as Gy\"orgy, and Csaba Szepesv\'ari.
+\emph{Online Learning under Delayed Feedback}.
+Proceedings of the 30th International Conference on Machine Learning,
+PMLR 28, 2013.
+
+\bibitem{flaspohler}
+Genevieve Flaspohler, Francesco Orabona, Judah Cohen, Soukayna Mouatadid,
+Miruna Oprescu, Paulo Orenstein, and Lester Mackey.
+\emph{Online Learning with Optimism and Delay}.
+Proceedings of the 38th International Conference on Machine Learning,
+PMLR 139, 2021.
+\href{https://arxiv.org/abs/2106.06885}{arXiv:2106.06885}.
+
+\bibitem{corrupted-feedback}
+Bowen Wang, Matteo Zecchin, and Osvaldo Simeone.
+\emph{Online Conformal Prediction with Corrupted Feedback}.
+arXiv:2605.20515, 2026.
+\href{https://arxiv.org/abs/2605.20515}{arXiv}.
+
+\bibitem{chapelle}
+Olivier Chapelle.
+\emph{Modeling Delayed Feedback in Display Advertising}.
+Proceedings of the 20th ACM SIGKDD International Conference on Knowledge
+Discovery and Data Mining, 2014.
+\href{https://dl.acm.org/doi/10.1145/2623330.2623634}{ACM}.
 
 \end{thebibliography}
 
