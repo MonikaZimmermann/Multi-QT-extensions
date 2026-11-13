@@ -3,8 +3,8 @@
 # horizons, feedback designs and locations, the next levels split by feedback design and
 # then by horizon. Every node shows three bar charts, overall, up to peak and after peak:
 # the loss reduction against the base forecasts, each with the coverage error of the
-# same methods below it. First page per disease: all locations except the US pooled
-# (pooled_rows()); next pages: the locations of multiqt_settings() (US, California, Texas,
+# same methods below it. First page per disease: the pooled locations (pooled_rows():
+# settings$pooled_locations); next pages: the locations of multiqt_settings() (US, California, Texas,
 # New York, Pennsylvania), one location each. Each page draws its own best methods.
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
@@ -250,7 +250,7 @@ draw_ce_panel <- function(s, xlim, show_share, methods, style) {
   box(col = "gray60")
 }
 page_title <- function(disease, location) {
-  where <- if (is.na(location)) paste("all", pooled_label(length(unique(pooled_rows(
+  where <- if (is.na(location)) paste("the", pooled_label(length(unique(pooled_rows(
     scores[scores$disease == disease, ], settings)$location)), settings), "pooled") else {
     name <- unique(scores$location_name[scores$location == location])[1]
     paste0(name, " (", location, ")")
@@ -368,7 +368,7 @@ for (p in seq_len(nrow(pages))) draw_tree_page(trees[[p]], tree_methods[[p]],
 dev.off()
 
 # 4. EVERY METHOD UNDER EACH FEEDBACK DESIGN -----------------------------------
-# Pages as the tree's (all locations except the US pooled, then each location of
+# Pages as the tree's (the pooled locations, then each location of
 # settings$location_ids): every method of 04's plots (tree_candidates, in the order of
 # method_groups) with one bar per feedback design, side by side, and the tree's values
 # (node_summary() of the page's cases of each design) and axes: loss panels, overall, up to

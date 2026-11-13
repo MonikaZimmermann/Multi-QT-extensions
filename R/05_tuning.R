@@ -15,8 +15,9 @@ settings <- multiqt_settings()
 prepared <- read_prepared(settings)       # The base model's prepared data and output folder.
 base_model <- prepared$settings$base_model
 diseases <- c("covid", "flu")
-# Pooled over the locations except the US (settings$summary_exclude, as in the summaries of
-# 02, 04 and 06; the US uses the values tuned on the others) and these horizons of each
+# Pooled over settings$pooled_locations (the 10 largest states without Florida, as in the
+# summaries of 02, 04 and 06; every other location uses the values tuned on them) and
+# these horizons of each
 # disease, set by its base: CMU's horizon -1 nowcasts are tuned with the others; the
 # windowed_seasonal forecasts have zero width at horizon -1 once the week before is
 # reported (the latest report is a predictor), so their horizon -1 uses the values tuned
@@ -37,13 +38,15 @@ transforms <- c("log1p", "identity")
 # the weekly re-run on the reports known then (feedback_protocol() in R/03_functions.R).
 tuning_feedback <- data.frame(delay = c(0L, 1L, 0L), revisions = c(FALSE, FALSE, TRUE))
 # One grid per tuned setting (tuned_setting in R/03_functions.R): the tracker rates
-# (rate_settings; multiples of S0, the studentized eta in units of sigma_t). Not tuned:
+# (rate_settings; multiples of S0, the studentized eta in units of sigma_t, the PIT rate in
+# probability units). Not tuned:
 # H of the learned mixtures (rate grid, weekly starts, score experts; method_parameters()),
 # lambda (adaptive from lambda_start = 2.72), sharing 1/(2H), the outer rate, the number of
 # recent weekly starts. The median-start
 # methods use the rate of their method (parameter_source in R/03).
 grids <- list(fixed_multiplier = c(.001, .0025, .005, .01, .02, .05, .1, .2, .4),
               median_rate = c(.003, .01, .03, .1, .3, 1),
+              pit_rate = c(.001, .002, .005, .01, .02, .05),
               leaky_multiplier = c(.001, .002, .004, .008, .02, .05, .1, .2, .3, .5, 1))
 # One stage, the tracker rates. H is fixed for now: its tuning curves showed no structure.
 # A later stage (e.g. "H", with a grid above and its methods in tuned_setting) would be
@@ -91,7 +94,7 @@ run_stage <- function(disease, transform, feedback, stage, by_method = list()) {
   stage <- Filter(function(setting) length(methods_of(setting)) > 0L, stage)
   keys <- Filter(function(key) prepared$cases[[key]]$disease == disease &&
     prepared$cases[[key]]$horizon %in% tuning_horizons(disease) &&
-    !prepared$cases[[key]]$location %in% settings$summary_exclude, names(prepared$cases))
+    prepared$cases[[key]]$location %in% settings$pooled_locations, names(prepared$cases))
   rows <- parallel::mclapply(keys, function(key) {
     prepared_case <- prepared$cases[[key]]
     case <- get_case(prepared, disease, prepared_case$location, prepared_case$horizon,

@@ -132,6 +132,14 @@ method_labels <- function(p) {
     sqrt_constant = paste0("Delphi flu prod (sqrt per 100k, eta=",
       par_of("sqrt_constant", "sqrt_constant_rate"), ")"),
     oracle_target = "Target oracle (hindsight)",
+    # Delphi's adaptive rate (REF-op's fast term), untuned.
+    fixed_adaptive = paste0("Fixed MultiQT (adaptive rate ", par_of("ref_op", "ref_op_multiplier"),
+      " * Q90 of last ", par_of("ref_op", "ref_op_window"), ")"),
+    leaky_adaptive = paste0("Leaky MultiQT (adaptive rate, leak ", par_of("leaky", "leak"), ")"),
+    fixed_log_adaptive = "Fixed MultiQT, log1p tracker (adaptive rate)",
+    leaky_log_adaptive = paste0("Leaky MultiQT, log1p tracker (adaptive rate, leak ",
+      par_of("leaky_log", "leak"), ")"),
+    sqrt_adaptive = "Sqrt tracker (adaptive rate; REF-op without slow term and leak)",
     uniform = "Rate grid: equal",
     weighted = paste0("Rate grid: learned, no sharing (", H_of("weighted"), ")"),
     weighted_common = paste0("Rate grid: learned, no sharing, common weights (",
@@ -166,13 +174,29 @@ method_labels <- function(p) {
       eta("studentized_full"), ")"),
     studentized_level_rms = paste0("Studentized full base (level RMS of ", p$median_window,
       ", ", eta("studentized_level_rms"), ")"),
+    studentized_power = paste0("Studentized full base ((1 + median)^", p$power_p, ", ",
+      eta("studentized_power"), ")"),
+    studentized_tpit = paste0("Studentized full base (t-PIT, nu=", p$tpit_nu, ", last ",
+      p$tpit_window, " reports, ", eta("studentized_tpit"), ")"),
+    studentized_spread = paste0("Studentized full base (spread per level, lambda=",
+      p$spread_lambda, ", ", eta("studentized_spread"), ")"),
+    studentized_pit = paste0("Studentized full base (PIT, ", eta("studentized_pit"), ")"),
     median_constant = paste0("Median, constant sigma (", residual_label, ", ", p$median_start,
       " start, ", eta("median_constant"), ")"),
     # The median-start variants use the rate of their normal-start method (parameter_source).
     studentized_zero = paste0("Studentized median (", residual_label, ", median start, eta=",
       par_of("studentized_zero", "median_rate"), ")"),
     median_constant_zero = paste0("Median, constant sigma (", residual_label,
-      ", median start, eta=", par_of("median_constant_zero", "median_rate"), ")"))
+      ", median start, eta=", par_of("median_constant_zero", "median_rate"), ")"),
+    # The expert banks of the scaled trackers (scaled_methods in R/03), rates in units of the
+    # scale: the rate grid and the most recent weekly starts, equal and learned weights.
+    unlist(lapply(names(scale_titles), function(scale) setNames(paste0(scale_titles[[scale]], ": ",
+      c("rate grid, equal", paste0("rate grid, learned, common weights (", H_of(paste0(scale,
+        "_weighted_common")), ")"), paste0("most recent ", p$restart_recent_k, " starts, equal (m=",
+        p$restart_multiplier, ")"), paste0("most recent ", p$restart_recent_k,
+        " starts, learned + sharing (m=", p$restart_multiplier, ", ", H_of(paste0(scale,
+        "_restart_recent")), ")"))), paste0(scale, c("_uniform", "_weighted_common",
+      "_restart_equal", "_restart_recent"))))))
 }
 # Colours as in the trade-off plots and 06's tree (tradeoff_colours in R/03); the original
 # in gray, as the scoring target is drawn in black.
@@ -180,7 +204,7 @@ colours <- replace(tradeoff_colours, "original", "gray40")
 # Lines as the symbols of the trade-off plots: common weights across quantile levels dashed
 # (triangles), + outer MultiQT dotted (squares), common weights + outer dot-dashed (diamonds).
 common <- setNames(grepl("_common", names(method_short_labels)), names(method_short_labels))
-common["score_equal"] <- TRUE
+common[c("score_equal", paste0(names(scale_titles), "_restart_equal"))] <- TRUE
 with_outer <- setNames(grepl("_outer$", names(method_short_labels)), names(method_short_labels))
 line_types <- ifelse(with_outer, ifelse(common, 4, 3), ifelse(common, 2, 1))
 point_shapes <- ifelse(common, 17, 16)
@@ -295,6 +319,16 @@ weight_pages <- list(
       "Most recent starts: learned + sharing")),
   "Weekly-start weights: slow + fast copies" = data.frame(method = "restart_recent_dual",
     common_method = NA, title = "Most recent starts, slow + fast: learned + sharing"))
+# The expert banks of the scaled trackers (scaled_methods in R/03): per scale a rate-grid
+# page and a weekly-start page (its name starts with "Weekly-start weights").
+weight_pages <- c(weight_pages, unlist(lapply(names(scale_titles), function(scale) setNames(list(
+  data.frame(method = paste0(scale, c("_uniform", "_weighted_common")), common_method = NA,
+    title = c("Equal weights", "Learned, common weights")),
+  data.frame(method = paste0(scale, c("_restart_equal", "_restart_recent")), common_method = NA,
+    title = c("Most recent starts: equal", "Most recent starts: learned + sharing"))),
+  c(paste0(scale_titles[[scale]], ": rate-grid weights"),
+    paste0("Weekly-start weights: ", sub("^(Power|Spread)", "\\L\\1", scale_titles[[scale]],
+      perl = TRUE))))), recursive = FALSE))
 # Experts named by their methods where they are methods (the score experts).
 expert_names <- function(experts) ifelse(experts %in% names(method_short_labels),
   method_short_labels[experts], experts)
@@ -658,8 +692,8 @@ write_result(results$expert_grid, "expert_grid.csv")
 write_result(results$restart_experts, "restart_experts.csv")
 
 # 8. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
-# Per disease of score_diseases: one page per location, after two pages with all prepared
-# locations except the US (with the single locations, then the means only). Columns:
+# Per disease of score_diseases: one page per location, after two pages with the pooled
+# locations (settings$pooled_locations; with the single locations, then the means only). Columns:
 # horizons; rows: the feedback designs of tradeoff_feedback, each with its three windows.
 # Every method in each panel. The loss is scored on the tracker's scale: log(counts + 1)
 # for the log1p tracker, counts per 100k residents for raw counts. Each feedback design
@@ -692,13 +726,13 @@ panel_rows <- expand.grid(phase = phases, feedback = seq_len(nrow(tradeoff_feedb
   stringsAsFactors = FALSE)                 # Rows: the windows of each feedback design.
 panel_height <- 2.6                         # Inches per row of panels.
 legend_height <- 2.6
-# One disease's pages: all prepared locations except the US, then each location of
+# One disease's pages: the pooled locations (settings$pooled_locations), then each location of
 # settings$location_ids. Legend values: the settings of that disease and the feedback design
 # of multiqt_settings().
 draw_tradeoff_pages <- function(disease) {
   page_params <- tuned_for(settings$feedback_delay, settings$feedback_revisions, disease)
   labels <- method_labels(page_params)
-  all_locations <- setdiff(locations_of(disease), settings$summary_exclude)
+  all_locations <- intersect(locations_of(disease), settings$pooled_locations)
   tradeoff_scores <- all_scores[all_scores$disease == disease &
     all_scores$method %in% tradeoff_methods, ]
   # Duplicates (identical forecasts) of a drawn method are not drawn; those hidden in
@@ -720,12 +754,12 @@ draw_tradeoff_pages <- function(disease) {
   legend_method <- legend_entries %in% tradeoff_methods
   legend_header <- legend_entries %in% names(legend_groups)
   tradeoff_title <- function(location = NULL) paste(disease, "|",
-    if (is.null(location)) paste("all", pooled_label(length(all_locations), settings)) else
+    if (is.null(location)) paste("the", pooled_label(length(all_locations), settings)) else
       paste0(tradeoff_scores$location_name[match(location, tradeoff_scores$location)],
         " (", location, ")"), "| evaluation:", evaluation_label, "|",
     if (transform == "log1p") "log1p(counts) updates, loss of log(counts + 1)" else
       paste("raw-count updates, loss in", score_units))
-  # One page; location NULL: all prepared locations except the US (pooled_rows()), with every
+  # One page; location NULL: the pooled locations (pooled_rows()), with every
   # location as a small symbol or, means_only, only the means over locations. Every panel
   # has its own axis ranges; a loss beyond the axis is drawn at its edge as ">".
   draw_tradeoff_page <- function(location = NULL, means_only = FALSE) {
@@ -751,7 +785,7 @@ draw_tradeoff_pages <- function(disease) {
       k <- panel_rows$feedback[r]
       rows <- page[page$horizon == horizon & page$feedback_delay == tradeoff_feedback$delay[k] &
         page$feedback_revisions == tradeoff_feedback$revisions[k] & page$phase == phase, ]
-      # All locations: every location as a small, light symbol per method (legend shapes)
+      # Pooled locations: every location as a small, light symbol per method (legend shapes)
       # and the mean over locations as the usual symbol; the axes span the 1st to 99th
       # percentile of the single locations and the means.
       drawn <- if (all_page) aggregate(rows[c(tradeoff_loss, "coverage_error")], rows["method"],
