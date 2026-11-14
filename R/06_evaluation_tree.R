@@ -8,7 +8,9 @@
 # New York, Pennsylvania), one location each. Each page draws its own best methods.
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
-# multiqt_feedback_bars.pdf: every method under each feedback design, side by side.
+# multiqt_feedback_bars.pdf: every method under each feedback design, side by side, and
+# multiqt_feedback_bars_corrected.pdf: each design next to its corrected version. The tree and
+# multiqt_feedback_bars.pdf use the three designs without corrected labels.
 # Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
 source("R/03_functions.R")
 
@@ -36,7 +38,7 @@ splits <- c("feedback", "horizon")
 split_titles <- c(feedback = "feedback design", horizon = "horizon")
 phases <- c("overall", "before", "after")
 min_cases <- 5L                    # Nodes with fewer cases show no share of improved cases.
-# Scored on the tracker's scale, as the tuning and the trade-off pages of R/04.
+# Scored on the tracker's scale, as the trade-off pages of R/04.
 loss_column <- if (settings$transform == "log1p") "log_quantile_loss" else "quantile_loss"
 loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
   paste("loss in", count_scale_label(settings$scale_method))
@@ -44,12 +46,13 @@ loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
 # largest loss reduction in the window selection_phase (after peak) at the root of that page
 # (all its feedback designs, horizons and locations; the same base loss for every
 # method, so the smallest pooled loss), among the methods of 04's plots (method_groups in
-# R/03) except the target oracle (hindsight); best first, so the pages of a disease can draw
+# R/03) except the hindsight oracles; best first, so the pages of a disease can draw
 # different methods. Chosen on the evaluation period itself: a ranking, not a choice of
 # method.
 n_tree_methods <- 10L
 selection_phase <- "after"
-tree_candidates <- setdiff(unique(unlist(method_groups)), c("original", "oracle_target"))
+tree_candidates <- setdiff(unique(unlist(method_groups)), c("original", "oracle_target",
+  "phase_oracle"))
 # Colours as in 04's trade-off plots (tradeoff_colours in R/03), so a method keeps its
 # colour on every page. A variant shares its method's shade: pale with an outline in the
 # colour = common weights for all levels; black outline = + outer MultiQT. marker: the
@@ -81,15 +84,21 @@ dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
 # A case is one location, horizon and feedback design, scored over the evaluation period.
 # Feedback designs: "delay d" (learn once from the report d weeks after the first one) or
 # "re-run" (re-run every week on the reports known then).
+# Corrected designs (feedback_corrected; tables of an older R/04 have none): only in
+# multiqt_feedback_bars_corrected.pdf.
 scores <- scores[scores$phase %in% phases & is.finite(scores[[loss_column]]), ]
-scores$feedback <- ifelse(scores$feedback_revisions, ifelse(scores$feedback_delay > 0,
-  paste("re-run, delay", scores$feedback_delay), "re-run"), paste("delay", scores$feedback_delay))
-feedback_levels <- unique(scores$feedback[order(scores$feedback_revisions, scores$feedback_delay)])
+if (is.null(scores$feedback_corrected)) scores$feedback_corrected <- FALSE
+scores$feedback <- feedback_label(scores$feedback_delay, scores$feedback_revisions,
+  scores$feedback_corrected)
+all_levels <- unique(scores$feedback[order(scores$feedback_revisions, scores$feedback_delay,
+  scores$feedback_corrected)])
 scores$loss <- scores[[loss_column]]
 case_columns <- c("disease", "location", "horizon", "feedback", "phase")
 original <- scores[scores$method == "original", c(case_columns, "loss", "coverage_error")]
 names(original)[-seq_along(case_columns)] <- c("original_loss", "original_coverage_error")
-scores <- merge(scores[scores$method != "original", ], original, by = case_columns)
+all_designs <- merge(scores[scores$method != "original", ], original, by = case_columns)
+scores <- all_designs[!all_designs$feedback_corrected, ]
+feedback_levels <- intersect(all_levels, scores$feedback)
 split_values <- list(feedback = feedback_levels, horizon = sort(unique(scores$horizon)))
 split_names <- function(split, value) if (split == "horizon") paste("horizon", value) else value
 
@@ -385,10 +394,13 @@ bar_rows <- do.call(rbind, lapply(names(method_groups), function(group) {
   members <- intersect(bar_methods, names(home_group)[home_group == group])
   if (length(members)) data.frame(method = c(NA, members), group = group)
 }))
-draw_bar_page <- function(disease, location) {
-  rows <- scores[scores$disease == disease, ]
+# levels, tints: the designs drawn and their shares of the method colour; outlined: designs
+# drawn with a black outline (the corrected ones).
+draw_bar_page <- function(disease, location, data = scores, levels = feedback_levels,
+                          tints = design_tint, outlined = rep(FALSE, length(levels))) {
+  rows <- data[data$disease == disease, ]
   rows <- if (is.na(location)) pooled_rows(rows, settings) else rows[rows$location == location, ]
-  summary <- do.call(rbind, lapply(feedback_levels, function(feedback) {
+  summary <- do.call(rbind, lapply(levels, function(feedback) {
     s <- node_summary(rows[rows$feedback == feedback, ])
     if (!is.null(s)) cbind(s, feedback = feedback)
   }))
@@ -401,7 +413,7 @@ draw_bar_page <- function(disease, location) {
   if (max(values, na.rm = TRUE) < limit / 4) xlim[2] <- limit / 4
   ce_xlim <- c(0, 1.04 * max(summary$coverage_error, summary$original_coverage_error,
     na.rm = TRUE))
-  n_slot <- length(feedback_levels) + 1L                  # Bars of a method plus a gap.
+  n_slot <- length(levels) + 1L                           # Bars of a method plus a gap.
   y_top <- cumsum(ifelse(is.na(bar_rows$method), 1.4, n_slot))
   ylim <- c(max(y_top) + .5, .5)
   bar_y <- function(r, d) y_top[r] - n_slot + d
@@ -425,16 +437,17 @@ draw_bar_page <- function(disease, location) {
     ticks <- pretty(limits, n = if (loss) 5 else 4)
     abline(v = ticks, col = "gray90")
     axis(1, at = ticks, labels = if (loss) paste0(ticks, "%") else ticks, cex.axis = .7)
-    for (r in which(!is.na(bar_rows$method))) for (d in seq_along(feedback_levels)) {
+    for (r in which(!is.na(bar_rows$method))) for (d in seq_along(levels)) {
       method <- bar_rows$method[r]
-      s <- summary[summary$method == method & summary$feedback == feedback_levels[d] &
+      s <- summary[summary$method == method & summary$feedback == levels[d] &
         summary$phase == phase, ]
       if (!nrow(s) || !is.finite(s[[value]])) next
       y <- bar_y(r, d)
       x <- s[[value]]
       shown <- min(max(x, limits[1]), limits[2])
-      rect(0, y - .42, shown, y + .42, border = tradeoff_colours[[method]], lwd = .6,
-        col = tint(tradeoff_colours[[method]], design_tint[[d]]))
+      rect(0, y - .42, shown, y + .42, border = if (outlined[d]) "black" else
+        tradeoff_colours[[method]], lwd = if (outlined[d]) 1.1 else .6,
+        col = tint(tradeoff_colours[[method]], tints[[d]]))
       if (x > limits[2] || x < limits[1]) text(shown, y, if (x > limits[2]) ">" else "<",
         adj = c(as.numeric(x > limits[2]), .5), cex = .6, font = 2)
       if (loss && s$cases >= min_cases) mtext(sprintf("%.0f%%", 100 * s$share_improved),
@@ -455,7 +468,8 @@ draw_bar_page <- function(disease, location) {
     side = 3, outer = TRUE, line = 2.4, font = 2, cex = 1.15)
   par(xpd = NA)
   legend(grconvertX(.5, "ndc", "user"), grconvertY(1 - .2 / par("din")[2], "ndc", "user"),
-    paste("Feedback", feedback_levels), fill = tint("gray30", design_tint), border = "gray30",
+    paste("Feedback", levels), fill = tint("gray30", tints),
+    border = ifelse(outlined, "black", "gray30"),
     horiz = TRUE, bty = "n", xjust = .5, yjust = 1, cex = .95)
   par(xpd = FALSE)
   mtext(c(paste("Values and axes as in the evaluation tree. Loss bars: 100 * (1 - pooled loss /",
@@ -464,8 +478,9 @@ draw_bar_page <- function(disease, location) {
     paste0("Numbers right of the loss panels: share of the cases in which the method's loss is ",
       "below the base's (at least ", min_cases, " cases). Coverage error: mean over the levels ",
       "of |coverage - alpha|, weighted by the weeks; dashed: the base."),
-    paste("Top to bottom within a method: feedback", paste(feedback_levels, collapse = ", "),
-      "(darker to lighter). Each design uses the settings tuned with it.")),
+    paste("Top to bottom within a method: feedback", paste(levels, collapse = ", "),
+      if (any(outlined)) "(black outline: corrected labels)." else "(darker to lighter).",
+      "Every tracker learns at the adaptive rate (no tuning).")),
     side = 1, outer = TRUE, line = c(1.2, 2.4, 3.6), cex = .8)
 }
 cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars.pdf"), width = 18.5,
@@ -473,3 +488,16 @@ cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars.pdf"), width = 18.5,
   onefile = TRUE, family = "DejaVu Sans")
 for (p in seq_len(nrow(pages))) draw_bar_page(pages$disease[p], pages$location[p])
 dev.off()
+# Each design next to its corrected version (notes, "Revised reports as labels: corrected
+# labels"): the same pages, values and colours; corrected bars outlined in black.
+corrected_levels <- intersect(all_levels, all_designs$feedback)
+if (any(all_designs$feedback_corrected)) {
+  corrected <- corrected_levels %in% all_designs$feedback[all_designs$feedback_corrected]
+  uncorrected <- sub(", corrected$", "", corrected_levels)
+  cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars_corrected.pdf"), width = 18.5,
+    height = .125 * (sum(ifelse(is.na(bar_rows$method), 1.4, length(corrected_levels) + 1L))) +
+      2.4, onefile = TRUE, family = "DejaVu Sans")
+  for (p in seq_len(nrow(pages))) draw_bar_page(pages$disease[p], pages$location[p],
+    all_designs, corrected_levels, design_tint[uncorrected], corrected)
+  dev.off()
+}

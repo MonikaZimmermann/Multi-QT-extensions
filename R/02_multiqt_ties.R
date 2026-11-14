@@ -594,7 +594,7 @@ colour_index <- 1 + round(255 * (log10(display_multipliers[-1]) - log10(min(disp
   diff(range(log10(display_multipliers[-1]))))
 multiplier_colours <- c("orange", hcl.colors(320, "Viridis")[colour_index])
 # Both weekly diagnostics use the same quantile styles and peak marker.
-# Background of the time plots: the tuning period shaded, dotted lines at the peaks.
+# Background of the time plots: the first season (not scored) shaded, dotted lines at the peaks.
 mark_time <- function(case) {
   tuning <- case$target_date[case$period == "tuning"]
   usr <- par("usr")
@@ -670,7 +670,7 @@ draw_season_pages <- function(disease, horizon, k) {
       side = 3, outer = TRUE, line = 1, cex = 1)
     mtext(paste0(tracker_label, " | eta = m * S0, S0 = ", signif(run$s0$scale, 3),
       " | Scores/plots: ", count_scale_label(run$scaling$used), " | Dotted lines: peaks (local ",
-      "maxima of the latest counts) | Gray: tuning period (not scored)"),
+      "maxima of the latest counts) | Gray: first season (not scored)"),
       side = 3, outer = TRUE, line = -0.3, cex = 0.8)
     mtext(paste("alpha =", plot_alpha), side = 1, outer = TRUE,
       line = 0.5, at = c(0.2, 0.5, 0.8), col = alpha_colours, cex = 0.85)
@@ -684,98 +684,3 @@ for (k in seq_len(nrow(designs))) for (disease in diseases) for (horizon in sett
   draw_season_pages(disease, horizon, k)
 # Compare loss/coverage with these curves: do larger multipliers leave forecasts too high,
 # too low, or unstable after the peak? This motivates future adaptive rates.
-
-# 8. HOW STATIONARY ARE THE TRACKERS' SCORES? --------------------------------
-# For each score of base_scores() (R/03) and three levels: the latest counts on the
-# tracker's scale relative to the base quantile, divided by one constant per case (the
-# median |score| over its weeks and levels, as the trackers' S0 does), so the panels share
-# an axis. A stationary score keeps its level's quantile, the ideal offset of a tracker,
-# flat over time. One PDF per disease and horizon in multiqt_score_stationarity/: first the
-# pooled locations by week relative to the peak (the level's quantile over the pooled
-# locations and all peaks), then each location of settings$location_ids over time, with
-# the peaks dotted and the tuning period shaded. Scales from released reports (level RMS,
-# residual RMS) use the feedback of delay 0.
-score_levels <- c(.1, .5, .9)
-score_level_colours <- c("#0072B2", "black", "#D55E00")
-score_weeks <- -(settings$weeks_before_peak - 1L):settings$weeks_after_peak
-# Normalized scores of one case at score_levels: a list over score types of [week x level].
-case_scores <- function(case) {
-  truth <- score_truth(case, "latest", settings$score_filled)
-  lapply(setNames(names(score_types), names(score_types)), function(type) {
-    r <- base_scores(case, truth, type, method_parameters(), settings$scale_floor)
-    r[, match(score_levels, case$alpha), drop = FALSE] / median(abs(r[is.finite(r)]))
-  })
-}
-draw_score_pages <- function(disease, horizon) {
-  cases <- lapply(setNames(nm = union(settings$pooled_locations, settings$location_ids)),
-    function(location) get_case(prepared, disease, location, horizon, 0L, FALSE))
-  scores <- lapply(cases, case_scores)
-  path <- file.path(figure_dir, "multiqt_score_stationarity", paste0(disease, "_horizon",
-    horizon, ".pdf"))
-  cairo_pdf(path, width = 15, height = 8.5, family = "DejaVu Sans", onefile = TRUE)
-  panel_layout <- function() {
-    layout(matrix(1:8, 2, 4, byrow = TRUE))
-    par(oma = c(3.5, 0, 3.5, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.4, .7, 0), cex = .85)
-  }
-  legend_panel <- function() {
-    plot.new()
-    legend("center", legend = paste("Level", score_levels), col = score_level_colours,
-      lwd = 2, bty = "n", cex = 1.1)
-  }
-  title_line <- function(where) mtext(paste(disease, "| horizon", horizon, "|", where,
-    "| scores of the base forecast against the latest counts"), side = 3, outer = TRUE,
-    line = 1.5, font = 2, cex = 1.1)
-  # Pooled page: the level's quantile of the scores by week relative to each row's peak.
-  panel_layout()
-  for (type in names(score_types)) {
-    rows <- do.call(rbind, lapply(settings$pooled_locations, function(location) {
-      case <- cases[[location]]
-      keep <- case$relative_week %in% score_weeks
-      data.frame(week = case$relative_week[keep], scores[[location]][[type]][keep, ,
-        drop = FALSE])
-    }))
-    paths <- sapply(seq_along(score_levels), function(j) vapply(score_weeks, function(w)
-      quantile(rows[rows$week == w, j + 1L], score_levels[j], na.rm = TRUE, names = FALSE),
-      numeric(1)))
-    plot(NA, xlim = range(score_weeks), ylim = range(-1.5, 1.5, paths, na.rm = TRUE),
-      xlab = "Week relative to the peak", ylab = "Ideal offset (score / median |score|)",
-      main = score_types[[type]])
-    abline(h = 0, col = "gray65", lty = 2); abline(v = .5, col = "gray40", lty = 3)
-    matlines(score_weeks, paths, col = score_level_colours, lty = 1, lwd = 2)
-  }
-  legend_panel()
-  title_line(paste("the", pooled_label(length(settings$pooled_locations), settings),
-    "pooled, all peaks"))
-  mtext(paste("Each line: the level's quantile of the normalized scores over the pooled",
-    "locations and peaks in that week, i.e. the offset a tracker at that level would need;",
-    "flat = stationary.\nScores divided by their case's median |score| (all weeks and levels).",
-    "Dotted: between the peak week and the week after. Scales from reports: feedback delay 0."),
-    side = 1, outer = TRUE, line = 2, cex = .75)
-  # One page per plotted location: the normalized scores over time.
-  for (location in settings$location_ids) {
-    case <- cases[[location]]
-    dates <- case$target_date
-    ticks <- seq(as.Date(format(min(dates), "%Y-%m-01")), max(dates), by = "6 months")
-    panel_layout()
-    for (type in names(score_types)) {
-      values <- scores[[location]][[type]]
-      limit <- max(1.5, quantile(abs(values), .98, na.rm = TRUE))
-      broken <- break_gaps(dates, pmin(pmax(values, -limit), limit))
-      plot(NA, xlim = range(dates), ylim = c(-limit, limit), xaxt = "n", xaxs = "i",
-        xlab = "Target date", ylab = "Score / median |score|", main = score_types[[type]])
-      mark_time(case)
-      abline(h = 0, col = "gray65", lty = 2)
-      matlines(broken$dates, broken[[2]], col = score_level_colours, lty = 1, lwd = 1.4)
-      axis.Date(1, at = ticks, format = "%b\n%Y", cex.axis = .8)
-    }
-    legend_panel()
-    title_line(paste0(case$location_name, " (", location, ")"))
-    mtext(paste("Score of the latest count relative to the base quantile of each level, on",
-      "each tracker's scale, divided by the case's median |score|; beyond the axis: at its",
-      "edge.\nDotted lines: peaks (local maxima of the latest counts). Gray: tuning period.",
-      "Scales from reports: feedback delay 0."), side = 1, outer = TRUE, line = 2, cex = .75)
-  }
-  invisible(dev.off())
-}
-dir.create(file.path(figure_dir, "multiqt_score_stationarity"), showWarnings = FALSE)
-for (disease in diseases) for (horizon in settings$horizons) draw_score_pages(disease, horizon)

@@ -34,6 +34,17 @@ multiqt_settings <- function() {
   replay_warmup = TRUE,             # TRUE: learn from the first week on, S0 from those rows in hindsight.
   feedback_delay = 0L,              # Wait this many weeks after the first report, then learn once from the current one.
   feedback_revisions = FALSE,       # TRUE: re-run each week on the reports known then (Delphi).
+  feedback_corrected = FALSE,       # TRUE: young reports as corrected labels (label_correction).
+  # The feedback designs of 02, 04 and 06: the three designs, then their corrected versions
+  # (notes, "Revised reports as labels: corrected labels").
+  feedback_designs = data.frame(delay = c(0L, 1L, 0L, 0L, 1L, 0L),
+    revisions = c(FALSE, FALSE, TRUE, FALSE, FALSE, TRUE),
+    corrected = rep(c(FALSE, TRUE), each = 3L)),
+  # Corrected labels (correct_labels()): a report younger than `maturity` weeks is replaced by
+  # plausible counts from the revisions of the last `history` rows at least that old; the
+  # location's own rows once it has `own_rows` of them, else the pooled locations'; fewer
+  # than `min_rows`: the report itself.
+  label_correction = list(maturity = 2L, history = 52L, own_rows = 13L, min_rows = 8L),
   score_target = "latest",          # Scores against the "latest" report or the "feedback" learned from.
   score_filled = TRUE,              # Score filled rounds (fill_gaps_up_to in R/01_data_overview.R).
   scale_floor = 1e-6,               # Guard on S0, sigma_t and the level scales, not each rate.
@@ -148,8 +159,8 @@ revision_review_flags <- function(reports, exclusions = reviewed_report_exclusio
 # The delayed-feedback protocol of notes/notes.tex, Section 2.1.1 (wait for the delay, then
 # learn once from the report current at the update). R/01_data_overview.R builds every
 # case's feedback with feedback_schedule() and stores this protocol with the prepared data;
-# R/05 and R/04 write its id into the tuned settings and the scores. get_case(),
-# tuned_parameters() and R/06 stop on any other id, so results of different feedback
+# R/04 writes its id into the scores. get_case() and R/06 stop on any other id, so results
+# of different feedback
 # definitions are never combined. Change the id when the protocol changes. The
 # initialization is a separate convention (error_scale(), replay_warmup).
 feedback_protocol <- function() list(
@@ -278,7 +289,7 @@ feedback_audit <- function(prepared) do.call(rbind, lapply(prepared$cases, funct
 # each method is re-run from the first week, with the same rows in the same rounds but each
 # with its report at that week's cutoff (rerun_methods(), case_as_of()).
 get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
-                     revisions = FALSE) {
+                     revisions = FALSE, corrected = FALSE) {
   check_feedback_protocol(prepared$settings$feedback_protocol$id,
     "output/data/peak_aligned.rds", "Rscript R/01_data_overview.R")
   case <- prepared$cases[[paste(disease, location, horizon, sep = "_")]]
@@ -303,12 +314,98 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
     data.frame(reference_date = other$reference_date, target_date = other$target_date,
       as_of = other$as_of, horizon = h, median = other$base[, mid], filled = other$filled)
   }))
+  # corrected = TRUE: every consumed row whose report is young at its consumption cutoff
+  # learns plausible counts instead (correct_labels()); the revisions come from the case
+  # itself and from the pooled locations' cases of the same disease and horizon.
+  case$feedback_corrected <- corrected
+  if (corrected) {
+    settings <- multiqt_settings()
+    case$label_correction <- settings$label_correction
+    case$label_reference <- list(own = report_history(case),
+      pool = Filter(Negate(is.null), lapply(settings$pooled_locations, function(l) {
+        other <- prepared$cases[[paste(disease, l, horizon, sep = "_")]]
+        if (!is.null(other)) report_history(other)
+      })))
+    consumed <- unlist(feedback$by_week)
+    labels <- correct_labels(case, case$feedback_observed, consumed,
+      feedback$audit$consumed_cutoff[consumed])
+    case$feedback_observed <- labels$observed
+    case$feedback_samples <- labels$samples
+  }
   case
 }
 # Label of a feedback design.
-feedback_label <- function(delay, revisions = FALSE)
-  ifelse(revisions, ifelse(delay > 0, paste("re-run, delay", delay), "re-run"),
-    paste("delay", delay))
+feedback_label <- function(delay, revisions = FALSE, corrected = FALSE)
+  paste0(ifelse(revisions, ifelse(delay > 0, paste("re-run, delay", delay), "re-run"),
+    paste("delay", delay)), ifelse(corrected, ", corrected", ""))
+
+# Corrected labels (notes, "Revised reports as labels: corrected labels"). A report y_s of
+# age a (days since the row's first valid report) younger than label_correction$maturity
+# weeks is replaced by plausible counts (1 + y_s) exp(d_j) - 1, with d_j = log((1 + y_j now)
+# / (1 + y_j at age a)) the revisions of the last `history` rows j whose first report is at
+# least `maturity` weeks old at the cutoff: everything known at the cutoff. The location's
+# own rows once it has `own_rows` of them, else those of the pooled locations (same disease
+# and horizon); fewer than `min_rows`: the report itself. Trackers learn the share of
+# plausible counts at or below the issued forecast (covered_share()), mixtures their mean
+# quantile loss; S0, scales and rates use their median, the point nowcast.
+# Every version of each row of a case and its first valid report.
+report_history <- function(case) {
+  v <- case$report_versions[order(case$report_versions$row, case$report_versions$version), ]
+  rows <- split(v[c("version", "value")], factor(v$row, seq_len(nrow(case$base))))
+  first <- vapply(rows, function(r) {
+    ok <- valid_report(r$value)
+    if (any(ok)) as.numeric(r$version[which(ok)[1]]) else NA_real_
+  }, numeric(1))
+  list(rows = rows, first = as.Date(first, origin = "1970-01-01"))
+}
+# The report of row j current at `date`: NA before its first version or if the current
+# version is invalid (never an older one, as in feedback_schedule()).
+report_at <- function(history, j, date) {
+  r <- history$rows[[j]]
+  k <- findInterval(as.numeric(date), as.numeric(r$version))
+  if (k == 0L || !valid_report(r$value[k])) NA_real_ else r$value[k]
+}
+# The revisions d_j of a report of age `age` days at `cutoff` (log1p units).
+revision_sample <- function(history, cutoff, age, maturity, rows) {
+  j <- tail(which(!is.na(history$first) & history$first + 7 * maturity <= cutoff), rows)
+  young <- vapply(j, function(i) report_at(history, i, history$first[i] + age), numeric(1))
+  now <- vapply(j, function(i) report_at(history, i, cutoff), numeric(1))
+  ok <- is.finite(young) & is.finite(now)
+  log1p(now[ok]) - log1p(young[ok])
+}
+# The plausible counts of report y of age `age` at `cutoff`, or NULL (keep the report).
+plausible_counts <- function(reference, y, cutoff, age, settings) {
+  d <- revision_sample(reference$own, cutoff, age, settings$maturity, settings$history)
+  if (length(d) < settings$own_rows) d <- unlist(lapply(reference$pool, revision_sample,
+    cutoff, age, settings$maturity, settings$history))
+  if (length(d) < settings$min_rows) return(NULL)
+  pmax(expm1(log1p(y) + d), 0)
+}
+# Corrected labels of the learned `rows` (reports in `observed`, learned at `cutoffs`):
+# observed with the median plausible count of each corrected row, and samples, a list over
+# all rows with the plausible counts of the corrected rows (NULL for the others).
+correct_labels <- function(case, observed, rows, cutoffs) {
+  samples <- vector("list", length(observed))
+  for (i in seq_along(rows)) {
+    s <- rows[i]
+    age <- as.numeric(cutoffs[i] - case$label_reference$own$first[s])
+    if (!is.finite(observed[s]) || !is.finite(age) ||
+      age >= 7 * case$label_correction$maturity) next
+    x <- plausible_counts(case$label_reference, observed[s], cutoffs[i], age,
+      case$label_correction)
+    if (is.null(x)) next
+    samples[s] <- list(x)
+    observed[s] <- median(x)
+  }
+  list(observed = observed, samples = samples)
+}
+# The coverage a tracker learns from row s at its issued forecast q (one value per level):
+# the indicator of the report, or the share of its plausible counts at or below q.
+covered_share <- function(y, samples, q) if (is.null(samples)) y <= q else
+  vapply(q, function(z) mean(samples <= z), numeric(1))
+# Plausible counts in other units (divided by `divisor`); NULL stays NULL.
+scale_samples <- function(samples, divisor) if (is.null(samples)) NULL else
+  lapply(samples, function(x) if (!is.null(x)) x / divisor)
 
 # The case as re-run at issue week `week` (re-run design): its first `week` rows. The rows
 # consumed by then keep their rounds of the stateful schedule (every delay; later
@@ -333,11 +430,21 @@ case_as_of <- function(case, week, frozen_s0 = NULL, frozen_loss_scale = NULL) {
   }
   case$feedback_by_delay <- lapply(case$feedback_by_delay, replay)
   own <- case$feedback_by_delay[[as.character(case$feedback_delay)]]
+  # Corrected labels: every replayed row whose report is young at this week's cutoff.
+  samples <- NULL
+  if (isTRUE(case$feedback_corrected)) {
+    released <- unlist(own$by_week)
+    labels <- correct_labels(case, own$observed, released,
+      rep(case$as_of[week], length(released)))
+    own$observed <- labels$observed
+    samples <- labels$samples
+  }
   for (name in c("reference_date", "target_date", "truth_finalized", "filled", "filled_from",
     "truth_latest", "as_of", "cutoff_source", "period", "peak_index", "peak_date",
     "relative_week")) case[[name]] <- case[[name]][rows]
   case$base <- case$base[rows, , drop = FALSE]
   case$feedback_observed <- own$observed
+  case$feedback_samples <- samples
   case$feedback_date <- own$date
   case$feedback_by_week <- own$by_week
   case$rerun_omitted <- own$omitted
@@ -508,6 +615,44 @@ adaptive_rate <- function(case, mult, rounds = 20L, floor = 0, transform = "sqrt
   }
   eta
 }
+
+# The adaptive rate of every tracker (notes, "Learning rates"): Delphi's rule for any
+# score, mult times the 90% quantile of the absolute scores |S_s^alpha(y_s)| of the last
+# `rounds` learned rows, pooled over the levels. score(rows) returns the scores [row x level]
+# of learned rows, each with the report learned and the scale of its own cutoff; rows
+# without a score (before a scale exists) are left out. replay: until `rounds` rows are
+# learned, the first `rounds` learned rows in hindsight (the replay of the first 20 weeks,
+# as for S0), so the rate never rests on fewer rows; FALSE: the rows learned so far (0
+# before the first). In the re-run design the reports current at the issue week.
+rolling_rate <- function(case, score, mult = 1, rounds = 20L, replay = TRUE, floor = 0) {
+  released <- unlist(case$feedback_by_week)
+  n_released <- cumsum(lengths(case$feedback_by_week))
+  eta <- numeric(length(n_released))
+  if (!length(released)) return(eta)
+  scores <- abs(score(released))
+  usable <- which(apply(is.finite(scores), 1, all))      # Positions in release order.
+  for (week in seq_along(eta)) {
+    k <- sum(usable <= n_released[week])
+    use <- if (k >= rounds) usable[(k - rounds + 1L):k] else if (replay)
+      head(usable, rounds) else usable[seq_len(k)]
+    if (length(use)) eta[week] <- max(floor, mult * quantile(scores[use, ], .9,
+      names = FALSE))
+  }
+  eta
+}
+# The scores of learned rows for rolling_rate(): the residual in tracker units relative to the
+# base (or another centre [week x level]), divided by sigma (one scale per week or one per
+# week and level) for a studentized tracker.
+tracker_score <- function(case, transform, sigma = NULL, centre = case$base) function(rows) {
+  r <- to_tracker(case$feedback_observed[rows], transform) -
+    to_tracker(centre[rows, , drop = FALSE], transform)
+  if (is.null(sigma)) r else r / (if (is.matrix(sigma)) sigma[rows, , drop = FALSE] else
+    sigma[rows])
+}
+# The scores of the PIT tracker: PIT of the report under the base minus alpha.
+pit_score <- function(case) function(rows) t(vapply(rows, function(s)
+  base_pit(case$feedback_observed[s], case$base[s, ], case$alpha) - case$alpha,
+  numeric(length(case$alpha))))
 
 # Reference loss that makes the expert weights unit-free: the base's mean pinball loss
 # over the S0 rows (error_scale()), against the reports learned from, in counts /
@@ -802,7 +947,7 @@ weighted_isoreg <- function(v, w) {
 # Returns the adjusted forecasts in counts.
 multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
                     warmup_weeks = 0L, transform = "log1p", sigma = 1, start = 0,
-                    eta_slow = 0, fast_decay = 0) {
+                    eta_slow = 0, fast_decay = 0, feedback_samples = NULL) {
   n <- nrow(base)
   # Only warmup weeks (e.g. S0 never initialized), or nothing to learn and start = 0:
   # keep the exact base.
@@ -834,7 +979,10 @@ multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
     for (past_week in feedback_by_week[[week]]) {
       # Compare with the HISTORICAL ISSUED forecast in tracker units.
       # At alpha=.9, eta=.01, a miss adds .009; coverage subtracts .001.
-      covered <- feedback_tracker[past_week] <= q_tracker[past_week, ]
+      # Corrected labels: the share of the plausible counts (covered_share()).
+      plausible <- feedback_samples[[past_week]]
+      covered <- if (is.null(plausible)) feedback_tracker[past_week] <= q_tracker[past_week, ] else
+        covered_share(NULL, to_tracker(plausible, transform), q_tracker[past_week, ])
       offsets <- offsets + eta[week] * (alpha - covered)
       slow <- slow + eta_slow[week] * (alpha - covered)
     }
@@ -870,7 +1018,8 @@ median_multiqt <- function(case, eta, sigma, start, warmup_weeks = 0L, transform
   warmup <- seq_len(nrow(median_base)) <= warmup_weeks
   median_base[warmup, ] <- case$base[warmup, ]
   multiqt(median_base, case$feedback_observed, case$feedback_by_week, case$alpha, eta,
-    warmup_weeks, transform, sigma = sigma, start = start)
+    warmup_weeks, transform, sigma = sigma, start = start,
+    feedback_samples = case$feedback_samples)
 }
 
 # The base's quantile function at probability levels p (one row b of base quantiles at the
@@ -907,18 +1056,20 @@ base_pit <- function(y, b, alpha, floor = 1e-4) {
 # is no tracker transform and no S0: eta is in probability units. The first warmup_weeks
 # forecasts keep the base, as in multiqt(). Returns the forecasts in counts.
 pit_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, warmup_weeks = 0L,
-                        floor = 1e-4) {
+                        floor = 1e-4, feedback_samples = NULL) {
   n <- nrow(base)
-  if (warmup_weeks >= n || eta == 0) return(base)
+  if (length(eta) == 1L) eta <- rep(eta, n)
+  if (warmup_weeks >= n || all(eta == 0)) return(base)
   stopifnot(ncol(base) == length(alpha), length(feedback) == n,
-    length(feedback_by_week) == n, length(eta) == 1L, is.finite(eta), eta > 0,
+    length(feedback_by_week) == n, length(eta) == n, all(is.finite(eta)), all(eta >= 0),
     all(is.finite(base)), all(is.finite(feedback[unlist(feedback_by_week)])))
   offsets <- rep(0, length(alpha))
   q <- base
   for (week in seq_len(n)) {
     if (week <= warmup_weeks) next
     for (past_week in feedback_by_week[[week]])
-      offsets <- offsets + eta * (alpha - (feedback[past_week] <= q[past_week, ]))
+      offsets <- offsets + eta[week] * (alpha - covered_share(feedback[past_week],
+        feedback_samples[[past_week]], q[past_week, ]))
     levels <- pmin(pmax(isoreg(alpha + offsets)$yf, floor), 1 - floor)
     # Unchanged levels keep the exact base, so roundoff cannot flip ties.
     if (any(levels != alpha)) q[week, ] <- base_quantile_function(base[week, ], alpha, levels)
@@ -926,69 +1077,269 @@ pit_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, warmup_wee
   q
 }
 
-# The scores of the trackers (02's score plots): for each week and level, an observation y
-# (counts) on the scale of a tracker, relative to the base quantile: r = S_t^alpha(y),
-# whose alpha-quantile is the ideal offset of that tracker at that level (flat over time:
-# a stationary score). Scales from released reports use the case's feedback; no
-# sigma_bounds. residual_rms: the studentized median's score, (y - b^.5) / sigma_t minus
-# its normal start qnorm(alpha); pit: PIT(y) - alpha.
-score_types <- c(additive = "Additive (Fixed, Leaky)", log1p = "log1p tracker",
-  sqrt = "Square root (Delphi)", base_width = "Base width (full base)",
-  level_rms = "Level RMS (full base)", residual_rms = "Residual RMS (median)",
-  pit = "PIT (full base)")
-base_scores <- function(case, y, type, params = method_parameters(), floor = 1e-6) {
+# Two-phase MultiQT (phase_power, phase_oracle; notes, "A phase probability in the
+# score"): two hidden states, one for the rise and one for the decline of a wave, issued as
+# b_t + sigma_t ((1 - p_t) offsets_rise + p_t offsets_decline) with p_t the probability that
+# week t lies in a decline (known at its cutoff, or the hindsight phase for the oracle). A
+# report on row s gives the subgradient of the studentized quantile loss of the issued q_s
+# with respect to each state, (1 - p_s) (alpha - covered) and p_s (alpha - covered): each
+# state learns from the weeks of its phase. eta per week, sigma per week or per week and
+# level (weighted projection); counts (identity tracker). The first warmup_weeks keep the
+# base.
+phase_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, p, sigma = 1,
+                          warmup_weeks = 0L, feedback_samples = NULL) {
+  n <- nrow(base)
+  if (length(eta) == 1L) eta <- rep(eta, n)
+  if (length(sigma) == 1L) sigma <- rep(sigma, n)
+  by_level <- is.matrix(sigma)
+  stopifnot(length(eta) == n, all(is.finite(eta)), length(p) == n,
+    all(is.finite(p) & p >= 0 & p <= 1), NROW(sigma) == n)
+  rise <- decline <- rep(0, length(alpha))
+  q <- base
+  for (week in seq_len(n)) {
+    if (week <= warmup_weeks) next
+    for (past_week in feedback_by_week[[week]]) {
+      step <- eta[week] * (alpha - covered_share(feedback[past_week],
+        feedback_samples[[past_week]], q[past_week, ]))
+      rise <- rise + (1 - p[past_week]) * step
+      decline <- decline + p[past_week] * step
+    }
+    offsets <- (1 - p[week]) * rise + p[week] * decline
+    q[week, ] <- if (by_level) weighted_isoreg(base[week, ] + sigma[week, ] * offsets,
+      (min(sigma[week, ]) / sigma[week, ])^2) else isoreg(base[week, ] + sigma[week] * offsets)$yf
+  }
+  q
+}
+# The probability that week t lies in the decline of a wave, learned from the recent errors
+# of the base: the mean of 1 - PIT (base_pit()) of the reports of the last `rows` rows
+# learned by the cutoff, near 1 when the reports fall below the base (it forecasts too high,
+# as after a peak), near 0 when they rise above it; 1/2 before the first report. A PIT the
+# base cannot give (e.g. a flat nowcast) counts as 1/2, no information.
+decline_probability <- function(case, rows = 4L) {
+  released <- unlist(case$feedback_by_week)
+  n_released <- cumsum(lengths(case$feedback_by_week))
+  pit <- vapply(released, function(s) base_pit(case$feedback_observed[s], case$base[s, ],
+    case$alpha), numeric(1))
+  pit[!is.finite(pit)] <- .5
+  vapply(n_released, function(k) if (k == 0) .5 else mean(1 - pit[max(1L, k - rows + 1L):k]),
+    numeric(1))
+}
+
+# Error scale from the base's own revisions, known at the cutoff and without feedback lag:
+# the forecasts of one target week at successive cutoffs disagree roughly as much as the
+# base errs. For row t: the median absolute difference, in tracker units, between a base
+# median of this cutoff and the medians the base issued for the same target week at earlier
+# cutoffs (horizons -1 to 3, so up to 4 weeks earlier). type "cutoff": every target of this
+# cutoff (horizons -1 to 2 have earlier forecasts), one scale for all horizons; "target":
+# only row t's own target (none at the longest horizon). Filled forecasts and forecasts not
+# available by the cutoff are left out; a row without pairs keeps the last scale.
+# history: case$context_forecasts (get_case()). A candidate scale of R/07, not a method.
+revision_sigma <- function(case, type = "cutoff", floor = 1e-6, transform = "identity") {
+  stopifnot(type %in% c("cutoff", "target"))
+  history <- case$context_forecasts
+  history <- history[!is.na(history$filled) & !history$filled & !is.na(history$as_of) &
+    is.finite(history$median) & history$median >= 0, ]
+  value <- to_tracker(history$median, transform)
+  scale <- rep(NA_real_, length(case$reference_date))
+  for (t in seq_along(scale)) {
+    known <- history$as_of <= case$as_of[t]
+    now <- which(known & history$reference_date == case$reference_date[t])
+    if (type == "target") now <- now[history$target_date[now] == case$target_date[t]]
+    earlier <- which(known & history$reference_date < case$reference_date[t] &
+      history$target_date %in% history$target_date[now])
+    if (!length(earlier)) next
+    current <- value[now][match(history$target_date[earlier], history$target_date[now])]
+    scale[t] <- max(floor, median(abs(value[earlier] - current)))
+  }
+  for (t in seq_along(scale)[-1]) if (!is.finite(scale[t])) scale[t] <- scale[t - 1L]
+  first <- match(TRUE, is.finite(scale))
+  list(scale = scale, warmup_weeks = if (is.na(first)) length(scale) else first - 1L,
+    type = type)
+}
+
+# Scores tested for a stable alpha-quantile (R/07_score_selection.R; notes, "Scores and
+# scales tested"). For one case, each candidate turns an outcome y (counts) into a score
+# S_t^alpha(y) relative to the base quantile; the alpha-quantile of the realized scores is
+# the threshold a tracker on that score needs, constant over time if the score is
+# quantile-stable. Three kinds:
+#   scale      (y - centre_t^alpha) / sigma_t, sigma one scale per week (vector) or one per
+#              week and level (matrix); the centre is the base, or for the median rebuild
+#              b_t^.5 + sigma_t qnorm(alpha);
+#   transform  psi_t(y) - psi_t(b_t^alpha), psi_t increasing and fixed at the cutoff:
+#              f(x, t) and its inverse inv(v, t);
+#   pit        F_t(y) - alpha, the PIT of the base (base_pit()).
+# Scales from reports use those known at each cutoff (the case's feedback schedule); a scale
+# stays within a factor `guard` of the median of its values so far (it binds only where a
+# scale explodes, e.g. the t-PIT scale). The scales of the base width, the recent errors and
+# the revisions keep the bounds sigma_bounds * S0 of their methods. origin: where the idea
+# came from; methods: the methods that use it.
+score_candidates <- data.frame(id = c("identity", "sqrt", "log1p", "boxcox_25", "boxcox_75",
+  "power_m100", "power_25", "power_50", "power_75", "power_100", "power_150", "power_200",
+  "power_level_75", "level_rms", "median_rms", "base_width", "half_iqr", "spread", "pit",
+  "revisions_cutoff", "revisions_target", "window_asinh", "window_asinh_median",
+  "window_boxcox_median", "window_mlog_median", "tpit_25", "tpit_49", "centred_asinh",
+  "centred_mlog"),
+  label = c("Identity", "Square root", "log1p", "Box-Cox 0.25 on counts",
+    "Box-Cox 0.75 on counts", "(1 + median)^-1", "(1 + median)^0.25", "(1 + median)^0.5",
+    "(1 + median)^0.75", "1 + median", "(1 + median)^1.5", "(1 + median)^2",
+    "(1 + b)^0.75 per level", "Level RMS of recent errors", "Median rebuild, recent errors",
+    "Base width", "Half the base IQR", "Spread per level",
+    "PIT of the base", "Revisions, every target", "Revisions, own target",
+    "asinh, window, exact", "asinh, window, at the median", "Box-Cox 0, window, at the median",
+    "Mirror log 0.3, window, at the median", "t-PIT 25, window, at the median",
+    "t-PIT 49, window, at the median", "asinh, centred, exact", "Mirror log 1/3, centred, exact"),
+  origin = c(rep("Trackers in use", 3), rep("Level of the forecast", 10),
+    rep("Recent errors", 2), rep("Spread of the forecast", 4),
+    rep("Revisions of the forecast", 2), rep("Uniejewski (2025)", 8)),
+  methods = c("fixed, leaky", "ref_op, sqrt_constant", "fixed_log, leaky_log", "", "", "", "",
+    "studentized_power", "", "", "", "", "", "studentized_level_rms", "studentized",
+    "studentized_full, studentized_base", "", "studentized_spread", "studentized_pit", "",
+    "", "", "", "", "", "studentized_tpit", "", "", ""))
+
+# Transforms T(z) of Uniejewski (2025), their inverse and derivative: the parametrized asinh
+# (slope c at the origin), the symmetric Box-Cox and the mirror log.
+asinh_transform <- function(c) {
+  a <- sqrt(1 / c^2 - 1)
+  list(f = function(z) sign(z) * (asinh(abs(z) + a) - asinh(a)),
+    inv = function(v) sign(v) * (sinh(abs(v) + asinh(a)) - a),
+    d = function(z) 1 / sqrt(1 + (abs(z) + a)^2))
+}
+boxcox_transform <- function(lambda) list(
+  f = function(z) if (lambda == 0) sign(z) * log1p(abs(z)) else
+    sign(z) * ((abs(z) + 1)^lambda - 1) / lambda,
+  d = function(z) (abs(z) + 1)^(lambda - 1))
+mlog_transform <- function(c) list(f = function(z) sign(z) * log1p(c * abs(z)),
+  inv = function(v) sign(v) * expm1(abs(v)) / c, d = function(z) c / (1 + c * abs(z)))
+# Box-Cox on counts, psi(x) = ((1 + x)^lambda - 1) / lambda (lambda = 0: log1p), and inverse.
+boxcox_counts <- function(lambda) list(
+  f = function(x, t) if (lambda == 0) log1p(x) else ((1 + x)^lambda - 1) / lambda,
+  inv = function(v, t) if (lambda == 0) expm1(v) else pmax(1 + lambda * v, 0)^(1 / lambda) - 1)
+
+# The candidates of one case (score_candidates$id): a list of score objects. s0: the case's
+# error_scale() (for the bounds); params: method_parameters().
+candidate_scores <- function(case, s0, params = method_parameters(), guard = 20,
+                             window = 26L, min_reports = 8L) {
   B <- case$base; a <- case$alpha
-  switch(type,
-    additive = y - B,
-    log1p = log1p(y) - log1p(B),
-    sqrt = sqrt(y) - sqrt(B),
-    base_width = (y - B) / median_sigma(case, "base", floor = floor, transform = "identity",
-      levels = params$median_base_levels)$scale,
-    level_rms = (y - B) / level_residual_sigma(case, params$median_window,
-      params$median_min_rows, floor, "identity", params$residual_estimator),
-    residual_rms = outer((y - B[, match(.5, a)]) / median_sigma(case, "residuals",
-      params$median_window, params$median_min_rows, floor, "identity",
-      estimator = params$residual_estimator)$scale, qnorm(a), "-"),
-    pit = t(vapply(seq_along(y), function(i) base_pit(y[i], B[i, ], a) - a, numeric(length(a)))),
-    stop("Unknown score type ", type))
+  m <- B[, match(.5, a)]
+  n <- nrow(B)
+  bound <- function(scale) if (!isTRUE(s0$initialized)) scale else
+    pmin(pmax(scale, params$sigma_bounds[1] * s0$scale), params$sigma_bounds[2] * s0$scale)
+  guarded <- function(sigma) {
+    S <- as.matrix(sigma)
+    S[!is.finite(S) | S <= 0] <- NA
+    centre <- vapply(seq_len(nrow(S)), function(t)
+      suppressWarnings(median(S[seq_len(t), ], na.rm = TRUE)), numeric(1))
+    S <- pmin(pmax(S, centre / guard), centre * guard)
+    if (is.matrix(sigma)) S else S[, 1]
+  }
+  scaled <- function(sigma, centre = B) list(kind = "scale", sigma = guarded(sigma),
+    centre = centre)
+  transform <- function(f, inv) list(kind = "transform", f = f, inv = inv)
+  # Median and median absolute deviation of the last `window` reports known at each cutoff.
+  released <- unlist(case$feedback_by_week)
+  n_released <- cumsum(lengths(case$feedback_by_week))
+  reports <- lapply(n_released, function(k) if (k < min_reports) NULL else {
+    x <- case$feedback_observed[released[max(1L, k - window + 1L):k]]
+    x[is.finite(x)]
+  })
+  m_w <- vapply(reports, function(x) if (length(x)) median(x) else NA_real_, numeric(1))
+  s_w <- vapply(reports, function(x) if (length(x)) max(1, median(abs(x - median(x)))) else
+    NA_real_, numeric(1))
+  s_c <- pmax(1, (B[, match(.75, a)] - B[, match(.25, a)]) / 2)   # Half the base IQR.
+  # Standardized transform T((x - centre_t) / spread_t) as a score.
+  standardized <- function(tr, centre, spread) transform(
+    function(x, t) tr$f((x - centre[t]) / spread[t]),
+    function(v, t) centre[t] + spread[t] * tr$inv(v))
+  at_median <- function(tr) scaled(s_w / tr$d((m - m_w) / s_w))
+  median_scale <- guarded(bound(median_sigma(case, "residuals", params$median_window,
+    params$median_min_rows, 1e-6, "identity", estimator = params$residual_estimator)$scale))
+  list(
+    identity = scaled(rep(1, n)),
+    sqrt = transform(function(x, t) sqrt(pmax(x, 0)), function(v, t) pmax(v, 0)^2),
+    log1p = transform(boxcox_counts(0)$f, boxcox_counts(0)$inv),
+    boxcox_25 = transform(boxcox_counts(.25)$f, boxcox_counts(.25)$inv),
+    boxcox_75 = transform(boxcox_counts(.75)$f, boxcox_counts(.75)$inv),
+    power_m100 = scaled((1 + m)^-1), power_25 = scaled((1 + m)^.25),
+    power_50 = scaled(power_sigma(case, .5)), power_75 = scaled((1 + m)^.75),
+    power_100 = scaled(1 + m), power_150 = scaled((1 + m)^1.5), power_200 = scaled((1 + m)^2),
+    power_level_75 = scaled((1 + B)^.75),
+    level_rms = scaled(bound(level_residual_sigma(case, params$median_window,
+      params$median_min_rows, 1e-6, "identity", params$residual_estimator))),
+    median_rms = list(kind = "scale", sigma = median_scale,
+      centre = m + outer(median_scale, qnorm(a))),
+    base_width = scaled(bound(median_sigma(case, "base", floor = 1e-6, transform = "identity",
+      levels = params$median_base_levels)$scale)),
+    half_iqr = scaled(s_c),
+    spread = scaled(spread_sigma(case, params$spread_lambda)),
+    pit = list(kind = "pit"),
+    revisions_cutoff = scaled(bound(revision_sigma(case, "cutoff")$scale)),
+    revisions_target = scaled(bound(revision_sigma(case, "target")$scale)),
+    window_asinh = standardized(asinh_transform(1), m_w, s_w),
+    window_asinh_median = at_median(asinh_transform(1)),
+    window_boxcox_median = at_median(boxcox_transform(0)),
+    window_mlog_median = at_median(mlog_transform(.3)),
+    tpit_25 = scaled(tpit_sigma(case, 25, window, min_reports)),
+    tpit_49 = scaled(tpit_sigma(case, 49, window, min_reports)),
+    centred_asinh = standardized(asinh_transform(1), m, s_c),
+    centred_mlog = standardized(mlog_transform(1 / 3), m, s_c))
+}
+# Scores [rows x level] of outcomes y (one per row of rows) under one candidate, each row
+# with the scale or transform of its own cutoff.
+candidate_score <- function(candidate, case, y, rows) {
+  B <- case$base[rows, , drop = FALSE]
+  switch(candidate$kind,
+    scale = (y - candidate$centre[rows, , drop = FALSE]) / (if (is.matrix(candidate$sigma))
+      candidate$sigma[rows, , drop = FALSE] else candidate$sigma[rows]),
+    transform = t(vapply(seq_along(rows), function(i) candidate$f(y[i], rows[i]) -
+      candidate$f(B[i, ], rows[i]), numeric(ncol(B)))),
+    pit = t(vapply(seq_along(rows), function(i) base_pit(y[i], B[i, ], case$alpha) -
+      case$alpha, numeric(ncol(B)))))
+}
+# The forecast of row t with thresholds u (one per level) on a candidate's score: the
+# inversion of S_t^alpha(y) <= u^alpha, levels sorted.
+candidate_forecast <- function(candidate, case, u, t) {
+  b <- case$base[t, ]
+  sort(na.last = TRUE, switch(candidate$kind,
+    scale = candidate$centre[t, ] + (if (is.matrix(candidate$sigma)) candidate$sigma[t, ] else
+      candidate$sigma[t]) * u,
+    transform = candidate$inv(candidate$f(b, t) + u, t),
+    pit = base_quantile_function(b, case$alpha, pmin(pmax(case$alpha + u, 1e-4), 1 - 1e-4))))
 }
 
 # 5. EXPERT CREATORS ------------------------------------------------------
 # All creators return the same expert object:
 #   forecasts  [week x expert x level] in counts / count_scale, NA before birth;
 #   birth_week the first issue week of each expert;
-#   experts    metadata: expert name, eta, start date (and multiplier).
-# scale is the error_scale() result; eta = multiplier * S0.
+#   experts    metadata: expert name, multiplier or leak (and start date).
+# Rates are multiples of a rolling scale per week (rolling_rate()).
 
-# One MultiQT expert per rate multiplier. All experts issue from the first week,
-# keep the base during the S0 warmup and learn from their own issued forecasts.
-# sigma (optional): a studentized scale in counts (normalized_scale()); the rates are then
-# the multipliers in units of sigma, and warmup_weeks covers the weeks before the scale.
-make_rate_experts <- function(case, multipliers, scale, count_scale = 1, transform = "log1p",
-                              sigma = NULL, warmup_weeks = scale$warmup_weeks) {
+# One MultiQT expert per rate multiplier. All experts issue from the first week, keep the
+# base during the warmup and learn from their own issued forecasts. rate_unit: the rolling
+# scale of the tracker's scores per week (rolling_rate() with mult 1), so expert j learns at
+# multipliers[j] * rate_unit (Delphi's adaptive rate: multiplier .03). sigma (optional): a
+# studentized scale in counts (normalized_scale()); rate_unit is then in units of sigma.
+make_rate_experts <- function(case, multipliers, rate_unit, count_scale = 1,
+                              transform = "log1p", sigma = NULL, warmup_weeks = 0L) {
   n <- nrow(case$base)
-  eta <- if (is.null(sigma)) multipliers * scale$scale else multipliers
-  eta[multipliers == 0] <- 0
   names <- paste0("m=", multipliers)
   forecasts <- array(NA_real_, c(n, length(multipliers), length(case$alpha)),
     dimnames = list(as.character(case$reference_date), names, as.character(case$alpha)))
   for (j in seq_along(multipliers))
     forecasts[, j, ] <- multiqt(case$base, case$feedback_observed, case$feedback_by_week,
-      case$alpha, eta[j], warmup_weeks, transform,
-      sigma = if (is.null(sigma)) 1 else sigma) / count_scale
+      case$alpha, multipliers[j] * rate_unit, warmup_weeks, transform,
+      sigma = if (is.null(sigma)) 1 else sigma,
+      feedback_samples = case$feedback_samples) / count_scale
   list(forecasts = forecasts, birth_week = rep(1L, length(multipliers)),
-    experts = data.frame(expert = names, multiplier = multipliers, eta,
-      start_date = case$reference_date[1]))
+    experts = data.frame(expert = names, multiplier = multipliers))
 }
 
-# Restart experts: after the S0 warmup, start one fresh MultiQT copy per multiplier
-# at every issue week. A copy forecasts the base at birth and learns only from
-# reports on its own forecasts; delayed reports on earlier rows are ignored.
-make_restart_experts <- function(case, multipliers, scale, count_scale = 1, transform = "log1p",
-                                 sigma = NULL, warmup_weeks = scale$warmup_weeks) {
+# One fresh MultiQT copy per multiplier at every issue week after the warmup. A copy
+# starts at the base with zero offsets and learns only from forecasts issued since its
+# start, at multiplier * rate_unit of those weeks (make_rate_experts()).
+make_restart_experts <- function(case, multipliers, rate_unit, count_scale = 1,
+                                 transform = "log1p", sigma = NULL, warmup_weeks = 0L) {
   n <- nrow(case$base)
   births <- if (warmup_weeks < n) seq.int(warmup_weeks + 1L, n) else integer()
-  if (length(births)) stopifnot(is.finite(scale$scale), scale$scale > 0)
   birth_week <- rep(births, each = length(multipliers))
   multiplier <- rep(multipliers, times = length(births))
   names <- if (length(birth_week))
@@ -1003,14 +1354,68 @@ make_restart_experts <- function(case, multipliers, scale, count_scale = 1, tran
     copy_sigma <- if (is.null(sigma)) 1 else if (is.matrix(sigma))
       sigma[issued, , drop = FALSE] else sigma[issued]
     forecasts[issued, j, ] <- multiqt(case$base[issued, , drop = FALSE],
-      case$feedback_observed[issued], schedule, case$alpha,
-      if (is.null(sigma)) multiplier[j] * scale$scale else multiplier[j],
-      transform = transform, sigma = copy_sigma) / count_scale
+      case$feedback_observed[issued], schedule, case$alpha, multiplier[j] * rate_unit[issued],
+      transform = transform, sigma = copy_sigma,
+      feedback_samples = case$feedback_samples[issued]) / count_scale
   }
   list(forecasts = forecasts, birth_week = birth_week,
     experts = data.frame(expert = names, multiplier,
-      eta = if (is.null(sigma)) multiplier * scale$scale else multiplier,
       start_date = case$reference_date[birth_week]))
+}
+
+# Leaky MultiQT at the rate eta (per week) for every leak of `leaks`: the leak bank of
+# leaky_select and leaky_weighted, the same expert object as make_rate_experts().
+make_leak_experts <- function(case, leaks, eta, count_scale = 1, transform = "log1p") {
+  n <- nrow(case$base)
+  names <- paste0("leak=", leaks)
+  forecasts <- array(NA_real_, c(n, length(leaks), length(case$alpha)),
+    dimnames = list(as.character(case$reference_date), names, as.character(case$alpha)))
+  for (j in seq_along(leaks))
+    forecasts[, j, ] <- multiqt(case$base, case$feedback_observed, case$feedback_by_week,
+      case$alpha, eta, 0L, transform, fast_decay = leaks[j],
+      feedback_samples = case$feedback_samples) / count_scale
+  list(forecasts = forecasts, birth_week = rep(1L, length(leaks)),
+    experts = data.frame(expert = names, leak = leaks))
+}
+
+# Prequential choice among experts that issue every week (leaky_select): at each issue
+# week the expert whose issued forecasts had the smallest quantile loss, summed over the
+# levels, over the last `window` rows learned by then (each row's report as learned);
+# expert `first` before any row is learned; ties: the first. Returns the issued forecasts
+# [week x level] (counts / count_scale) and the chosen expert per week.
+select_expert <- function(experts, case, window, count_scale = 1, first = 1L) {
+  f <- experts$forecasts
+  released <- unlist(case$feedback_by_week)
+  n_released <- cumsum(lengths(case$feedback_by_week))
+  y <- case$feedback_observed / count_scale
+  plausible <- scale_samples(case$feedback_samples, count_scale)   # Corrected labels.
+  loss <- matrix(0, length(released), dim(f)[2])
+  for (i in seq_along(released)) for (j in seq_len(dim(f)[2])) {
+    pinball <- function(y) {
+      e <- y - f[released[i], j, ]
+      sum(pmax(e, 0) * case$alpha + pmax(-e, 0) * (1 - case$alpha))
+    }
+    x <- plausible[[released[i]]]
+    loss[i, j] <- if (is.null(x)) pinball(y[released[i]]) else mean(vapply(x, pinball, 0))
+  }
+  chosen <- vapply(n_released, function(k) if (k == 0) as.integer(first) else
+    which.min(colSums(loss[max(1L, k - window + 1L):k, , drop = FALSE])), integer(1))
+  q <- t(vapply(seq_along(chosen), function(t) f[t, chosen[t], ], numeric(dim(f)[3])))
+  dimnames(q) <- dimnames(f)[c(1, 3)]
+  list(q = q, chosen = chosen)
+}
+
+# Sign-flip experts (power_flip, level_flip, width_flip): the base, a tracker's forecasts
+# and its mirror, the base minus the tracker's correction, 2 b_t - q_t, levels sorted. All
+# [week x level] in counts / count_scale; experts named base, tracker and mirror.
+flip_bank <- function(base, tracker, case) {
+  mirror <- t(apply(2 * base - tracker, 1, sort))
+  forecasts <- aperm(array(c(base, tracker, mirror), c(nrow(base), ncol(base), 3L)),
+    c(1, 3, 2))
+  dimnames(forecasts) <- list(as.character(case$reference_date), c("base", "tracker",
+    "mirror"), as.character(case$alpha))
+  list(forecasts = forecasts, birth_week = rep(1L, 3L),
+    experts = data.frame(expert = c("base", "tracker", "mirror")))
 }
 
 # 6. EXPONENTIAL WEIGHTING OF EXPERTS --------------------------------------
@@ -1045,7 +1450,8 @@ make_restart_experts <- function(case, multipliers, scale, count_scale = 1, tran
 exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
                         lambda = "learned", centered = FALSE, sharing = TRUE, H = 8L,
                         share = 1 / (2 * H), per_quantile = TRUE, lambda_start = 2.72,
-                        warmup_weeks = 0L, loss_scale = 1, keep = Inf) {
+                        warmup_weeks = 0L, loss_scale = 1, keep = Inf,
+                        feedback_samples = NULL) {
   forecasts <- experts$forecasts
   birth <- experts$birth_week
   n <- nrow(base); k <- length(birth); a <- length(alpha)
@@ -1087,9 +1493,16 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
         learning_rate[overflow] <- sqrt(constant) / sqrt(denominator[overflow])
         # If recent losses are all zero, keep the previous finite learning rate.
       }
-      error <- feedback[past] - matrix(forecasts[past, eligible, ], length(eligible), a)
-      loss <- (pmax(error, 0) * rep(alpha, each = length(eligible)) +
-        pmax(-error, 0) * rep(1 - alpha, each = length(eligible))) / loss_scale
+      issued <- matrix(forecasts[past, eligible, ], length(eligible), a)
+      pinball <- function(y) {
+        error <- y - issued
+        (pmax(error, 0) * rep(alpha, each = length(eligible)) +
+          pmax(-error, 0) * rep(1 - alpha, each = length(eligible))) / loss_scale
+      }
+      # Corrected labels: the mean quantile loss over the plausible counts.
+      plausible <- feedback_samples[[past]]
+      loss <- if (is.null(plausible)) pinball(feedback[past]) else
+        Reduce(`+`, lapply(plausible, pinball)) / length(plausible)
       if (!per_quantile) loss <- matrix(rowMeans(loss), ncol = 1L)
       stopifnot(all(is.finite(loss)))
       # Experts without a forecast for this row sleep and keep their mass.
@@ -1168,15 +1581,15 @@ exp_weights <- function(experts, base, feedback, feedback_by_week, alpha,
   list(q = q, weights = weights, lambda = lambda_used, experts = forecasts)
 }
 
-# 7. THE RECALIBRATION METHODS OF SCRIPTS 04 AND 05 ----------------------------
-# Settings of the methods. Rates are multiples m of S0 (eta = m * S0, so they act alike
-# for both trackers and every location), except median_rate (in units of sigma_t), pit_rate
-# (probability units), the leak (a fraction of the offsets per week) and REF-op's rates
-# (Delphi's rolling adaptive rate, adaptive_rate()). by_method overrides a
-# setting for one method, e.g. list(shared = list(H = 4L)); R/05_tuning.R tunes one
-# setting per method (tuned_setting) on the tuning season.
+# 7. THE RECALIBRATION METHODS OF SCRIPT 04 --------------------------------------
+# Settings of the methods, none tuned (no tuning since 13 November 2026). Every tracker
+# learns at Delphi's adaptive rate on its own scores, adaptive_multiplier times the 90%
+# quantile of the absolute scores of the last adaptive_rounds learned rows, the first rows
+# replayed (rolling_rate()); the rate grid and the weekly starts use multiples of the same
+# rolling scale. The leak is a fraction of the offsets per week. by_method overrides a
+# setting for one method, e.g. list(shared = list(H = 4L)).
 method_parameters <- function() list(
-  fixed_multiplier = .05,                # Fixed MultiQT: eta = m * S0.
+  adaptive_multiplier = .03, adaptive_rounds = 20L,
   # Delphi's REF-op as in covid prod, cold (no burn-in season), with Delphi's constants,
   # not tuned (pipelines/covid_hosp_prod.R, cal_ref_args("op") in R/calibration/views.R of
   # cmu-delphi/delphi-hub-forecasting): MultiQT on sqrt(counts) for either tracker, with
@@ -1192,16 +1605,22 @@ method_parameters <- function() list(
   # Learned mixtures (exp_weights()): adaptive lambda from lambda_start, look-back H (fixed
   # for now, not tuned); sharing, where used, 1/(2H).
   H = 8L, lambda_start = 2.72,
-  outer_multiplier = .001,               # Outer MultiQT on a mixture: eta = m * S0, not tuned.
-  # Weekly restarts: a fresh copy at every issue week with eta = restart_multiplier * S0;
+  outer_multiplier = .001,               # Outer MultiQT on a mixture: eta = m * S0.
+  # Weekly restarts: a fresh copy at every issue week learning at restart_multiplier times
+  # the rolling scale (the adaptive Fixed tracker, started anew every week);
   # restart_recent: learned weights (H, sharing 1/(2H)) on the restart_recent_k most recent
   # copies. restart_recent_dual: two copies per start, a slow and a fast one
   # (restart_dual_multipliers), with learned weights and sharing on the copies of the
   # restart_recent_k most recent starts. None tuned.
-  restart_multiplier = .05, restart_recent_k = 8L, restart_dual_multipliers = c(.03, .3),
-  # Leaky MultiQT (Delphi's leak): Fixed MultiQT with eta = m * S0 whose offsets shrink by
-  # the fraction leak at every issue week (Delphi's fast_decay, .1 as in REF-op; not tuned).
-  leaky_multiplier = .008, leak = .1,
+  restart_multiplier = .03, restart_recent_k = 8L, restart_dual_multipliers = c(.03, .3),
+  # Leaky MultiQT (Delphi's leak): Fixed MultiQT whose offsets shrink by the fraction leak
+  # at every issue week (Delphi's fast_decay, .1 as in REF-op). leak_grid: the leak bank of
+  # leaky_select (the leak with the smallest quantile loss over the last leak_window learned
+  # rows) and leaky_weighted (learned weights).
+  leak = .1, leak_grid = c(0, .02, .05, .1, .2, .3, .5), leak_window = 20L,
+  # phase_power: the decline probability from the last phase_rows learned rows
+  # (decline_probability()).
+  phase_rows = 4L,
   # Score-based experts (score_experts, score_methods): learned weights per level with H and
   # sharing 1/(2H) as the other learned mixtures; not tuned.
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
@@ -1209,9 +1628,7 @@ method_parameters <- function() list(
   # median_base_levels; median_start: "normal" or "t" start of the residual median methods
   # (their *_zero variants start all quantiles at the median).
   median_window = 5L, median_min_rows = 5L, median_base_levels = c(.1, .9),
-  median_rate = .1, median_start = "normal",
-  # Studentized MultiQT on the PIT of the base (pit_multiqt()): rate in probability units.
-  pit_rate = .005,
+  median_start = "normal",
   # Residual scales (studentized median, constant sigma, level RMS): "rms" or "median"
   # (robust to one outlying residual; see residual_scale()).
   residual_estimator = "rms",
@@ -1227,54 +1644,11 @@ method_parameters <- function() list(
   by_method = list())
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
-  # Variants use the values tuned for their method (parameter_source).
+  # Variants use the values set for their method (parameter_source).
   if (is.null(value) && method %in% names(parameter_source))
     value <- params$by_method[[parameter_source[[method]]]][[name]]
   if (is.null(value)) params[[name]] else value
 }
-# The values R/05_tuning.R chose for one disease, tracker transform and feedback design
-# (delay, revisions) with a base model of R/01_data_overview.R, as by_method overrides of
-# params; the defaults where none were tuned (with a message). Settings tuned under another
-# feedback protocol (feedback_protocol()) stop with an error instead of being used.
-tuned_parameters <- function(disease, transform, params = method_parameters(),
-                             base_model = multiqt_settings()$base_model,
-                             dir = file.path(multiqt_settings()$output_dir, "results", "tuning"),
-                             feedback_delay = 0L, revisions = FALSE) {
-  path <- file.path(dir, paste0("tuned_settings_", base_model, ".csv"))
-  tuned <- if (file.exists(path)) read.csv(path) else data.frame(disease = character(),
-    transform = character(), feedback_delay = integer(), feedback_revisions = logical(),
-    feedback_protocol = character())
-  if (file.exists(path)) check_feedback_protocol(tuned$feedback_protocol, path,
-    "Rscript R/05_tuning.R")
-  tuned <- tuned[tuned$disease == disease & tuned$feedback_delay == feedback_delay &
-    tuned$feedback_revisions == revisions, , drop = FALSE]
-  # The methods on the log1p tracker (log_tracker_methods): the values tuned for their
-  # method with that tracker (R/05 tunes both trackers).
-  for (method in names(log_tracker_methods)) {
-    rows <- which(tuned$transform == "log1p" & tuned$method == log_tracker_methods[[method]])
-    for (i in rows) params$by_method[[method]][[tuned$setting[i]]] <- tuned$value[i]
-  }
-  tuned <- tuned[tuned$transform == transform, , drop = FALSE]
-  if (!nrow(tuned)) message("No tuned settings for ", disease, " (", transform, ", feedback ",
-    feedback_label(feedback_delay, revisions), ") in ", path,
-    ": the defaults of method_parameters(). Run Rscript R/05_tuning.R.")
-  for (i in seq_len(nrow(tuned)))
-    params$by_method[[tuned$method[i]]][[tuned$setting[i]]] <- tuned$value[i]
-  params
-}
-# The setting R/05_tuning.R tunes for each method, the tracker rates (rate_settings, chosen
-# from their loss and CE curves); the other methods have none. H of the learned mixtures
-# is fixed (method_parameters()).
-tuned_setting <- c(fixed = "fixed_multiplier", leaky = "leaky_multiplier",
-  studentized = "median_rate", studentized_base = "median_rate", median_constant = "median_rate",
-  studentized_full = "median_rate", studentized_level_rms = "median_rate",
-  studentized_power = "median_rate", studentized_tpit = "median_rate",
-  studentized_spread = "median_rate",
-  studentized_pit = "pit_rate")
-rate_settings <- c("fixed_multiplier", "leaky_multiplier", "median_rate", "pit_rate")
-# Fixed and Leaky MultiQT on the log1p tracker whatever settings$transform, each with the
-# values tuned for its method (named here) with that tracker.
-log_tracker_methods <- c(fixed_log = "fixed", leaky_log = "leaky")
 # Score-based experts: one bank of the forecasts of these five methods (score_experts: the
 # base, the additive trackers, the best studentized method and Delphi's square-root tracker;
 # the base-width studentized methods left out), weighted by equal weights (score_equal) or
@@ -1284,15 +1658,14 @@ log_tracker_methods <- c(fixed_log = "fixed", leaky_log = "leaky")
 score_experts <- c("original", "fixed", "leaky", "studentized_level_rms", "sqrt_constant")
 score_methods <- c("score_equal", "score_learned")
 # Studentized MultiQT with the three scales of the most stationary scores (power_sigma(),
-# tpit_sigma(), spread_sigma()): per scale the tracker with its tuned rate, and the rate grid
-# and the most recent weekly starts, each with equal and with learned weights.
+# tpit_sigma(), spread_sigma()): per scale the tracker at the adaptive rate, and the rate
+# grid and the most recent weekly starts, each with equal and with learned weights.
 scaled_methods <- unlist(lapply(c("power", "tpit", "spread"), function(scale)
   c(paste0("studentized_", scale), paste0(scale, c("_uniform", "_weighted_common",
     "_restart_equal", "_restart_recent")))))
-# Methods that use the values tuned for another (method_parameter()): the median-start
-# variants keep the rate (so the effective rate eta x sigma_t) of their normal-start method,
-# the band variant that of studentized_level_rms; the outer MultiQT keeps H of the mixture
-# it corrects.
+# Methods that use the settings of another (method_parameter()): the mixtures of the scaled
+# trackers those of their unscaled counterpart, the outer MultiQT H of the mixture it
+# corrects.
 parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "median_constant",
   power_uniform = "uniform", power_weighted_common = "weighted_common",
   power_restart_equal = "restart_recent", power_restart_recent = "restart_recent",
@@ -1302,25 +1675,44 @@ parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "
   spread_restart_equal = "restart_recent", spread_restart_recent = "restart_recent",
   shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
+# Sign-flip experts and the two-phase trackers (notes, "Sign-flip experts" and "A phase
+# probability in the score").
+flip_methods <- c("power_flip", "level_flip", "width_flip")
+phase_methods <- c("phase_power", "phase_oracle")
 method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_op",
-  "sqrt_constant", "fixed_adaptive", "leaky_adaptive", "fixed_log_adaptive",
-  "leaky_log_adaptive", "sqrt_adaptive", "studentized", "studentized_base", "median_constant",
+  "sqrt_constant", "sqrt_adaptive", "leaky_select", "leaky_weighted", "studentized",
+  "studentized_base", "median_constant",
   "studentized_zero", "median_constant_zero", "studentized_full", "studentized_level_rms",
   "studentized_pit", scaled_methods, "oracle_target", "uniform",
   "weighted", "weighted_common", "shared",
   "shared_common", "restart_uniform", "restart_weighted", "restart_recent", "restart_recent_dual",
   score_methods, "restart_persistent", "shared_outer", "shared_common_outer",
-  "restart_uniform_outer", "restart_weighted_outer")
+  "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods)
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
+# Methods kept in the code but not run (13 November 2026, from the run of 12 November; notes,
+# "Methods not run"): apply_methods() leaves them out unless asked for, and so do the tuning
+# (R/05), the plots (method_groups) and 06's tree. Delete a name to run that method again.
+paused_methods <- c(
+  "oracle_target", "sqrt_adaptive",                                      # Single trackers.
+  "studentized", "studentized_zero", "studentized_base", "median_constant",
+  "median_constant_zero", "studentized_full",                            # Studentized.
+  "studentized_tpit", "tpit_uniform", "tpit_weighted_common", "tpit_restart_equal",
+  "tpit_restart_recent",                          # The t-PIT scale explodes (open issue).
+  "power_uniform", "power_restart_equal", "spread_uniform", "spread_restart_equal",
+  "shared", "shared_common", "shared_outer", "shared_common_outer",      # Rate grid.
+  "restart_persistent", "restart_weighted", "restart_uniform_outer",
+  "restart_weighted_outer",                                              # Weekly starts.
+  "score_equal")                                                         # Score bank.
+active_methods <- setdiff(method_names, paused_methods)
 # The method families of 04's plots (forecast pages, trade-off colours); their methods are
 # also the candidates of 06's tree.
 method_groups <- list(
   "Single trackers" = c("original", "fixed", "leaky", "ref_op", "sqrt_constant",
-    "oracle_target", "fixed_adaptive", "leaky_adaptive", "sqrt_adaptive"),
-  "Log1p tracker" = c("original", "fixed", "leaky", "fixed_log", "leaky_log",
-    "fixed_log_adaptive", "leaky_log_adaptive"),
+    "oracle_target", "sqrt_adaptive"),
+  "Log1p tracker" = c("original", "fixed", "leaky", "fixed_log", "leaky_log"),
+  "Leak chosen online" = c("original", "leaky", "leaky_select", "leaky_weighted"),
   "Rate-grid experts" = c("original", "fixed", "uniform", "weighted", "weighted_common",
     "shared", "shared_common", "shared_outer", "shared_common_outer"),
   "Weekly starts: immediate admission" = c("original", "restart_persistent", "restart_uniform",
@@ -1336,16 +1728,25 @@ method_groups <- list(
   "t-PIT scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_tpit") |
     startsWith(scaled_methods, "tpit_")]),
   "Spread scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_spread") |
-    startsWith(scaled_methods, "spread_")]))
+    startsWith(scaled_methods, "spread_")]),
+  "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
+    flip_methods),
+  "Two-phase trackers" = c("original", "studentized_power", phase_methods))
+# Only the methods that run: a group keeps its active methods and is dropped when only the
+# base and Fixed MultiQT are left.
+method_groups <- Filter(function(group) length(setdiff(group, c("original", "fixed"))) > 0L,
+  lapply(method_groups, intersect, active_methods))
 # Short method names without settings (06's tree; 04's labels add the tuned values).
 method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Leaky MultiQT",
   fixed_log = "Fixed MultiQT (log1p tracker)", leaky_log = "Leaky MultiQT (log1p tracker)",
   ref_op = "Delphi REF-op (covid prod)", sqrt_constant = "Delphi sqrt 0.018 (flu prod)",
   oracle_target = "Target oracle (hindsight)",
-  fixed_adaptive = "Fixed MultiQT, adaptive rate", leaky_adaptive = "Leaky MultiQT, adaptive rate",
-  fixed_log_adaptive = "Fixed MultiQT (log1p tracker), adaptive rate",
-  leaky_log_adaptive = "Leaky MultiQT (log1p tracker), adaptive rate",
-  sqrt_adaptive = "Sqrt tracker, adaptive rate",
+  sqrt_adaptive = "Sqrt tracker", leaky_select = "Leaky MultiQT, leak chosen online",
+  leaky_weighted = "Leaky MultiQT, leak bank with learned weights",
+  power_flip = "Sign-flip experts: power scale", level_flip = "Sign-flip experts: level RMS",
+  width_flip = "Sign-flip experts: base width",
+  phase_power = "Two-phase power scale (decline probability)",
+  phase_oracle = "Two-phase power scale (phase in hindsight)",
   uniform = "Rate grid: equal", weighted = "Rate grid: learned, no sharing",
   weighted_common = "Rate grid: learned, common weights",
   shared = "Rate grid: learned + sharing",
@@ -1385,7 +1786,8 @@ group_palettes <- c("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Weekly starts: immediate admission" = "Greens 3", "Score-based experts" = "Purples 3",
   "Studentized median" = "Burg",
   "Studentized full base" = "BluGrn", "Power scale" = "Peach", "t-PIT scale" = "Teal",
-  "Spread scale" = "Purp")
+  "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
+  "Two-phase trackers" = "Dark Mint")
 home_group <- local({
   home <- character()
   for (group in names(method_groups)) for (method in method_groups[[group]])
@@ -1405,15 +1807,16 @@ tradeoff_colours <- local({
   colours
 })
 
-# Issue the forecasts of the given methods for one case, with every location fitted
-# independently: offsets, expert weights, lambda and loss history start fresh. Returns
+# Issue the forecasts of the given methods (default: those that run, active_methods) for one
+# case, with every location fitted independently: offsets, expert weights, lambda and loss
+# history start fresh. Returns
 # the predictions in counts / count_scale (original first) and what 04 plots and saves.
 # cache (R/05_tuning.R): an environment for one case and fixed settings apart from the
 # transform. Scales, expert banks and mixtures computed for one grid value are reused for
 # the next; each key holds every setting the stored object depends on. NULL: no reuse.
 # Re-run design (get_case(revisions = TRUE)): rerun_methods() below; weeks: the issue
 # weeks it re-runs (default: all), e.g. only the scored ones.
-apply_methods <- function(case, settings, params = method_parameters(), methods = method_names,
+apply_methods <- function(case, settings, params = method_parameters(), methods = active_methods,
                           cache = NULL, weeks = NULL) {
   if (isTRUE(case$feedback_revised))
     return(rerun_methods(case, settings, params, methods, cache, weeks))
@@ -1436,47 +1839,44 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   base <- case$base / count_scale
   feedback <- case$feedback_observed / count_scale
   adjust <- function(counts, eta, warmup_weeks) multiqt(counts, case$feedback_observed,
-    case$feedback_by_week, case$alpha, eta, warmup_weeks, transform) / count_scale
+    case$feedback_by_week, case$alpha, eta, warmup_weeks, transform,
+    feedback_samples = case$feedback_samples) / count_scale
 
-  # One tracker: fixed rate, slope rate or studentized.
-  # Fixed MultiQT: eta = m * S0, using the same frozen scale as the experts.
-  # Methods that are also score experts are cached under their own settings (R/05 reuses
-  # them for every grid value of a mixture).
-  rate_key <- function(method) format(par(method, tuned_setting[[method]]), digits = 15)
+  # Every tracker learns at Delphi's adaptive rate (REF-op's fast term), untuned:
+  # adaptive_multiplier times the 90% quantile of its own absolute scores over the last
+  # adaptive_rounds learned rows, the first rows replayed in hindsight (rolling_rate(),
+  # tracker_score()). The rate grid and the weekly starts use multiples of the same rolling
+  # scale (unit()); there is no tuning.
+  unit <- function(score) rolling_rate(case, score, 1, params$adaptive_rounds,
+    settings$replay_warmup)
+  rate_of <- function(unit) params$adaptive_multiplier * unit
+  count_unit <- memo("count unit", unit(tracker_score(case, transform)))
   predictions <- list(original = base)
   if (want("fixed", "oracle_target") || scored)
-    predictions$fixed <- memo(paste("fixed", rate_key("fixed")),
-      adjust(case$base, par("fixed", "fixed_multiplier") * s0$scale, s0$warmup_weeks))
-  # Leaky MultiQT (Delphi's leak; REF-op's fast term without its slow term and rolling
-  # rate): Fixed MultiQT with eta = m * S0 whose offsets shrink by the fraction leak at
-  # every issue week before its update (multiqt(): fast_decay), so a correction that new
-  # reports do not refresh fades back to the base.
+    predictions$fixed <- adjust(case$base, rate_of(count_unit), 0L)
+  # Leaky MultiQT (Delphi's leak; REF-op's fast term without its slow term): Fixed MultiQT
+  # whose offsets shrink by the fraction leak at every issue week before its update
+  # (multiqt(): fast_decay), so a correction that new reports do not refresh fades back to
+  # the base: a ridge penalty on the offsets (notes, "The leak as a ridge penalty").
   if (want("leaky") || scored)
-    predictions$leaky <- memo(paste("leaky", rate_key("leaky"), par("leaky", "leak")),
-      multiqt(case$base, case$feedback_observed, case$feedback_by_week, case$alpha,
-        par("leaky", "leaky_multiplier") * s0$scale, s0$warmup_weeks, transform,
-        fast_decay = par("leaky", "leak")) / count_scale)
-  # Fixed and Leaky MultiQT on the log1p tracker, whatever the tracker of the other methods
-  # (log_tracker_methods): S0 in log1p units (re-run: the stateful design's, frozen) and the
-  # rates tuned for fixed and leaky with the log1p tracker (tuned_parameters()). The log1p
-  # tracker issues (1 + b) * exp(offset) - 1: its correction is multiplicative.
-  if (want(names(log_tracker_methods))) {
-    s0_log <- if (transform == "log1p") s0 else if (!is.null(case$frozen_s0_log))
-      case$frozen_s0_log else memo("s0 log1p", error_scale(case, settings$warmup_rounds,
-        settings$scale_floor, "log1p", settings$replay_warmup))
-    log_tracker <- function(multiplier, ...) multiqt(case$base, case$feedback_observed,
-      case$feedback_by_week, case$alpha, multiplier * s0_log$scale, s0_log$warmup_weeks,
-      "log1p", ...) / count_scale
-    if (want("fixed_log"))
-      predictions$fixed_log <- log_tracker(par("fixed_log", "fixed_multiplier"))
-    if (want("leaky_log"))
-      predictions$leaky_log <- log_tracker(par("leaky_log", "leaky_multiplier"),
-        fast_decay = par("leaky_log", "leak"))
+    predictions$leaky <- multiqt(case$base, case$feedback_observed, case$feedback_by_week,
+      case$alpha, rate_of(count_unit), 0L, transform, fast_decay = params$leak,
+      feedback_samples = case$feedback_samples) / count_scale
+  # Fixed and Leaky MultiQT on the log1p tracker, whatever the tracker of the other methods,
+  # at the adaptive rate of their log1p scores. The log1p tracker issues (1 + b) * exp(offset)
+  # - 1: its correction is multiplicative.
+  if (want("fixed_log", "leaky_log")) {
+    log_rate <- rate_of(unit(tracker_score(case, "log1p")))
+    log_tracker <- function(...) multiqt(case$base, case$feedback_observed,
+      case$feedback_by_week, case$alpha, log_rate, 0L, "log1p", ...,
+      feedback_samples = case$feedback_samples) / count_scale
+    if (want("fixed_log")) predictions$fixed_log <- log_tracker()
+    if (want("leaky_log")) predictions$leaky_log <- log_tracker(fast_decay = params$leak)
   }
   # Delphi's REF-op (method_parameters()): Fixed MultiQT's update on its own sqrt tracker,
-  # with Delphi's rolling rates from the rows learned so far instead of S0 (re-run: as
-  # known at the issue week, as Delphi's prod re-runs), the slow term and the leak; no
-  # warmup and no hindsight.
+  # with Delphi's rolling rates from the rows learned so far (adaptive_rate(), no replay;
+  # re-run: as known at the issue week, as Delphi's prod re-runs), the slow term and the
+  # leak; Delphi's constants.
   if (want("ref_op")) {
     tracker <- par("ref_op", "ref_op_transform")
     rate <- function(multiplier, rounds, floor) adaptive_rate(case,
@@ -1485,31 +1885,22 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
       case$alpha, rate("ref_op_multiplier", par("ref_op", "ref_op_window"),
         par("ref_op", "ref_op_floor")), 0L, tracker,
       eta_slow = rate("ref_op_slow_multiplier", Inf, 0),
-      fast_decay = par("ref_op", "ref_op_fast_decay")) / count_scale
+      fast_decay = par("ref_op", "ref_op_fast_decay"),
+      feedback_samples = case$feedback_samples) / count_scale
   }
+  # Fixed MultiQT on the sqrt tracker at the adaptive rate (REF-op without its slow term and
+  # leak).
+  if (want("sqrt_adaptive")) predictions$sqrt_adaptive <- multiqt(case$base,
+    case$feedback_observed, case$feedback_by_week, case$alpha,
+    rate_of(unit(tracker_score(case, "sqrt"))), 0L, "sqrt",
+    feedback_samples = case$feedback_samples) / count_scale
   # Delphi's flu prod (method_parameters()): Fixed MultiQT on sqrt(counts per 100k) with a
   # constant rate; no S0 and no warmup. Unchanged forecasts keep the exact base.
-  # Delphi's adaptive rate for the other single trackers (*_adaptive): the rate of REF-op's
-  # fast term, ref_op_multiplier * Q90 of the last ref_op_window learned rows in the
-  # tracker's own units, at least ref_op_floor (adaptive_rate()), instead of a tuned multiple
-  # of S0: rolling with the feedback, no warmup, no hindsight, untuned (as ref_op; re-run:
-  # the reports current at the issue week). Leaky variants keep their leak.
-  adaptive <- function(tracker) adaptive_rate(case, par("ref_op", "ref_op_multiplier"),
-    par("ref_op", "ref_op_window"), par("ref_op", "ref_op_floor"), tracker)
-  adaptive_tracker <- function(tracker, leak = 0) multiqt(case$base, case$feedback_observed,
-    case$feedback_by_week, case$alpha, adaptive(tracker), 0L, tracker, fast_decay = leak) /
-    count_scale
-  if (want("fixed_adaptive")) predictions$fixed_adaptive <- adaptive_tracker(transform)
-  if (want("leaky_adaptive"))
-    predictions$leaky_adaptive <- adaptive_tracker(transform, par("leaky", "leak"))
-  if (want("fixed_log_adaptive")) predictions$fixed_log_adaptive <- adaptive_tracker("log1p")
-  if (want("leaky_log_adaptive"))
-    predictions$leaky_log_adaptive <- adaptive_tracker("log1p", par("leaky_log", "leak"))
-  if (want("sqrt_adaptive")) predictions$sqrt_adaptive <- adaptive_tracker("sqrt")
   if (want("sqrt_constant") || scored) {
     per_100k <- choose_count_scale(case, "population")$scale
     tracked <- multiqt(case$base / per_100k, case$feedback_observed / per_100k,
-      case$feedback_by_week, case$alpha, par("sqrt_constant", "sqrt_constant_rate"), 0L, "sqrt")
+      case$feedback_by_week, case$alpha, par("sqrt_constant", "sqrt_constant_rate"), 0L, "sqrt",
+      feedback_samples = scale_samples(case$feedback_samples, per_100k))
     q <- tracked * per_100k
     unchanged <- tracked == case$base / per_100k
     q[unchanged] <- case$base[unchanged]
@@ -1541,56 +1932,55 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # by the RMS of median_window other normal residuals (wider tails for small windows).
   start <- switch(params$median_start, normal = qnorm(case$alpha),
     t = qt(case$alpha, params$median_window), stop("Unknown median start ", params$median_start))
+  # The median methods learn at the adaptive rate of their median scores (y - b^.5) / sigma_t.
+  median_matrix <- matrix(case$base[, match(.5, case$alpha)], nrow(case$base),
+    length(case$alpha))
+  median_rate <- function(scale) rate_of(unit(tracker_score(case, transform, scale,
+    median_matrix)))
   if (want("studentized"))
-    predictions$studentized <- median_multiqt(case, par("studentized", "median_rate"),
+    predictions$studentized <- median_multiqt(case, median_rate(sigma$scale),
       sigma$scale, start, median_warmup_weeks, transform) / count_scale
   # sigma_t from the width of the base: no feedback lag, so no warmup beyond S0's. This
   # sigma_t is a normal sd, so it starts from normal quantiles: the base's own interval.
-  base_key <- paste(paste(params$median_base_levels, collapse = ","), bounds_key)
   if (want("studentized_base"))
-    predictions$studentized_base <- memo(paste("studentized_base",
-      rate_key("studentized_base"), base_key), median_multiqt(case,
-        par("studentized_base", "median_rate"), base_sigma$scale, qnorm(case$alpha),
-        max(s0$warmup_weeks, base_sigma$warmup_weeks), transform) / count_scale)
+    predictions$studentized_base <- median_multiqt(case, median_rate(base_sigma$scale),
+      base_sigma$scale, qnorm(case$alpha), max(s0$warmup_weeks, base_sigma$warmup_weeks),
+      transform) / count_scale
   # Residual sigma frozen at its first issued value: additive MultiQT on the median.
   # It separates reducing the base to its median from studentizing.
   constant_sigma <- sigma$scale[median_warmup_weeks + 1L]
   if (want("median_constant"))
-    predictions$median_constant <- median_multiqt(case, par("median_constant", "median_rate"),
+    predictions$median_constant <- median_multiqt(case, median_rate(constant_sigma),
       constant_sigma, start, median_warmup_weeks, transform) / count_scale
   # Median start: the same two methods (rate, scale, feedback and warmup) with all quantiles
   # starting at the median (offsets 0) instead of the normal (or t) quantiles.
   if (want("studentized_zero"))
-    predictions$studentized_zero <- median_multiqt(case, par("studentized_zero", "median_rate"),
+    predictions$studentized_zero <- median_multiqt(case, median_rate(sigma$scale),
       sigma$scale, 0, median_warmup_weeks, transform) / count_scale
   if (want("median_constant_zero"))
-    predictions$median_constant_zero <- median_multiqt(case,
-      par("median_constant_zero", "median_rate"), constant_sigma, 0, median_warmup_weeks,
-      transform) / count_scale
+    predictions$median_constant_zero <- median_multiqt(case, median_rate(constant_sigma),
+      constant_sigma, 0, median_warmup_weeks, transform) / count_scale
   # Studentized MultiQT on the full base: offsets start at 0 (the base) and are issued as
   # b_t^alpha + sigma_t * offsets, with one scale per week (the base width; isoreg) or one
   # per level (weighted isoreg): the RMS of that level's recent residuals y - b^alpha.
-  full <- function(method, scales, warmup_weeks = s0$warmup_weeks) multiqt(case$base,
-    case$feedback_observed, case$feedback_by_week, case$alpha, par(method, "median_rate"),
-    warmup_weeks, transform, sigma = scales) / count_scale
-  if (want("studentized_full"))
-    predictions$studentized_full <- memo(paste("studentized_full", rate_key("studentized_full"),
-      base_key), full("studentized_full", base_sigma$scale))
+  # Each learns at the adaptive rate of its own studentized scores (y - b^alpha) / sigma_t.
+  full <- function(scales, warmup_weeks = s0$warmup_weeks) multiqt(case$base,
+    case$feedback_observed, case$feedback_by_week, case$alpha,
+    rate_of(unit(tracker_score(case, transform, scales))), warmup_weeks, transform,
+    sigma = scales, feedback_samples = case$feedback_samples) / count_scale
+  if (want("studentized_full", "width_flip"))
+    predictions$studentized_full <- full(base_sigma$scale)
   # The residual scales exist once median_min_rows residuals are released, as for the median.
-  rms_key <- paste(params$median_window, params$median_min_rows, params$residual_estimator,
-    bounds_key)
-  if (want("studentized_level_rms") || scored)
-    predictions$studentized_level_rms <- memo(paste("studentized_level_rms",
-      rate_key("studentized_level_rms"), rms_key), full("studentized_level_rms",
-        memo(paste("level_rms", rms_key), bound(level_residual_sigma(case, params$median_window,
-          params$median_min_rows, settings$scale_floor, transform, params$residual_estimator))),
-        median_warmup_weeks))
-  # The PIT of the base: offsets on the probability scale (pit_multiqt()); the same for
-  # either tracker, no S0, the same warmup as Fixed MultiQT.
+  if (want("studentized_level_rms", "level_flip") || scored)
+    predictions$studentized_level_rms <- full(bound(level_residual_sigma(case,
+      params$median_window, params$median_min_rows, settings$scale_floor, transform,
+      params$residual_estimator)), median_warmup_weeks)
+  # The PIT of the base: offsets on the probability scale (pit_multiqt()) at the adaptive
+  # rate of |PIT - alpha|; the same for either tracker, the same warmup as Fixed MultiQT.
   if (want("studentized_pit"))
-    predictions$studentized_pit <- memo(paste("studentized_pit", rate_key("studentized_pit")),
-      pit_multiqt(case$base, case$feedback_observed, case$feedback_by_week, case$alpha,
-        par("studentized_pit", "pit_rate"), s0$warmup_weeks) / count_scale)
+    predictions$studentized_pit <- pit_multiqt(case$base, case$feedback_observed,
+      case$feedback_by_week, case$alpha, rate_of(unit(pit_score(case))), s0$warmup_weeks,
+      feedback_samples = case$feedback_samples) / count_scale
 
   # What if we knew the true peak? Hindsight benchmark: bypass correction for postpeak
   # targets, even if issued prepeak (each week's nearest peak). Setting eta=0 instead
@@ -1602,33 +1992,27 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   }
 
   # Several trackers: weight their forecasts. Rate grid: one persistent expert per
-  # multiplier. Restarts: a fresh copy per multiplier at every issue week after warmup;
-  # no permanent base expert. Score-based experts: the forecasts of six methods
-  # (score_experts). Each learned weighting learns from released quantile losses of issued
-  # forecasts, divided by the base's mean loss over the S0 rows, so the count scale does
-  # not change the weights; adaptive lambda and look-back H (par(method, "H")) for every
-  # one. Equal averaging is a control.
+  # multiplier of the rolling scale. Restarts: a fresh copy per multiplier at every issue
+  # week; no permanent base expert. Leak bank: Leaky MultiQT for every leak of leak_grid.
+  # Score-based experts: the forecasts of five methods (score_experts). Sign-flip experts:
+  # the base, a studentized tracker and its mirror. Each learned weighting learns from
+  # released quantile losses of issued forecasts, divided by the base's mean loss over the S0
+  # rows, so the count scale does not change the weights; adaptive lambda and look-back H
+  # (par(method, "H")) for every one. Equal averaging is a control.
   loss_scale <- if (!is.null(case$frozen_loss_scale)) case$frozen_loss_scale else
     weighting_loss_scale(case, s0, count_scale, settings$scale_floor)
   weigh <- function(method, experts, ...) exp_weights(experts, base, feedback,
     case$feedback_by_week, case$alpha, H = par(method, "H"),
     lambda_start = par(method, "lambda_start"), warmup_weeks = s0$warmup_weeks,
-    loss_scale = loss_scale, ...)
-  # Key of a mixture: the method and every setting a mixture can depend on.
-  # Score mixtures also depend on their experts' own settings (rate_key()).
-  mixture_key <- function(method) paste("mixture", method, paste(vapply(c("H", "lambda_start",
-    "restart_recent_k"),
-    function(name) format(par(method, name), digits = 15), ""), collapse = ","),
-    params$restart_multiplier, paste(par(method, "restart_dual_multipliers"), collapse = ","),
-    par("leaky", "leak"),
-    par("sqrt_constant", "sqrt_constant_rate"), paste(vapply(intersect(score_experts,
-      names(tuned_setting)), rate_key, ""), collapse = ","), base_key, rms_key)
-  mix <- function(method, value) memo(mixture_key(method), value)
+    loss_scale = loss_scale, feedback_samples = scale_samples(case$feedback_samples,
+      count_scale), ...)
+  # Without a cache (R/04) memo() only returns the value.
+  mix <- function(method, value) memo(paste("mixture", method), value)
   mixtures <- list()
   rate_experts <- restart_experts <- fixed_restarts <- NULL
   if (want("uniform", "weighted", "weighted_common", "shared", "shared_common")) {
-    rate_experts <- memo("rate_experts", make_rate_experts(case, settings$expert_multipliers,
-      s0, count_scale, transform))
+    rate_experts <- make_rate_experts(case, settings$expert_multipliers, count_unit,
+      count_scale, transform)
     if (want("uniform")) mixtures$uniform <- mix("uniform", weigh("uniform", rate_experts,
       lambda = 0))
     if (want("weighted")) mixtures$weighted <- mix("weighted", weigh("weighted", rate_experts,
@@ -1640,8 +2024,8 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
       weigh("shared_common", rate_experts, per_quantile = FALSE))
   }
   if (want("restart_uniform", "restart_weighted", "restart_persistent", "restart_recent")) {
-    restart_experts <- memo(paste("restart_experts", params$restart_multiplier),
-      make_restart_experts(case, params$restart_multiplier, s0, count_scale, transform))
+    restart_experts <- make_restart_experts(case, params$restart_multiplier, count_unit,
+      count_scale, transform)
     fixed_restarts <- restart_experts
     if (want("restart_uniform")) mixtures$restart_uniform <- mix("restart_uniform",
       weigh("restart_uniform", fixed_restarts, lambda = 0))
@@ -1655,40 +2039,58 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # retire together.
   if (want("restart_recent_dual")) {
     dual_multipliers <- par("restart_recent_dual", "restart_dual_multipliers")
-    dual_restarts <- memo(paste("restart_experts", paste(dual_multipliers, collapse = ",")),
-      make_restart_experts(case, dual_multipliers, s0, count_scale, transform))
+    dual_restarts <- make_restart_experts(case, dual_multipliers, count_unit, count_scale,
+      transform)
     mixtures$restart_recent_dual <- mix("restart_recent_dual", weigh("restart_recent_dual",
       dual_restarts, keep = length(dual_multipliers) *
         par("restart_recent_dual", "restart_recent_k")))
   }
+  # The leak chosen online (notes, "The leak as a ridge penalty"): Leaky MultiQT at the
+  # adaptive rate for every leak of leak_grid. leaky_select issues each week the forecast of
+  # the leak whose forecasts had the smallest quantile loss over the last leak_window
+  # learned rows (prequential choice, select_expert()); leaky_weighted a learned mixture with
+  # one weight vector for all levels and sharing.
+  if (want("leaky_select", "leaky_weighted")) {
+    leak_bank <- make_leak_experts(case, params$leak_grid, rate_of(count_unit), count_scale,
+      transform)
+    if (want("leaky_select")) predictions$leaky_select <- select_expert(leak_bank, case,
+      params$leak_window, count_scale, match(params$leak, params$leak_grid))$q
+    if (want("leaky_weighted")) mixtures$leaky_weighted <- mix("leaky_weighted",
+      weigh("leaky_weighted", leak_bank, per_quantile = FALSE))
+  }
   # Studentized MultiQT on the full base with the three scales of the most stationary scores
-  # (scaled_methods): each alone with its tuned rate, and in two expert banks in units of the
-  # scale, the rate grid (expert_multipliers) and weekly starts (restart_multiplier), each with
-  # equal weights and with learned weights as weighted_common and restart_recent
-  # (parameter_source); the equal-weight starts also keep the restart_recent_k most recent.
+  # (scaled_methods): each alone at the adaptive rate of its scores, and in two expert banks,
+  # the rate grid (expert_multipliers) and weekly starts (restart_multiplier) in multiples of
+  # the rolling scale of its scores, each with equal and with learned weights as
+  # weighted_common and restart_recent (parameter_source); the equal-weight starts also keep
+  # the restart_recent_k most recent.
+  scaled <- list()
   for (scale_name in c("power", "tpit", "spread")) {
     names_of <- c(paste0("studentized_", scale_name), paste0(scale_name, c("_uniform",
       "_weighted_common", "_restart_equal", "_restart_recent")))
-    if (!want(names_of)) next
+    needed <- want(names_of) || (scale_name == "power" &&
+      want("power_flip", "phase_power", "phase_oracle"))
+    if (!needed) next
     scale_key <- paste(scale_name, params$power_p, params$tpit_nu, params$tpit_window,
       params$tpit_min_reports, params$spread_lambda, params$scale_guard)
     studentized <- memo(paste("scale", scale_key), normalized_scale(studentized_scale(case,
       scale_name, params), s0, params$scale_guard, case$frozen_scale_reference[[scale_name]]))
     warmup <- max(s0$warmup_weeks, studentized$warmup_weeks)
-    if (want(names_of[1])) predictions[[names_of[1]]] <- memo(paste(names_of[1],
-      rate_key(names_of[1]), scale_key), full(names_of[1], studentized$scale, warmup))
+    scaled_unit <- unit(tracker_score(case, transform, studentized$scale))
+    scaled[[scale_name]] <- list(scale = studentized$scale, warmup = warmup, unit = scaled_unit)
+    if (want(names_of[1]) || (scale_name == "power" && want("power_flip")))
+      predictions[[names_of[1]]] <- full(studentized$scale, warmup)
     if (want(names_of[2:3])) {
-      grid <- memo(paste("rate_experts", scale_key), make_rate_experts(case,
-        settings$expert_multipliers, s0, count_scale, transform, studentized$scale, warmup))
+      grid <- make_rate_experts(case, settings$expert_multipliers, scaled_unit, count_scale,
+        transform, studentized$scale, warmup)
       if (want(names_of[2])) mixtures[[names_of[2]]] <- mix(names_of[2], weigh(names_of[2],
         grid, lambda = 0))
       if (want(names_of[3])) mixtures[[names_of[3]]] <- mix(names_of[3], weigh(names_of[3],
         grid, sharing = FALSE, per_quantile = FALSE))
     }
     if (want(names_of[4:5])) {
-      starts <- memo(paste("restart_experts", params$restart_multiplier, scale_key),
-        make_restart_experts(case, params$restart_multiplier, s0, count_scale, transform,
-          studentized$scale, warmup))
+      starts <- make_restart_experts(case, params$restart_multiplier, scaled_unit,
+        count_scale, transform, studentized$scale, warmup)
       keep <- par(names_of[5], "restart_recent_k")
       if (want(names_of[4])) mixtures[[names_of[4]]] <- mix(names_of[4], weigh(names_of[4],
         starts, lambda = 0, per_quantile = FALSE, keep = keep))
@@ -1712,6 +2114,30 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     if (want("score_learned")) mixtures$score_learned <- mix("score_learned",
       weigh("score_learned", score_bank, centered = TRUE))
   }
+  # Sign-flip experts (notes, "Sign-flip experts"): the base, a studentized tracker and its
+  # mirror, the base minus the tracker's correction (flip_bank()), with learned weights per
+  # level and sharing. The bias of the base changes sign at a peak; the mirror issues the
+  # learned correction with the other sign, and the weights move to it when it starts to
+  # lose less. Trackers: the power scale, the level RMS and the base width.
+  flips <- c(power_flip = "studentized_power", level_flip = "studentized_level_rms",
+    width_flip = "studentized_full")
+  for (method in intersect(names(flips), methods))
+    mixtures[[method]] <- mix(method, weigh(method, flip_bank(base,
+      predictions[[flips[[method]]]], case)))
+  # Two-phase MultiQT on the power scale (phase_multiqt()): one state for the rise and one
+  # for the decline of a wave, mixed by the probability of a decline. phase_power: that
+  # probability from the recent errors of the base (decline_probability()); phase_oracle:
+  # the phase in hindsight (after the nearest peak of the latest counts), a benchmark.
+  if (want("phase_power", "phase_oracle")) {
+    power <- scaled$power
+    phase <- function(p) phase_multiqt(case$base, case$feedback_observed,
+      case$feedback_by_week, case$alpha, rate_of(power$unit), p, power$scale,
+      power$warmup, feedback_samples = case$feedback_samples) / count_scale
+    if (want("phase_power"))
+      predictions$phase_power <- phase(decline_probability(case, params$phase_rows))
+    if (want("phase_oracle")) predictions$phase_oracle <- phase(ifelse(
+      is.finite(case$relative_week), as.numeric(case$relative_week > 0), .5))
+  }
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
   # The first-start control has exactly the same birth rule as the restart copies.
   if (want("restart_persistent")) {
@@ -1726,7 +2152,10 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   for (method in intersect(names(outer_inner), methods))
     predictions[[method]] <- adjust(predictions[[outer_inner[[method]]]] * count_scale,
       par(method, "outer_multiplier") * s0$scale, s0$warmup_weeks)
-  predictions <- predictions[intersect(method_names, names(predictions))]
+  # Only the methods asked for (and the score bank's members); helpers computed for another
+  # method (e.g. the base-width tracker of width_flip) are not issued.
+  predictions <- predictions[intersect(method_names, union(c("original", methods),
+    if (scored) score_experts))]
   # expert_forecasts: the experts each mixture weighs [week x expert x level] in counts /
   # count_scale (04's weight pages).
   list(case = case, scaling = scaling, s0 = s0, sigma = sigma, base_sigma = base_sigma,
@@ -1758,10 +2187,6 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
     settings$transform, settings$replay_warmup)
   loss_scale <- weighting_loss_scale(stateful, s0,
     choose_count_scale(case, settings$scale_method)$scale, settings$scale_floor)
-  # The methods on the log1p tracker (log_tracker_methods) freeze their own S0 likewise.
-  s0_log <- if (settings$transform != "log1p" && any(names(log_tracker_methods) %in% methods))
-    error_scale(stateful, settings$warmup_rounds, settings$scale_floor, "log1p",
-      settings$replay_warmup)
   # The scaled methods (scaled_methods) freeze the reference of normalized_scale() likewise.
   scale_reference <- lapply(setNames(nm = c("power", "tpit", "spread")), function(name)
     if (any(grepl(name, intersect(methods, scaled_methods))))
@@ -1774,7 +2199,6 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
       week_cache <- cache[[key]]
     }
     as_of <- case_as_of(case, t, s0, loss_scale)
-    as_of$frozen_s0_log <- s0_log
     as_of$frozen_scale_reference <- scale_reference
     apply_methods(as_of, settings, params, methods, week_cache)
   }
