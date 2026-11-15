@@ -121,6 +121,7 @@ method_labels <- function(p) {
   c(original = "Base",
     fixed = "Fixed MultiQT (adaptive rate)",
     leaky = paste0("Leaky MultiQT (adaptive rate, ", leak, ")"),
+    polar = paste0("Polar MultiQT (adaptive rate, shared angle at ", p$polar_angle_rate, ")"),
     fixed_log = "Fixed MultiQT, log1p tracker (adaptive rate)",
     leaky_log = paste0("Leaky MultiQT, log1p tracker (adaptive rate, ", leak, ")"),
     ref_op = paste0("Delphi REF-op (sqrt, eta=", par_of("ref_op", "ref_op_multiplier"), "*Q90 of ",

@@ -689,6 +689,38 @@ of the recent errors (level-specific) and the base width (width-based).
 That a wave falls more slowly than it rises needs no separate score: it
 changes how long each sign lasts, which the weights follow.
 
+\paragraph{A shared angle for the sign (polar MultiQT).} Write the offset of
+level $\alpha$ in polar form, $\theta_t^\alpha=m_t^\alpha\cos\varphi_t$: a
+signed length $m_t^\alpha$ per level and one angle
+$\varphi_t\in[\varepsilon,\pi-\varepsilon]$ shared by all levels
+($\varepsilon=0.1$). An angle below $90^\circ$ keeps the sign of the
+lengths, one above $90^\circ$ reverses every level at once: the turn of the
+base's bias at a peak in one coordinate. Through $\theta$, the quantile loss
+has the subgradients $g_t^\alpha\cos\varphi_t$ in the lengths and
+$-g_t^\alpha m_t^\alpha\sin\varphi_t$ in the angle, $g_t^\alpha=\cov_t^\alpha-\alpha$.
+The two coordinates learn at their own rates:
+\begin{equation}
+ m_{t+1}^\alpha=m_t^\alpha-\eta_t\,g_t^\alpha\cos\varphi_t,\qquad
+ \varphi_{t+1}=\varphi_t+\eta_\varphi\sum_{\alpha}g_t^\alpha\,\frac{m_t^\alpha}{s_t}\,\sin\varphi_t,
+ \label{eq:polar-update}
+\end{equation}
+with $\eta_t$ the adaptive rate of Fixed MultiQT, $s_t$ its rolling scale
+(so that $\eta_\varphi$ is unit-free) and $\varphi$ kept in
+$[\varepsilon,\pi-\varepsilon]$. The forecast is $b_t+m_t\cos\varphi_t$,
+projected onto $\K$; with $\varphi$ fixed at 0 it is Fixed MultiQT. For a
+single level the angle adds no information: the feedback is one coverage
+bit, and the step of $\theta=m\cos\varphi$ is
+\begin{equation}
+ \Delta\theta_t=-\Bigl(\eta_t\cos^2\varphi_t+\eta_\varphi\frac{m_t^2}{s_t}\sin^2\varphi_t\Bigr)g_t,
+ \label{eq:polar-effective-rate}
+\end{equation}
+a rate that depends on the state: fast only near $90^\circ$, where the
+correction is near zero, and back to $\eta_t$ at $0^\circ$ and $180^\circ$,
+where the gradient in the angle vanishes, so that leaving a firm sign is
+slow. Shared by all levels, the angle could learn the turn from the 23
+coverage errors of a week together, since around a peak every level needs
+to move the same way.
+
 \paragraph{A phase probability in the score.} Let $p_t\in[0,1]$ be the
 probability, known at the cutoff, that week $t$ lies in a decline. The
 two-phase tracker keeps one state for each phase and issues their mixture,
@@ -1021,6 +1053,68 @@ periods); $K=52$ rows, slightly better than 26; and $M=2$ weeks ($M=1$ leaves
 the re-run's second-youngest rows uncorrected, with calibration error $.027$
 and $.032$ against $.006$ and $.005$; $M=3$ is no better). A nowcasting model for
 $\hat p$ remains open.
+
+\paragraph{Results of the workflow.} Run of 13--14 November, every active
+method at its adaptive rate, the 10 states, horizons $-1$ to $3$, evaluation
+period, cases weighted by their weeks; the three uncorrected designs are
+identical to the earlier run (every row of
+\path{summary_scores_all_locations.csv}). Table~\ref{tab:corrected-designs}
+counts, over the 28 methods (all but the base and the hindsight oracle), how
+often the corrected design has the lower calibration error and the lower loss
+than its uncorrected design, with the median change in points of the
+change versus the base.
+
+\begin{table}[ht]
+\centering\small
+\caption{Corrected against uncorrected designs: number of the 28 methods with a
+lower calibration error (CE) and a lower loss, and the median change (points of
+the \% change versus the base; negative is better).}
+\label{tab:corrected-designs}
+\begin{tabular}{llrrrr}
+\toprule
+ & & \multicolumn{2}{c}{Overall} & \multicolumn{2}{c}{After peak}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Disease & Design & lower CE / loss & median CE / loss & lower CE / loss & median CE / loss\\
+\midrule
+COVID & delay 0 & 28 / 17 & $-34.2$ / $-0.40$ & 0 / 0 & $+7.3$ / $+2.35$\\
+ & delay 1 & 28 / 13 & $-10.5$ / $+0.02$ & 0 / 1 & $+2.3$ / $+0.75$\\
+ & re-run & 27 / 23 & $-3.1$ / $-0.10$ & 0 / 3 & $+1.0$ / $+0.11$\\
+\midrule
+Flu & delay 0 & 27 / 8 & $-12.8$ / $+0.34$ & 6 / 6 & $+3.8$ / $+1.43$\\
+ & delay 1 & 22 / 7 & $-3.2$ / $+0.22$ & 2 / 5 & $+3.8$ / $+0.84$\\
+ & re-run & 22 / 15 & $-2.3$ / $-0.01$ & 4 / 10 & $+1.1$ / $+0.09$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item \textbf{Calibration improves for nearly every method, most at delay 0.}
+For COVID the corrected labels turn delay 0 from the worst design into one
+of the best: Fixed MultiQT $+53\%$ CE becomes $+0\%$ (loss $+8.5\%$ becomes
+$+5.3\%$), Leaky MultiQT $+12\%$ becomes $-10\%$, REF-op $+9\%$ becomes $-14\%$,
+Delphi's square-root tracker $+10\%$ becomes $-33\%$. For flu the gain is smaller
+but the same in direction (Fixed MultiQT $-22\%$ becomes $-46\%$, REF-op $-21\%$
+becomes $-35\%$).
+\item \textbf{The re-run gains least}, as expected: it already learns the
+older rows from revised reports, so only its newest rows change. It still
+improves in most methods (COVID: lower CE in 27 and lower loss in 22 of 28).
+\item \textbf{After peaks the corrected labels cost}, in every design, most at
+delay 0 (COVID: higher loss in all 28 methods, median $+2.4$ points), where
+the low first reports had pushed the forecasts down when the base was too
+high. This is the expected price
+(Proposition~\ref{prop:corrected-labels}(c)): the labels are calibrated for
+the latest counts, and after peaks the late reaction is the dead time of $h+1$
+weeks, not the labels.
+\item \textbf{The loss overall changes little} (medians within $\pm0.4$
+points), lower for more than half of the methods in the re-run and at COVID delay 0, slightly
+higher at delay 1 and flu delay 0.
+\end{itemize}
+\emph{Plots and tables.} \path{multiqt_feedback_bars_corrected.pdf} (R/06),
+\path{multiqt_peak_reasoning_tradeoff_corrected.pdf} and the per-combination
+PDFs \texttt{*corrected.pdf} (R/04);
+\path{agent/outputs/corrected_designs/comparison.txt} (every method, overall
+and after peaks) and
+\path{agent/scripts/corrected_designs/compare_after_run.R}.
 
 \subsection{Questions and ideas}
 \label{sec:open-issues}
@@ -1893,6 +1987,9 @@ on the power scale at its adaptive rate, with the decline probability
 (\texttt{phase\_multiqt()}, \texttt{decline\_probability()});
 \texttt{phase\_oracle} uses the phase in hindsight instead, 1 for a target
 week after its nearest peak of the latest counts and 0 otherwise.
+\texttt{polar} runs polar MultiQT \eqref{eq:polar-update} on counts, its
+lengths at the adaptive rate of Fixed MultiQT, with $\eta_\varphi=0.3$ and
+$\varepsilon=0.1$ (\texttt{polar\_multiqt()}), not tuned.
 
 \paragraph{Relation to the \texttt{log1p} tracker.}
 \label{sec:log-tracker-scale}
@@ -3749,6 +3846,63 @@ $+1.6\%$ against $+1.2\%$ for the error-based probability; delay 0 and 1).
 A real-time phase needs information the base does not use: other data
 streams that lead the hospitalizations (emergency-department visits,
 wastewater, test positivity) or the timing of earlier waves.
+
+\paragraph{Polar MultiQT: the angle does not turn.} Polar MultiQT
+(Section~\ref{sec:sign-flip}) was first checked in \path{agent/} with the
+workflow's adaptive rate, pooling and scoring (its Fixed and Leaky MultiQT
+reproduce the workflow's exactly; the angle fixed at 0 reproduces Fixed):
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{Loss} & \multicolumn{2}{c}{CE}\\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Method & overall & after peak & overall & after peak\\
+\midrule
+\texttt{fixed}                          & 6.3 & 5.1 & $-4.9$  & $-3.5$\\
+\texttt{leaky}                          & 2.2 & 1.8 & $-9.8$  & $-7.2$\\
+Shared angle, $\eta_\varphi=0.3$ (\texttt{polar}) & 5.2 & 4.8 & $-10.2$ & $-3.9$\\
+Shared angle, $\eta_\varphi=1$          & 8.9 & 6.3 & $-14.4$ & 3.1\\
+Shared angle, $\eta_\varphi=3$          & 22.9 & 11.6 & $-4.0$ & $-1.9$\\
+One angle per level, $\eta_\varphi\le1$ & 6.1--6.2 & 5.0 & $-4.6$ to $-5.1$ & $-3.3$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:results-polar}
+\begin{center}\small Table \thetable: Polar MultiQT against Fixed and Leaky
+MultiQT at the same adaptive rate: pooled change versus the base (\%), mean
+over the six disease--design cells.
+\end{center}
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{One angle per level does nothing}, as
+\eqref{eq:polar-effective-rate} says: for one level it only changes the
+rate.
+\item \textbf{The shared angle helps a little against Fixed} at
+$\eta_\varphi=0.3$ ($+5.2\%$ against $+6.3\%$, CE $-10\%$ against $-5\%$),
+but Leaky MultiQT reaches the same calibration at less loss, and after
+peaks the angle changes almost nothing ($+4.8\%$ against $+5.1\%$). Faster
+angles make the forecasts restless and cost loss.
+\item \textbf{The angle does not turn at the peaks.} The share of cases with
+a turned angle ($\cos\varphi<0$, delay 0) is flat over the weeks around the
+peak: for COVID about $7\%$ at $\eta_\varphi=0.3$ and $18\%$ at
+$\eta_\varphi=1$ in every week from $-7$ to $8$, for flu $0\%$ (and at
+$\eta_\varphi=1$ about $8\%$ before and $1\%$ after the peak). The angle
+turns in a few cases and stays turned: it acts like a shrinkage of the
+correction, as the mirror of the sign-flip experts does, not like a switch.
+\item \textbf{Why.} The angle learns only from the coverage errors, and
+these arrive late and noisy: $h+1$ weeks or more after the forecast, at
+delay 0 from first reports that are too low, and a few weeks of
+over-coverage are needed before the sum in~\eqref{eq:polar-update} points
+one way. By then the decline is half over, and near $0^\circ$ the factor
+$\sin\varphi_t$ keeps the first steps small. A faster angle reacts to
+noise sooner, not to the turn. Like the decline probability of
+\texttt{phase\_power}, the information that the sign has turned has to come
+from outside the coverage feedback; \texttt{phase\_oracle} shows what it
+would be worth.
+\end{itemize}
+The numbers come from the scripts \path{polar_tracker.R} and
+\path{polar_tracker_angle.R} in \path{agent/scripts/}; \texttt{polar}
+($\eta_\varphi=0.3$) runs in the workflow since 14 November.
 
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Sign-flip
 experts'' and ``Two-phase trackers'' (pooled: pp.~1 and 7); the forecasts

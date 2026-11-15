@@ -1405,6 +1405,34 @@ select_expert <- function(experts, case, window, count_scale = 1, first = 1L) {
   list(q = q, chosen = chosen)
 }
 
+# Polar MultiQT (polar; notes, "A shared angle for the sign"): the offset of level alpha is
+# theta^alpha = m^alpha * cos(phi), a signed length per level and one angle phi in
+# [eps, pi - eps] shared by all levels, so that the sign of the whole correction can turn
+# at once. Both learn by subgradient steps of the quantile loss through the coverage
+# error g = covered - alpha: m^alpha at the tracker's rate eta_t (counts), phi at
+# angle_rate (radians per unit of m / unit_t, unit_t the rolling scale of rolling_rate()):
+#   m^alpha <- m^alpha - eta_t g^alpha cos(phi),
+#   phi <- phi + angle_rate * sum_alpha g^alpha m^alpha / unit_t * sin(phi).
+# The issued forecasts are projected (isoreg), the state is not, as in multiqt(); with phi
+# fixed at 0 (eps = 0, angle_rate = 0) it is Fixed MultiQT. Returns the forecasts in counts.
+polar_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, unit, angle_rate,
+                          eps = .1, feedback_samples = NULL) {
+  n <- nrow(base); a <- length(alpha)
+  stopifnot(length(eta) == n, length(unit) == n, angle_rate >= 0, eps >= 0, eps < pi / 2)
+  m <- rep(0, a); phi <- eps; q <- base
+  for (week in seq_len(n)) {
+    for (past_week in feedback_by_week[[week]]) {
+      g <- covered_share(feedback[past_week], feedback_samples[[past_week]],
+        q[past_week, ]) - alpha
+      push <- sum(g * m) / max(unit[week], 1e-9) * sin(phi)
+      m <- m - eta[week] * g * cos(phi)
+      phi <- min(max(phi + angle_rate * push, eps), pi - eps)
+    }
+    if (any(m != 0)) q[week, ] <- isoreg(base[week, ] + m * cos(phi))$yf
+  }
+  q
+}
+
 # Sign-flip experts (power_flip, level_flip, width_flip): the base, a tracker's forecasts
 # and its mirror, the base minus the tracker's correction, 2 b_t - q_t, levels sorted. All
 # [week x level] in counts / count_scale; experts named base, tracker and mirror.
@@ -1617,6 +1645,9 @@ method_parameters <- function() list(
   # at every issue week (Delphi's fast_decay, .1 as in REF-op). leak_grid: the leak bank of
   # leaky_select (the leak with the smallest quantile loss over the last leak_window learned
   # rows) and leaky_weighted (learned weights).
+  # Polar MultiQT (polar_multiqt()): the rate of the shared angle (unit-free) and its
+  # distance eps from 0 and 180 degrees; not tuned.
+  polar_angle_rate = .3, polar_eps = .1,
   leak = .1, leak_grid = c(0, .02, .05, .1, .2, .3, .5), leak_window = 20L,
   # phase_power: the decline probability from the last phase_rows learned rows
   # (decline_probability()).
@@ -1687,7 +1718,7 @@ method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_o
   "weighted", "weighted_common", "shared",
   "shared_common", "restart_uniform", "restart_weighted", "restart_recent", "restart_recent_dual",
   score_methods, "restart_persistent", "shared_outer", "shared_common_outer",
-  "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods)
+  "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods, "polar")
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
@@ -1730,7 +1761,7 @@ method_groups <- list(
   "Spread scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_spread") |
     startsWith(scaled_methods, "spread_")]),
   "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
-    flip_methods),
+    flip_methods, "polar"),
   "Two-phase trackers" = c("original", "studentized_power", phase_methods))
 # Only the methods that run: a group keeps its active methods and is dropped when only the
 # base and Fixed MultiQT are left.
@@ -1743,6 +1774,7 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   oracle_target = "Target oracle (hindsight)",
   sqrt_adaptive = "Sqrt tracker", leaky_select = "Leaky MultiQT, leak chosen online",
   leaky_weighted = "Leaky MultiQT, leak bank with learned weights",
+  polar = "Polar MultiQT (shared angle)",
   power_flip = "Sign-flip experts: power scale", level_flip = "Sign-flip experts: level RMS",
   width_flip = "Sign-flip experts: base width",
   phase_power = "Two-phase power scale (decline probability)",
@@ -1862,6 +1894,12 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     predictions$leaky <- multiqt(case$base, case$feedback_observed, case$feedback_by_week,
       case$alpha, rate_of(count_unit), 0L, transform, fast_decay = params$leak,
       feedback_samples = case$feedback_samples) / count_scale
+  # Polar MultiQT (polar_multiqt()): Fixed MultiQT's lengths at its adaptive rate and one
+  # angle for all levels that can turn the sign of the whole correction.
+  if (want("polar"))
+    predictions$polar <- polar_multiqt(case$base, case$feedback_observed,
+      case$feedback_by_week, case$alpha, rate_of(count_unit), count_unit,
+      params$polar_angle_rate, params$polar_eps, case$feedback_samples) / count_scale
   # Fixed and Leaky MultiQT on the log1p tracker, whatever the tracker of the other methods,
   # at the adaptive rate of their log1p scores. The log1p tracker issues (1 + b) * exp(offset)
   # - 1: its correction is multiplicative.
