@@ -2747,6 +2747,12 @@ about 3 points of loss over the error-based probability. But neither the
 base's forecasts nor the reports known at the cutoff predict the sign of
 the bias (AUC about $0.5$); a real-time phase needs other data.
 [Section~\ref{sec:results-phase}, Table~\ref{tab:bias-sign}.]
+\item \textbf{COVID and flu.} COVID waves are broad and symmetric, and the
+base's bias is close to a mirror image around the peak; flu waves are
+sharp, the base is far too low on the rise, too high only for two or three
+weeks after the peak and too low again in the tail. This is why trackers
+calibrate flu much better than COVID. [Section~\ref{sec:results-flu-covid},
+Table~\ref{tab:flu-covid}.]
 \item \textbf{Locations.} California and Texas gain up to COVID peaks with
 most methods; New York, Pennsylvania and the US less. Calibration improves
 strongly for flu everywhere, not for COVID at delay 0.
@@ -3863,6 +3869,83 @@ experts'' and ``Two-phase trackers'' (pooled: pp.~1 and 7); the forecasts
 on pages 10 and 11 of each location's eleven in
 \path{multiqt_method_forecasts/}; the weights of the sign-flip experts on
 the sixth page of each location in \path{multiqt_weight_timelines/}.
+
+\subsection{COVID and flu around their peaks}
+\label{sec:results-flu-covid}
+Most results differ between the diseases: the trackers calibrate flu much
+better than COVID, and the phase helps COVID in a way it does not help
+flu. The waves and the base's errors around them explain much of this.
+Bias and dispersion are the signed parts of the calibration error
+\eqref{eq:evaluation-bias}.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+ & COVID & Flu\\
+\midrule
+Peaks (10 states, since August 2022) & 26 & 40\\
+Count 8 weeks before / after the peak, share of the peak & .43 / .46 & .11 / .19\\
+\addlinespace
+Bias of the base, up to the peak (weeks $-8$ to 0) & $-0.16$ & $-0.29$\\
+\quad weeks 1 to 4 after the peak & $+0.18$ & $0.00$\\
+\quad weeks 5 to 8 after the peak & $+0.08$ & $-0.09$\\
+Dispersion of the base, up to / after the peak & $-0.04$ / $-0.01$ & $-0.17$ / $+0.13$\\
+Bias over all evaluation weeks & $-0.03$ & $-0.07$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:flu-covid}
+\begin{center}\small Table \thetable: The shape of the waves (latest counts,
+peaks of \texttt{find\_peaks()}) and the CMU base around its peaks (both
+winters with CMU forecasts, horizons $0$ to $3$, against the latest
+counts); negative bias: too low, negative dispersion: too narrow
+(\path{agent/scripts/flu_covid_peaks.R}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{COVID waves are broad and symmetric}: 8 weeks before and
+after a peak the counts are still at $43\%$ and $46\%$ of it. The base is
+too low on the rise ($-0.16$) and about as much too high after the peak
+($+0.18$ in weeks 1 to 4): its bias is close to a mirror image around the
+peak, and over a whole wave it almost cancels ($-0.03$ over the
+evaluation).
+\item \textbf{Flu waves are sharp, and they fall more slowly than they
+rise}: from $11\%$ of the peak 8 weeks before it, to $19\%$ 8 weeks after.
+The base is far too low and too narrow on the rise (bias $-0.29$, at the
+peak $-0.40$; dispersion $-0.17$): no autoregressive forecaster
+extrapolates a growth of about $30\%$ a week that ends abruptly. After the
+peak it is too high only briefly (weeks 2 and 3, up to $+0.10$), then too
+low again in the long tail ($-0.09$ in weeks 5 to 8) and too wide. Both
+winters show the same pattern.
+\item \textbf{What this means for the methods.} For flu the base is too low
+in most weeks ($-0.07$ overall), so any tracker that learns an upward,
+wider correction calibrates much better (most trackers lower the flu
+calibration error by $20\%$ to $43\%$, Sections~\ref{sec:results-trackers}
+to~\ref{sec:results-scaled}); after the peak the correction is wrong only
+for two or three weeks. For COVID a correction learned on the rise is
+wrong for the whole decline, and the two signs cancel: a single
+correction cannot calibrate it, hence the small or negative calibration
+gains (Fixed MultiQT $+54\%$ at delay 0) and the value of forgetting and
+of the phase. A mirrored correction after the peak suits COVID; flu would
+need three phases: too low on the rise, briefly too high after the peak,
+too low again in the tail (Section~\ref{sec:results-phase}).
+\item \textbf{Possible reasons} (from the epidemiology of the two
+diseases, not tested here). Influenza spreads quickly through a
+population with little immunity to the season's strains, with a strong
+seasonal driver (school terms, the winter holidays, the weather); the
+epidemic grows fast and ends when the susceptibles are used up, which
+makes the sharp peak. The tail is often carried by another type or
+subtype (influenza B late in the season) or by a rebound after the winter
+holidays, which keeps the counts above a declining extrapolation. COVID is
+endemic in a population with broad but waning immunity; its waves come
+from waning immunity and new variants with a modest growth advantage,
+twice a year and with weaker seasonal forcing, and rise and fall slowly
+and about symmetrically.
+\end{itemize}
+\emph{Plot.} \path{agent/outputs/flu_covid_peaks/peak_profiles.pdf}: the
+wave shapes, and the base's bias and dispersion by week relative to the
+peak, one thin line per season or winter.
 
 \subsection{Longer history: the \texttt{windowed\_seasonal} base}
 \label{sec:results-longer-history}
