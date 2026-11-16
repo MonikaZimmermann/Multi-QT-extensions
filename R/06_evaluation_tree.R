@@ -61,6 +61,9 @@ n_tree_methods <- 10L
 selection_phase <- "after"
 tree_candidates <- setdiff(unique(unlist(method_groups)), c("original", "oracle_target",
   "phase_oracle"))
+# Hindsight benchmarks drawn as references, hatched and never ranked: below the ten best of
+# the tree and in their group of the bar plot.
+reference_methods <- "phase_oracle"
 # Colours as in 04's trade-off plots (tradeoff_colours in R/03), so a method keeps its
 # colour on every page. A variant shares its method's shade: pale with an outline in the
 # colour = common weights for all levels; black outline = + outer MultiQT. marker: the
@@ -75,10 +78,20 @@ bar_style <- function(methods) {
   luminance <- (ifelse(shown <= .04045, shown / 12.92, ((shown + .055) / 1.055)^2.4) %*%
     c(.2126, .7152, .0722))[, 1]
   list(fill = fill, border = ifelse(grepl("_outer$", methods), "black",
-    ifelse(common, colour, NA)), marker = ifelse(luminance > .179, "black", "white"))
+    ifelse(common, colour, NA)), marker = ifelse(luminance > .179, "black", "white"),
+    hatch = methods %in% reference_methods)
+}
+# Hatching over the bars of the reference methods (hatch), in the marker colour.
+hatch_bars <- function(x0, y, x1, hatch, marker, half = .38) {
+  hatch <- rep_len(hatch, length(y))
+  if (any(hatch)) rect(rep_len(x0, length(y))[hatch], y[hatch] - half,
+    rep_len(x1, length(y))[hatch], y[hatch] + half, density = 28, angle = 45,
+    col = rep_len(marker, length(y))[hatch], border = NA, lwd = .6)
 }
 # The key's note on the colours and on the variants drawn, one line each, so it fits.
 key_note <- function(methods) c("Colours as in the trade-off plots of R/04.",
+  if (any(methods %in% reference_methods))
+    "Hatched: the phase in hindsight, a reference, not ranked.",
   if (any(grepl("_common", methods))) "Pale: common weights for all levels.",
   if (any(grepl("_outer$", methods))) "Black outline: + outer MultiQT.")
 window_titles <- c(overall = "Overall",
@@ -182,6 +195,7 @@ tree_methods <- lapply(trees, function(nodes) {
   root <- nodes[[1]]$summary
   root <- root[root$phase == selection_phase & root$method %in% tree_candidates, ]
   top <- head(root$method[order(-root$reduction)], n_tree_methods)
+  top <- c(top, intersect(reference_methods, nodes[[1]]$summary$method))
   setNames(method_short_labels[top], top)
 })
 write.csv(do.call(rbind, lapply(seq_len(nrow(pages)), function(p)
@@ -248,6 +262,7 @@ draw_panel <- function(s, xlim, show_share, methods, style) {
   }
   shown <- pmin(pmax(values, xlim[1]), xlim[2])
   rect(0, y - .38, shown, y + .38, col = style$fill, border = style$border, lwd = .7)
+  hatch_bars(0, y, shown, style$hatch & drawn, style$marker)
   # One call per side: text() uses only the first two values of adj.
   for (right in c(FALSE, TRUE)) {
     cut <- which(drawn & (if (right) values > xlim[2] else values < xlim[1]))
@@ -274,6 +289,7 @@ draw_ce_panel <- function(s, xlim, show_share, methods, style) {
   mtext("Coverage error", side = 3, line = .05, adj = 0, cex = .45, col = "gray35")
   if (any(is.finite(values))) {
     rect(0, y - .38, values, y + .38, col = style$fill, border = style$border, lwd = .7)
+    hatch_bars(0, y, values, style$hatch & is.finite(values), style$marker)
     abline(v = s$original_coverage_error[which.max(s$cases)], lty = 2, lwd = .9)
   }
   box(col = "gray60")
@@ -295,6 +311,7 @@ draw_bias_panel <- function(s, xlim, show_share, methods, style) {
     col = "gray35")
   if (any(is.finite(bias))) {
     rect(0, y - .38, bias, y + .38, col = style$fill, border = style$border, lwd = .7)
+    hatch_bars(0, y, bias, style$hatch & is.finite(bias), style$marker)
     points(dispersion, y, pch = 23, bg = "black", col = "white", cex = .55, lwd = .5)
     base <- which.max(s$cases)
     abline(v = s$original_bias[base], lty = 2, lwd = .9)
@@ -367,7 +384,9 @@ draw_tree_page <- function(nodes, methods, twins, disease, location, lower = "co
   # the largest text size up to 1.2 at which all of it fits the free space.
   par(mar = c(0, 0, 0, 0))
   plot.new()
-  key_title <- c(paste("Bars, top to bottom: the", length(methods), "best on this page"),
+  n_best <- sum(!names(methods) %in% reference_methods)
+  key_title <- c(paste("Bars, top to bottom: the", n_best, "best on this page",
+    if (n_best < length(methods)) "+ reference"),
     paste0("(quantile loss ", tolower(sub(" \\(.*", "", window_titles[[selection_phase]])),
       ", all designs and horizons)"))
   notes <- key_note(names(methods))
@@ -443,7 +462,7 @@ for (lower in names(lower_panels)) {
 # bar beyond it ends in "<" or ">"), and the share of cases with a smaller loss than the
 # base to the right; coverage-error panels on one axis from 0, dashed: the base. Colours:
 # tradeoff_colours (R/03), lighter for the later designs.
-bar_methods <- intersect(unique(unlist(method_groups)), tree_candidates)
+bar_methods <- intersect(unique(unlist(method_groups)), c(tree_candidates, reference_methods))
 design_tint <- setNames(c(1, .55, .25), feedback_levels)   # Share of the method colour.
 tint <- function(colour, share) colorRampPalette(c("white", colour))(101)[1 + round(100 * share)]
 # Rows of a page: the methods by group, a header row before each group.
@@ -502,9 +521,11 @@ draw_bar_page <- function(disease, location, data = scores, levels = feedback_le
       y <- bar_y(r, d)
       x <- s[[value]]
       shown <- min(max(x, limits[1]), limits[2])
+      fill <- tint(tradeoff_colours[[method]], tints[[d]])
       rect(0, y - .42, shown, y + .42, border = if (outlined[d]) "black" else
-        tradeoff_colours[[method]], lwd = if (outlined[d]) 1.1 else .6,
-        col = tint(tradeoff_colours[[method]], tints[[d]]))
+        tradeoff_colours[[method]], lwd = if (outlined[d]) 1.1 else .6, col = fill)
+      if (method %in% reference_methods) hatch_bars(0, y, shown, TRUE,
+        if (tints[[d]] > .5) "white" else "black", .42)
       if (x > limits[2] || x < limits[1]) text(shown, y, if (x > limits[2]) ">" else "<",
         adj = c(as.numeric(x > limits[2]), .5), cex = .6, font = 2)
       if (loss && s$cases >= min_cases) mtext(sprintf("%.0f%%", 100 * s$share_improved),
@@ -537,7 +558,9 @@ draw_bar_page <- function(disease, location, data = scores, levels = feedback_le
       "of |coverage - alpha|, weighted by the weeks; dashed: the base."),
     paste("Top to bottom within a method: feedback", paste(levels, collapse = ", "),
       if (any(outlined)) "(black outline: corrected labels)." else "(darker to lighter).",
-      "Every tracker learns at the adaptive rate (no tuning).")),
+      "Every tracker learns at the adaptive rate (no tuning).",
+      if (any(bar_methods %in% reference_methods))
+        "Hatched: the phase in hindsight (phase_oracle), a reference, not a method.")),
     side = 1, outer = TRUE, line = c(1.2, 2.4, 3.6), cex = .8)
 }
 cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars.pdf"), width = 18.5,
