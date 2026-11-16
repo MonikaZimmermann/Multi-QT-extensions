@@ -3930,18 +3930,40 @@ gains (Fixed MultiQT $+54\%$ at delay 0) and the value of forgetting and
 of the phase. A mirrored correction after the peak suits COVID; flu would
 need three phases: too low on the rise, briefly too high after the peak,
 too low again in the tail (Section~\ref{sec:results-phase}).
-\item \textbf{Possible reasons} (from the epidemiology of the two
-diseases, not tested here). Influenza spreads quickly through a
-population with little immunity to the season's strains, with a strong
-seasonal driver (school terms, the winter holidays, the weather); the
-epidemic grows fast and ends when the susceptibles are used up, which
-makes the sharp peak. The tail is often carried by another type or
-subtype (influenza B late in the season) or by a rebound after the winter
-holidays, which keeps the counts above a declining extrapolation. COVID is
-endemic in a population with broad but waning immunity; its waves come
-from waning immunity and new variants with a modest growth advantage,
-twice a year and with weaker seasonal forcing, and rise and fall slowly
-and about symmetrically.
+\item \textbf{In the bar plots} (\path{multiqt_feedback_bars.pdf}, pooled:
+COVID p.~1, flu p.~7; values below are means over the three designs).
+\emph{Flu:} every method lowers the calibration error, overall (base
+$0.084$, methods $0.048$ to $0.074$) and up to the peak, and every method
+gains loss up to the peak (power scale $8\%$, \texttt{phase\_oracle}
+$15\%$), none after it ($-1\%$ to $-10\%$): the base is too low and too
+narrow on the rise, which any upward, wider correction fixes, and that
+correction is too high in the weeks after the peak. \emph{COVID:} up to
+the peak only a third of the methods lower the calibration error (base
+$0.204$), after it two thirds; most gain a little loss up to the peak (up
+to $5\%$) and none after it: each phase uses the correction learned in the
+phase before, of the other sign. \texttt{phase\_oracle}, hatched in the
+plots from 16 November on, lowers the COVID calibration error after peaks
+from $0.184$ to $0.138$ and is the only method that does not lose there.
+The bias tree (\path{multiqt_evaluation_tree_bias.pdf}) shows the sign of
+the miss directly (\path{agent/scripts/flu_covid_bars.R}).
+\item \textbf{Possible reasons} (from the literature on the two diseases;
+not tested here). Influenza has a strong seasonal driver: low absolute
+humidity marks the onset of the winter epidemics in the United
+States~\cite{shaman2010}, and the winter holidays, through school
+closures, lower transmission for a while and delay the
+peak~\cite{ewing2017}. Facing strains to which the population has
+little immunity, the epidemic grows fast and ends as the susceptibles
+are used up, the standard picture of a sharp peak. A slow tail can come
+from types or subtypes that peak at different times: in temperate
+countries of the Northern hemisphere the influenza A peak preceded the B
+peak in $43\%$ of the seasons and coincided with it in
+$40\%$~\cite{caini2016}. COVID's waves come twice a year: models fitted to
+the US states need waning immunity after infection to produce them,
+with the seasonal forcing shaping their timing and size~\cite{rubin2026},
+and variants that evade immunity change the size of the endemic
+waves~\cite{otto2024}; such waves rise and fall slowly and about
+symmetrically. That forecasts are least accurate at turning points is
+documented for the hub forecasts~\cite{mathis2024}.
 \end{itemize}
 \emph{Plot.} \path{agent/outputs/flu_covid_peaks/peak_profiles.pdf}: the
 wave shapes, and the base's bias and dispersion by week relative to the
@@ -4377,6 +4399,43 @@ Olivier Chapelle.
 Proceedings of the 20th ACM SIGKDD International Conference on Knowledge
 Discovery and Data Mining, 2014.
 \href{https://dl.acm.org/doi/10.1145/2623330.2623634}{ACM}.
+
+\bibitem{shaman2010}
+Jeffrey Shaman, Virginia E. Pitzer, C\'ecile Viboud, Bryan T. Grenfell
+and Marc Lipsitch.
+\emph{Absolute Humidity and the Seasonal Onset of Influenza in the
+Continental United States}.
+PLoS Biology 8(2):e1000316, 2010.
+
+\bibitem{ewing2017}
+Anne Ewing, Elizabeth C. Lee, C\'ecile Viboud and Shweta Bansal.
+\emph{Contact, Travel, and Transmission: The Impact of Winter Holidays on
+Influenza Dynamics in the United States}.
+Journal of Infectious Diseases 215(5):732--739, 2017.
+
+\bibitem{caini2016}
+Saverio Caini, Winston Andrade, Selim Badur et al.
+\emph{Temporal Patterns of Influenza A and B in Tropical and Temperate
+Countries: What Are the Lessons for Influenza Vaccination?}
+PLoS One 11(3):e0152310, 2016.
+
+\bibitem{rubin2026}
+Ilan N. Rubin, Mary Bushman, Marc Lipsitch and William P. Hanage.
+\emph{Seasonal Forcing and Waning Immunity Drive the Sub-Annual
+Periodicity of the COVID-19 Epidemic}.
+PLOS Pathogens 22(4):e1014169, 2026.
+
+\bibitem{otto2024}
+Sarah P. Otto, Ailene MacPherson and Caroline Colijn.
+\emph{Endemic Does Not Mean Constant as SARS-CoV-2 Continues to Evolve}.
+Evolution 78(6):1092--1108, 2024.
+
+\bibitem{mathis2024}
+Sarabeth M. Mathis, Alexander E. Webber, Tom\'as M. Le\'on et al.
+\emph{Evaluation of FluSight Influenza Forecasting in the 2021--22 and
+2022--23 Seasons with a New Target Laboratory-Confirmed Influenza
+Hospitalizations}.
+Nature Communications 15:6289, 2024.
 
 \end{thebibliography}
 
