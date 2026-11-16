@@ -44,7 +44,7 @@ candidate_colours <- setNames(origin_colours[candidates$origin], candidates$id)
 labels <- setNames(candidates$label, candidates$id)
 # The candidates of the peak-aligned pages and of the scores over time.
 shown <- c("identity", "sqrt", "log1p", "power_50", "power_75", "level_rms", "base_width",
-  "spread", "pit", "revisions_target", "window_asinh", "tpit_25")
+  "spread", "pit", "revisions_target", "window_asinh")
 levels_shown <- c(.1, .5, .9)
 phase_window <- list(before = (1L - settings$weeks_before_peak):0L,
   after = seq_len(settings$weeks_after_peak))
@@ -333,8 +333,7 @@ legend_origins()
 # Page 2: the drift ratio against the power p of the forecast median, (1 + b^.5)^p.
 powers <- c(power_m100 = -1, identity = 0, power_25 = .25, power_50 = .5, power_75 = .75,
   power_100 = 1, power_150 = 1.5, power_200 = 2)
-references <- c("log1p", "sqrt", "level_rms", "base_width", "spread", "pit", "window_asinh",
-  "tpit_25")
+references <- c("log1p", "sqrt", "level_rms", "base_width", "spread", "pit", "window_asinh")
 par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 12), oma = c(4, 0, 3, 0), xpd = FALSE)
 for (d in diseases) {
   x <- drift_summary[drift_summary$disease == d, ]

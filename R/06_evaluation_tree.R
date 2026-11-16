@@ -6,12 +6,15 @@
 # same methods below it. First page per disease: the pooled locations (pooled_rows():
 # settings$pooled_locations); next pages: the locations of multiqt_settings() (US, California, Texas,
 # New York, Pennsylvania), one location each. Each page draws its own best methods.
+# A second tree, multiqt_evaluation_tree_bias.pdf, shows below each loss panel the two signed
+# parts of the coverage error instead: bias (are the forecasts too high or too low?) and
+# dispersion (are the intervals too wide or too narrow?).
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
 # multiqt_feedback_bars.pdf: every method under each feedback design, side by side, and
 # multiqt_feedback_bars_corrected.pdf: each design next to its corrected version. The tree and
 # multiqt_feedback_bars.pdf use the three designs without corrected labels.
-# Order of the workflow: 00 -> 01 -> 05 -> 02 / 04 -> 06.
+# Order of the workflow: 00 -> 01 -> 02 / 04 -> 06.
 source("R/03_functions.R")
 
 # 1. SETTINGS -----------------------------------------------------------------
@@ -38,6 +41,11 @@ splits <- c("feedback", "horizon")
 split_titles <- c(feedback = "feedback design", horizon = "horizon")
 phases <- c("overall", "before", "after")
 min_cases <- 5L                    # Nodes with fewer cases show no share of improved cases.
+# The panel below each loss panel, one tree file each: the coverage error, or its bias and
+# dispersion (summarize_scores() in R/03; tables of an older R/04 have neither: only the
+# first file is drawn).
+lower_panels <- c(coverage_error = "multiqt_evaluation_tree.pdf",
+  bias_dispersion = "multiqt_evaluation_tree_bias.pdf")
 # Scored on the tracker's scale, as the trade-off pages of R/04.
 loss_column <- if (settings$transform == "log1p") "log_quantile_loss" else "quantile_loss"
 loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
@@ -93,9 +101,17 @@ scores$feedback <- feedback_label(scores$feedback_delay, scores$feedback_revisio
 all_levels <- unique(scores$feedback[order(scores$feedback_revisions, scores$feedback_delay,
   scores$feedback_corrected)])
 scores$loss <- scores[[loss_column]]
+has_bias <- all(c("bias", "dispersion") %in% names(scores))
+if (!has_bias) {
+  message("No bias and dispersion in summary_scores_all_locations.csv (an older ",
+    "R/04_methods.R): ", lower_panels[["bias_dispersion"]], " is not drawn.")
+  scores$bias <- scores$dispersion <- NA_real_
+  lower_panels <- lower_panels["coverage_error"]
+}
 case_columns <- c("disease", "location", "horizon", "feedback", "phase")
-original <- scores[scores$method == "original", c(case_columns, "loss", "coverage_error")]
-names(original)[-seq_along(case_columns)] <- c("original_loss", "original_coverage_error")
+signed_columns <- c("coverage_error", "bias", "dispersion")
+original <- scores[scores$method == "original", c(case_columns, "loss", signed_columns)]
+names(original)[-seq_along(case_columns)] <- paste0("original_", c("loss", signed_columns))
 all_designs <- merge(scores[scores$method != "original", ], original, by = case_columns)
 scores <- all_designs[!all_designs$feedback_corrected, ]
 feedback_levels <- intersect(all_levels, scores$feedback)
@@ -105,15 +121,19 @@ split_names <- function(split, value) if (split == "horizon") paste("horizon", v
 # Reduction in %: 100 * (1 - pooled loss / pooled base loss), each case's mean loss
 # weighted by its number of weeks; share_improved: the share of cases in which the method's
 # loss is below the base's. Coverage error (per case the mean over the levels of
-# |coverage - alpha| over the weeks of the window) is pooled the same way, weighted by
-# the weeks, for the method and for the base.
+# |coverage - alpha| over the weeks of the window), its bias and its dispersion are pooled
+# the same way, weighted by the weeks, for the method and for the base.
 node_summary <- function(rows) do.call(rbind, lapply(split(rows, list(rows$method,
   rows$phase), drop = TRUE), function(s) data.frame(method = s$method[1], phase = s$phase[1],
     cases = nrow(s), weeks = sum(s$n_weeks),
     reduction = 100 * (1 - sum(s$n_weeks * s$loss) / sum(s$n_weeks * s$original_loss)),
     share_improved = mean(s$loss < s$original_loss),
     coverage_error = weighted.mean(s$coverage_error, s$n_weeks),
-    original_coverage_error = weighted.mean(s$original_coverage_error, s$n_weeks))))
+    original_coverage_error = weighted.mean(s$original_coverage_error, s$n_weeks),
+    bias = weighted.mean(s$bias, s$n_weeks),
+    original_bias = weighted.mean(s$original_bias, s$n_weeks),
+    dispersion = weighted.mean(s$dispersion, s$n_weeks),
+    original_dispersion = weighted.mean(s$original_dispersion, s$n_weeks))))
 # The nodes of one tree, root first: level, the values of the splits above (NA: pooled),
 # its row on the page (leaves fill the rows in order; a parent sits beside the middle of
 # its children) and the summary of its cases.
@@ -258,6 +278,31 @@ draw_ce_panel <- function(s, xlim, show_share, methods, style) {
   }
   box(col = "gray60")
 }
+# The bias panel, in place of the CE panel (multiqt_evaluation_tree_bias.pdf): per method
+# the bias as a bar and the dispersion as a diamond, on one axis around 0; dashed: the
+# base's bias, dotted: the base's dispersion.
+draw_bias_panel <- function(s, xlim, show_share, methods, style) {
+  bias <- s$bias[match(names(methods), s$method)]
+  dispersion <- s$dispersion[match(names(methods), s$method)]
+  y <- seq_along(methods)
+  par(mar = c(1.2, .5, .85, if (show_share) 2.2 else .8), mgp = c(1, .25, 0), tcl = -.2)
+  plot(NA, xlim = xlim, ylim = c(length(y) + .6, .4), xaxs = "i", yaxs = "i", xaxt = "n",
+    yaxt = "n", xlab = "", ylab = "")
+  ticks <- pretty(xlim, n = 4)
+  abline(v = ticks, col = "gray90")
+  axis(1, at = ticks, cex.axis = .6)
+  mtext("Bias (bar), dispersion (\u25c6)", side = 3, line = .05, adj = 0, cex = .45,
+    col = "gray35")
+  if (any(is.finite(bias))) {
+    rect(0, y - .38, bias, y + .38, col = style$fill, border = style$border, lwd = .7)
+    points(dispersion, y, pch = 23, bg = "black", col = "white", cex = .55, lwd = .5)
+    base <- which.max(s$cases)
+    abline(v = s$original_bias[base], lty = 2, lwd = .9)
+    abline(v = s$original_dispersion[base], lty = 3, lwd = .9)
+  }
+  abline(v = 0, col = "gray30")
+  box(col = "gray60")
+}
 page_title <- function(disease, location) {
   where <- if (is.na(location)) paste("the", pooled_label(length(unique(pooled_rows(
     scores[scores$disease == disease, ], settings)$location)), settings), "pooled") else {
@@ -268,7 +313,8 @@ page_title <- function(disease, location) {
     loss_label)
 }
 # methods: the page's methods (tree_methods); twins: its twin_note(), NULL without twins.
-draw_tree_page <- function(nodes, methods, twins, disease, location) {
+# lower: the panel below each loss panel, "coverage_error" or "bias_dispersion".
+draw_tree_page <- function(nodes, methods, twins, disease, location, lower = "coverage_error") {
   style <- bar_style(names(methods))
   values <- unlist(lapply(nodes, function(node) node$summary$reduction[
     node$summary$method %in% names(methods)]))
@@ -276,10 +322,15 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
   xlim <- c(-1, 1) * limit
   if (min(values, na.rm = TRUE) > -limit / 4) xlim[1] <- -limit / 4   # Room for gains first.
   if (max(values, na.rm = TRUE) < limit / 4) xlim[2] <- limit / 4
-  # CE axis: 0 to the largest CE drawn, of the methods or of the base.
-  ce_values <- unlist(lapply(nodes, function(node) c(node$summary$coverage_error[
-    node$summary$method %in% names(methods)], node$summary$original_coverage_error)))
-  ce_xlim <- c(0, 1.04 * max(ce_values, na.rm = TRUE))
+  # CE axis: 0 to the largest CE drawn, of the methods or of the base. Bias axis: around
+  # 0, to the largest absolute bias or dispersion drawn.
+  lower_values <- function(columns) unlist(lapply(nodes, function(node) unlist(lapply(columns,
+    function(column) c(node$summary[[column]][node$summary$method %in% names(methods)],
+      node$summary[[paste0("original_", column)]])))))
+  ce_xlim <- if (lower == "coverage_error")
+    c(0, 1.04 * max(lower_values("coverage_error"), na.rm = TRUE)) else
+    c(-1, 1) * 1.04 * max(abs(lower_values(c("bias", "dispersion"))), na.rm = TRUE)
+  draw_lower <- if (lower == "coverage_error") draw_ce_panel else draw_bias_panel
   # Panel numbers per node and window, the loss panel in a leaf's first layout row and its
   # CE panel in the second; 0: empty.
   index <- matrix(0L, 2L * n_rows, length(widths))
@@ -309,7 +360,7 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
       if (w == 1) edges[[k]] <- c(left = grconvertX(0, "nfc", "ndc"),
         y = grconvertY(0, "nfc", "ndc"))
       if (w == length(phases)) edges[[k]]["right"] <- grconvertX(1, "nfc", "ndc")
-      draw_ce_panel(s, ce_xlim, show_share, methods, style)
+      draw_lower(s, ce_xlim, show_share, methods, style)
     }
   }
   # The key above the root: a two-line title, the methods and the notes, left-aligned, at
@@ -362,19 +413,25 @@ draw_tree_page <- function(nodes, methods, twins, disease, location) {
     paste0("Numbers right of each loss panel: share of the node's cases in which the method's ",
       "loss is below the base's (nodes with at least ", min_cases, " cases). Up to peak / ",
       "after peak: the weeks around every local peak of the latest counts."),
-    paste("Below each loss panel: coverage error, the mean over the quantile levels of",
-      "|coverage - alpha| over the weeks of the window, averaged over the cases of the node",
-      "weighted by their weeks; dashed: the base forecasts."),
+    if (lower == "coverage_error") paste("Below each loss panel: coverage error, the mean",
+      "over the quantile levels of |coverage - alpha| over the weeks of the window, averaged",
+      "over the cases of the node weighted by their weeks; dashed: the base forecasts.") else
+      paste("Below each loss panel: bias (bar) = mean over the levels of coverage - alpha,",
+        "positive = forecasts too high; dispersion (diamond) = that mean above the median minus",
+        "below it, positive = intervals too wide; weighted as the coverage error; dashed /",
+        "dotted: the base's bias / dispersion."),
     twins)
   mtext(notes, side = 1, line = -4.25 + 1.05 * (seq_along(notes) - 1), cex = .8)
 }
 # Height: the leaves plus the outer margins (oma, 8.55 lines of .132 inches).
-cairo_pdf(file.path(figure_dir, "multiqt_evaluation_tree.pdf"), width = sum(widths) + .5,
-  height = n_rows * (loss_height + ce_height) + 1.15, onefile = TRUE,
-  family = "DejaVu Sans")
-for (p in seq_len(nrow(pages))) draw_tree_page(trees[[p]], tree_methods[[p]],
-  twin_note(page_rows[[p]], tree_methods[[p]]), pages$disease[p], pages$location[p])
-dev.off()
+for (lower in names(lower_panels)) {
+  cairo_pdf(file.path(figure_dir, lower_panels[[lower]]), width = sum(widths) + .5,
+    height = n_rows * (loss_height + ce_height) + 1.15, onefile = TRUE,
+    family = "DejaVu Sans")
+  for (p in seq_len(nrow(pages))) draw_tree_page(trees[[p]], tree_methods[[p]],
+    twin_note(page_rows[[p]], tree_methods[[p]]), pages$disease[p], pages$location[p], lower)
+  dev.off()
+}
 
 # 4. EVERY METHOD UNDER EACH FEEDBACK DESIGN -----------------------------------
 # Pages as the tree's (the pooled locations, then each location of

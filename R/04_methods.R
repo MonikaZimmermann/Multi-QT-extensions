@@ -82,7 +82,8 @@ run_methods <- function(case, run_params, issue_weeks = NULL) {
       scores[[key]] <- data.frame(method, phase, n_weeks = s$n_weeks,
         quantile_loss = s$quantile_loss,
         log_quantile_loss = summarize_scores(weekly_log[[method]], case$alpha, weeks)$quantile_loss,
-        coverage_error = s$coverage_error, duplicate_of = unname(duplicate_of[method]))
+        coverage_error = s$coverage_error, bias = s$bias, dispersion = s$dispersion,
+        duplicate_of = unname(duplicate_of[method]))
       scores_by_level[[key]] <- data.frame(method, phase, n_weeks = s$n_weeks, s$by_level)
     }
   }
@@ -170,8 +171,6 @@ method_labels <- function(p) {
       ", adaptive rate)"),
     studentized_power = paste0("Studentized full base ((1 + median)^", p$power_p,
       ", adaptive rate)"),
-    studentized_tpit = paste0("Studentized full base (t-PIT, nu=", p$tpit_nu, ", last ",
-      p$tpit_window, " reports, adaptive rate)"),
     studentized_spread = paste0("Studentized full base (spread per level, lambda=",
       p$spread_lambda, ", adaptive rate)"),
     studentized_pit = "Studentized full base (PIT, adaptive rate)",

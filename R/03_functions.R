@@ -742,28 +742,6 @@ level_residual_sigma <- function(case, window = 5L, min_rows = 5L, floor = 1e-6,
 # reports known at the cutoff, in counts (identity tracker).
 # power_sigma(): the forecast median to the power p, (1 + b_t^.5)^p, one scale per week.
 power_sigma <- function(case, p = .5) (1 + case$base[, match(.5, case$alpha)])^p
-# tpit_sigma(): the derivative scale of the t-PIT of Uniejewski (2025) at the forecast
-# median. With F the distribution function of the last `window` reports known at the cutoff,
-# smoothed by a normal kernel (bandwidth bw.nrd0(), at least one count), and G the t
-# distribution with nu degrees of freedom: sigma_t = g(G^-1(F(b_t^.5))) / F'(b_t^.5), F kept
-# in [1e-4, 1 - 1e-4]. NA until min_reports reports are known. It grows when the forecast
-# median leaves the range of the recent reports (normalized_scale() guards it).
-tpit_sigma <- function(case, nu = 25, window = 26L, min_reports = 8L) {
-  released <- unlist(case$feedback_by_week)
-  n_released <- cumsum(lengths(case$feedback_by_week))
-  forecast_median <- case$base[, match(.5, case$alpha)]
-  vapply(seq_along(forecast_median), function(t) {
-    k <- n_released[t]
-    if (k < min_reports) return(NA_real_)
-    x <- case$feedback_observed[released[max(1L, k - window + 1L):k]]
-    x <- x[is.finite(x)]
-    if (length(x) < 2L) return(NA_real_)
-    h <- max(1, bw.nrd0(x))
-    at <- (forecast_median[t] - x) / h
-    Fm <- min(max(mean(pnorm(at)), 1e-4), 1 - 1e-4)
-    dt(qt(Fm, nu), nu) / (mean(dnorm(at)) / h)
-  }, numeric(1))
-}
 # spread_sigma(): per level, the derivative scale of a symmetric Box-Cox transform centred
 # at the forecast median and scaled by half the forecast's interquartile range s_t,
 # sigma_t^alpha = s_t (1 + |b_t^alpha - b_t^.5| / s_t)^(1 - lambda): U-shaped around the
@@ -794,11 +772,10 @@ normalized_scale <- function(sigma, scale, guard = 20, reference = NULL) {
   list(scale = if (is.matrix(sigma)) S else S[, 1],
     warmup_weeks = if (is.na(first)) nrow(S) else first - 1L, reference = reference)
 }
-# The raw scale of one of the scaled methods ("power", "tpit", "spread"; params:
+# The raw scale of one of the scaled methods ("power", "spread"; params:
 # method_parameters()).
 studentized_scale <- function(case, name, params) switch(name,
   power = power_sigma(case, params$power_p),
-  tpit = tpit_sigma(case, params$tpit_nu, params$tpit_window, params$tpit_min_reports),
   spread = spread_sigma(case, params$spread_lambda))
 
 # Peak-relative windows, as a logical vector over the case's weeks, within the given
@@ -882,18 +859,25 @@ score_quantiles <- function(q, truth, alpha, count_scale = 1, score_scale = "nat
 }
 
 # Average scores over the given weeks. Calibration error (CE) is checked per level,
-# |coverage - alpha|, and then averaged over levels; every level has equal weight.
+# |coverage - alpha|, and then averaged over levels; every level has equal weight. Its two
+# signed parts: bias, the mean over levels of coverage - alpha (positive: the forecasts lie
+# too high, the outcome falls below them too often), and dispersion, the mean of
+# coverage - alpha over the levels above the median minus that over the levels below it
+# (positive: the intervals are too wide, negative: too narrow).
 summarize_scores <- function(scores, alpha, weeks) {
   if (!length(weeks)) {
     na <- rep(NA_real_, length(alpha))
     return(list(by_level = data.frame(alpha, coverage = na, coverage_error = na,
-      quantile_loss = na), coverage_error = NA_real_, quantile_loss = NA_real_, n_weeks = 0L))
+      quantile_loss = na), coverage_error = NA_real_, bias = NA_real_,
+      dispersion = NA_real_, quantile_loss = NA_real_, n_weeks = 0L))
   }
   coverage <- colMeans(scores$covered[weeks, , drop = FALSE])
   loss <- colMeans(scores$loss[weeks, , drop = FALSE])
   by_level <- data.frame(alpha, coverage, coverage_error = abs(coverage - alpha),
     quantile_loss = loss)
+  gap <- coverage - alpha
   list(by_level = by_level, coverage_error = mean(by_level$coverage_error),
+    bias = mean(gap), dispersion = mean(gap[alpha > .5]) - mean(gap[alpha < .5]),
     quantile_loss = mean(loss), n_weeks = length(weeks))
 }
 
@@ -1174,15 +1158,14 @@ revision_sigma <- function(case, type = "cutoff", floor = 1e-6, transform = "ide
 #   pit        F_t(y) - alpha, the PIT of the base (base_pit()).
 # Scales from reports use those known at each cutoff (the case's feedback schedule); a scale
 # stays within a factor `guard` of the median of its values so far (it binds only where a
-# scale explodes, e.g. the t-PIT scale). The scales of the base width, the recent errors and
+# scale explodes). The scales of the base width, the recent errors and
 # the revisions keep the bounds sigma_bounds * S0 of their methods. origin: where the idea
 # came from; methods: the methods that use it.
 score_candidates <- data.frame(id = c("identity", "sqrt", "log1p", "boxcox_25", "boxcox_75",
   "power_m100", "power_25", "power_50", "power_75", "power_100", "power_150", "power_200",
   "power_level_75", "level_rms", "median_rms", "base_width", "half_iqr", "spread", "pit",
   "revisions_cutoff", "revisions_target", "window_asinh", "window_asinh_median",
-  "window_boxcox_median", "window_mlog_median", "tpit_25", "tpit_49", "centred_asinh",
-  "centred_mlog"),
+  "window_boxcox_median", "window_mlog_median", "centred_asinh", "centred_mlog"),
   label = c("Identity", "Square root", "log1p", "Box-Cox 0.25 on counts",
     "Box-Cox 0.75 on counts", "(1 + median)^-1", "(1 + median)^0.25", "(1 + median)^0.5",
     "(1 + median)^0.75", "1 + median", "(1 + median)^1.5", "(1 + median)^2",
@@ -1190,15 +1173,15 @@ score_candidates <- data.frame(id = c("identity", "sqrt", "log1p", "boxcox_25", 
     "Base width", "Half the base IQR", "Spread per level",
     "PIT of the base", "Revisions, every target", "Revisions, own target",
     "asinh, window, exact", "asinh, window, at the median", "Box-Cox 0, window, at the median",
-    "Mirror log 0.3, window, at the median", "t-PIT 25, window, at the median",
-    "t-PIT 49, window, at the median", "asinh, centred, exact", "Mirror log 1/3, centred, exact"),
+    "Mirror log 0.3, window, at the median", "asinh, centred, exact",
+    "Mirror log 1/3, centred, exact"),
   origin = c(rep("Trackers in use", 3), rep("Level of the forecast", 10),
     rep("Recent errors", 2), rep("Spread of the forecast", 4),
-    rep("Revisions of the forecast", 2), rep("Uniejewski (2025)", 8)),
+    rep("Revisions of the forecast", 2), rep("Uniejewski (2025)", 6)),
   methods = c("fixed, leaky", "ref_op, sqrt_constant", "fixed_log, leaky_log", "", "", "", "",
     "studentized_power", "", "", "", "", "", "studentized_level_rms", "studentized",
     "studentized_full, studentized_base", "", "studentized_spread", "studentized_pit", "",
-    "", "", "", "", "", "studentized_tpit", "", "", ""))
+    "", "", "", "", "", "", ""))
 
 # Transforms T(z) of Uniejewski (2025), their inverse and derivative: the parametrized asinh
 # (slope c at the origin), the symmetric Box-Cox and the mirror log.
@@ -1282,8 +1265,6 @@ candidate_scores <- function(case, s0, params = method_parameters(), guard = 20,
     window_asinh_median = at_median(asinh_transform(1)),
     window_boxcox_median = at_median(boxcox_transform(0)),
     window_mlog_median = at_median(mlog_transform(.3)),
-    tpit_25 = scaled(tpit_sigma(case, 25, window, min_reports)),
-    tpit_49 = scaled(tpit_sigma(case, 49, window, min_reports)),
     centred_asinh = standardized(asinh_transform(1), m, s_c),
     centred_mlog = standardized(mlog_transform(1 / 3), m, s_c))
 }
@@ -1672,10 +1653,9 @@ method_parameters <- function() list(
   # a broken base forecast or report) then multiplies all of them. c(0, Inf): no limits.
   sigma_bounds = c(.05, 1),
   # Scales of the studentized methods with the most stationary scores (scaled_methods):
-  # power_sigma() exponent, tpit_sigma() degrees of freedom, window and minimum number of
-  # reports, spread_sigma() lambda; each normalized to S0 and guarded (normalized_scale()).
-  power_p = .5, tpit_nu = 25, tpit_window = 26L, tpit_min_reports = 8L, spread_lambda = .4,
-  scale_guard = 20,
+  # power_sigma() exponent, spread_sigma() lambda; each normalized to S0 and guarded
+  # (normalized_scale()).
+  power_p = .5, spread_lambda = .4, scale_guard = 20,
   by_method = list())
 method_parameter <- function(params, method, name) {
   value <- params$by_method[[method]][[name]]
@@ -1692,10 +1672,10 @@ method_parameter <- function(params, method, name) {
 # change earlier weights.
 score_experts <- c("original", "fixed", "leaky", "studentized_level_rms", "sqrt_constant")
 score_methods <- c("score_equal", "score_learned")
-# Studentized MultiQT with the three scales of the most stationary scores (power_sigma(),
-# tpit_sigma(), spread_sigma()): per scale the tracker at the adaptive rate, and the rate
-# grid and the most recent weekly starts, each with equal and with learned weights.
-scaled_methods <- unlist(lapply(c("power", "tpit", "spread"), function(scale)
+# Studentized MultiQT with two scales of the most stationary scores (power_sigma(),
+# spread_sigma()): per scale the tracker at the adaptive rate, and the rate grid and the
+# most recent weekly starts, each with equal and with learned weights.
+scaled_methods <- unlist(lapply(c("power", "spread"), function(scale)
   c(paste0("studentized_", scale), paste0(scale, c("_uniform", "_weighted_common",
     "_restart_equal", "_restart_recent")))))
 # Methods that use the settings of another (method_parameter()): the mixtures of the scaled
@@ -1704,8 +1684,6 @@ scaled_methods <- unlist(lapply(c("power", "tpit", "spread"), function(scale)
 parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "median_constant",
   power_uniform = "uniform", power_weighted_common = "weighted_common",
   power_restart_equal = "restart_recent", power_restart_recent = "restart_recent",
-  tpit_uniform = "uniform", tpit_weighted_common = "weighted_common",
-  tpit_restart_equal = "restart_recent", tpit_restart_recent = "restart_recent",
   spread_uniform = "uniform", spread_weighted_common = "weighted_common",
   spread_restart_equal = "restart_recent", spread_restart_recent = "restart_recent",
   shared_outer = "shared", shared_common_outer = "shared_common",
@@ -1733,8 +1711,6 @@ paused_methods <- c(
   "oracle_target", "sqrt_adaptive",                                      # Single trackers.
   "studentized", "studentized_zero", "studentized_base", "median_constant",
   "median_constant_zero", "studentized_full",                            # Studentized.
-  "studentized_tpit", "tpit_uniform", "tpit_weighted_common", "tpit_restart_equal",
-  "tpit_restart_recent",                          # The t-PIT scale explodes (open issue).
   "power_uniform", "power_restart_equal", "spread_uniform", "spread_restart_equal",
   "shared", "shared_common", "shared_outer", "shared_common_outer",      # Rate grid.
   "restart_persistent", "restart_weighted", "restart_uniform_outer",
@@ -1760,8 +1736,6 @@ method_groups <- list(
     "studentized_level_rms", "studentized_pit"),
   "Power scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_power") |
     startsWith(scaled_methods, "power_")]),
-  "t-PIT scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_tpit") |
-    startsWith(scaled_methods, "tpit_")]),
   "Spread scale" = c("original", scaled_methods[startsWith(scaled_methods, "studentized_spread") |
     startsWith(scaled_methods, "spread_")]),
   "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
@@ -1805,7 +1779,7 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   studentized_full = "Studentized full base (base width)",
   studentized_level_rms = "Studentized full base (level RMS)",
   studentized_pit = "Studentized full base (PIT)")
-scale_titles <- c(power = "Power scale", tpit = "t-PIT scale", spread = "Spread scale")
+scale_titles <- c(power = "Power scale", spread = "Spread scale")
 method_short_labels <- c(method_short_labels, unlist(lapply(names(scale_titles), function(scale)
   setNames(c(paste0("Studentized full base (", sub("^(Power|Spread)", "\\L\\1",
     scale_titles[[scale]], perl = TRUE), ")"),
@@ -1821,7 +1795,7 @@ group_palettes <- c("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Rate-grid experts" = "Oranges",
   "Weekly starts: immediate admission" = "Greens 3", "Score-based experts" = "Purples 3",
   "Studentized median" = "Burg",
-  "Studentized full base" = "BluGrn", "Power scale" = "Peach", "t-PIT scale" = "Teal",
+  "Studentized full base" = "BluGrn", "Power scale" = "Peach",
   "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
   "Two-phase trackers" = "Dark Mint")
 home_group <- local({
@@ -2100,21 +2074,20 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     if (want("leaky_weighted")) mixtures$leaky_weighted <- mix("leaky_weighted",
       weigh("leaky_weighted", leak_bank, per_quantile = FALSE))
   }
-  # Studentized MultiQT on the full base with the three scales of the most stationary scores
+  # Studentized MultiQT on the full base with two scales of the most stationary scores
   # (scaled_methods): each alone at the adaptive rate of its scores, and in two expert banks,
   # the rate grid (expert_multipliers) and weekly starts (restart_multiplier) in multiples of
   # the rolling scale of its scores, each with equal and with learned weights as
   # weighted_common and restart_recent (parameter_source); the equal-weight starts also keep
   # the restart_recent_k most recent.
   scaled <- list()
-  for (scale_name in c("power", "tpit", "spread")) {
+  for (scale_name in c("power", "spread")) {
     names_of <- c(paste0("studentized_", scale_name), paste0(scale_name, c("_uniform",
       "_weighted_common", "_restart_equal", "_restart_recent")))
     needed <- want(names_of) || (scale_name == "power" &&
       want("power_flip", "phase_power", "phase_oracle"))
     if (!needed) next
-    scale_key <- paste(scale_name, params$power_p, params$tpit_nu, params$tpit_window,
-      params$tpit_min_reports, params$spread_lambda, params$scale_guard)
+    scale_key <- paste(scale_name, params$power_p, params$spread_lambda, params$scale_guard)
     studentized <- memo(paste("scale", scale_key), normalized_scale(studentized_scale(case,
       scale_name, params), s0, params$scale_guard, case$frozen_scale_reference[[scale_name]]))
     warmup <- max(s0$warmup_weeks, studentized$warmup_weeks)
@@ -2230,7 +2203,7 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
   loss_scale <- weighting_loss_scale(stateful, s0,
     choose_count_scale(case, settings$scale_method)$scale, settings$scale_floor)
   # The scaled methods (scaled_methods) freeze the reference of normalized_scale() likewise.
-  scale_reference <- lapply(setNames(nm = c("power", "tpit", "spread")), function(name)
+  scale_reference <- lapply(setNames(nm = c("power", "spread")), function(name)
     if (any(grepl(name, intersect(methods, scaled_methods))))
       normalized_scale(studentized_scale(stateful, name, params), s0, params$scale_guard)$reference)
   run_at <- function(t) {
