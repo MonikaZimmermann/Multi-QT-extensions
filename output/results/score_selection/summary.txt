@@ -1,0 +1,663 @@
+Drift ratio (1: no drift beyond chance), the 10 largest locations without Florida and horizons -1 to 3 
+
+== COVID ==
+                             candidate ratio short_horizons less_drift cases
+                 Revisions, own target 1.564          1.564       0.52    40
+                            1 + median 1.606          1.551       0.66    50
+                (1 + b)^0.75 per level 1.608          1.556       0.64    50
+                     (1 + median)^0.75 1.610          1.553       0.60    50
+                                 log1p 1.618          1.559       0.62    50
+                Box-Cox 0.25 on counts 1.620          1.561       0.58    50
+               Revisions, every target 1.620          1.566       0.60    50
+                      (1 + median)^0.5 1.621          1.566       0.62    50
+                  asinh, window, exact 1.623          1.577       0.68    50
+                           Square root 1.623          1.568       0.62    50
+                       PIT of the base 1.626          1.569       0.66    50
+                 asinh, centred, exact 1.632          1.583       0.56    50
+                            Base width 1.636          1.584       0.52    50
+                      Spread per level 1.637          1.590       0.62    50
+                Box-Cox 0.75 on counts 1.639          1.589       0.68    50
+                     (1 + median)^0.25 1.640          1.591       0.70    50
+        Mirror log 1/3, centred, exact 1.640          1.588       0.58    50
+      Box-Cox 0, window, at the median 1.640          1.592       0.52    50
+         Median rebuild, recent errors 1.641          1.577       0.48    50
+                     Half the base IQR 1.642          1.590       0.52    50
+          asinh, window, at the median 1.643          1.596       0.54    50
+            Level RMS of recent errors 1.643          1.593       0.50    50
+       t-PIT 49, window, at the median 1.645          1.595       0.50    50
+                      (1 + median)^1.5 1.647          1.593       0.56    50
+ Mirror log 0.3, window, at the median 1.647          1.598       0.50    50
+       t-PIT 25, window, at the median 1.648          1.599       0.52    50
+                              Identity 1.667          1.624       0.00    50
+                        (1 + median)^2 1.673          1.627       0.46    50
+                       (1 + median)^-1 1.767          1.747       0.24    50
+
+== Flu ==
+                             candidate ratio short_horizons less_drift cases
+                 Revisions, own target 1.297          1.297       0.80    40
+                            Base width 1.309          1.285       0.86    50
+       t-PIT 49, window, at the median 1.311          1.286       0.86    50
+                 asinh, centred, exact 1.317          1.287       0.80    50
+                     Half the base IQR 1.318          1.286       0.78    50
+        Mirror log 1/3, centred, exact 1.319          1.284       0.80    50
+       t-PIT 25, window, at the median 1.322          1.298       0.86    50
+                      Spread per level 1.323          1.290       0.78    50
+                       PIT of the base 1.327          1.294       0.76    50
+               Revisions, every target 1.345          1.315       0.82    50
+                  asinh, window, exact 1.350          1.322       0.76    50
+      Box-Cox 0, window, at the median 1.354          1.328       0.74    50
+          asinh, window, at the median 1.354          1.325       0.76    50
+                     (1 + median)^0.75 1.356          1.326       0.68    50
+                      (1 + median)^0.5 1.366          1.335       0.68    50
+                Box-Cox 0.25 on counts 1.367          1.338       0.60    50
+                            1 + median 1.369          1.332       0.64    50
+ Mirror log 0.3, window, at the median 1.372          1.347       0.70    50
+                           Square root 1.373          1.344       0.70    50
+                (1 + b)^0.75 per level 1.374          1.342       0.62    50
+            Level RMS of recent errors 1.379          1.349       0.64    50
+                     (1 + median)^0.25 1.382          1.358       0.68    50
+                                 log1p 1.389          1.350       0.56    50
+                Box-Cox 0.75 on counts 1.392          1.372       0.60    50
+                              Identity 1.415          1.398       0.00    50
+                      (1 + median)^1.5 1.419          1.388       0.52    50
+                        (1 + median)^2 1.451          1.429       0.56    50
+         Median rebuild, recent errors 1.469          1.422       0.34    50
+                       (1 + median)^-1 1.494          1.499       0.28    50
+
+Peak-aligned drift, mean |coverage - alpha| over weeks -7 to 8 and the levels:
+ disease            candidate drift.hindsight constant drift.running quantile
+   covid           base_width                    0.148                  0.197
+     flu           base_width                    0.121                  0.142
+   covid            boxcox_25                    0.148                  0.194
+     flu            boxcox_25                    0.124                  0.134
+   covid            boxcox_75                    0.145                  0.192
+     flu            boxcox_75                    0.134                  0.134
+   covid        centred_asinh                    0.152                  0.200
+     flu        centred_asinh                    0.118                  0.144
+   covid         centred_mlog                    0.151                  0.198
+     flu         centred_mlog                    0.118                  0.145
+   covid             half_iqr                    0.151                  0.197
+     flu             half_iqr                    0.116                  0.147
+   covid             identity                    0.145                  0.190
+     flu             identity                    0.139                  0.138
+   covid            level_rms                    0.146                  0.201
+     flu            level_rms                    0.140                  0.152
+   covid                log1p                    0.151                  0.195
+     flu                log1p                    0.125                  0.147
+   covid           median_rms                    0.168                  0.221
+     flu           median_rms                    0.174                  0.202
+   covid                  pit                    0.153                  0.205
+     flu                  pit                    0.124                  0.145
+   covid            power_100                    0.150                  0.195
+     flu            power_100                    0.126                  0.144
+   covid            power_150                    0.156                  0.193
+     flu            power_150                    0.131                  0.149
+   covid            power_200                    0.159                  0.189
+     flu            power_200                    0.137                  0.150
+   covid             power_25                    0.145                  0.192
+     flu             power_25                    0.134                  0.133
+   covid             power_50                    0.147                  0.193
+     flu             power_50                    0.128                  0.130
+   covid             power_75                    0.148                  0.195
+     flu             power_75                    0.124                  0.135
+   covid       power_level_75                    0.148                  0.194
+     flu       power_level_75                    0.124                  0.137
+   covid           power_m100                    0.144                  0.181
+     flu           power_m100                    0.150                  0.141
+   covid     revisions_cutoff                    0.149                  0.185
+     flu     revisions_cutoff                    0.128                  0.145
+   covid     revisions_target                    0.138                  0.173
+     flu     revisions_target                    0.126                  0.140
+   covid               spread                    0.152                  0.199
+     flu               spread                    0.118                  0.143
+   covid                 sqrt                    0.147                  0.193
+     flu                 sqrt                    0.129                  0.131
+   covid              tpit_25                    0.144                  0.191
+     flu              tpit_25                    0.130                  0.145
+   covid              tpit_49                    0.144                  0.191
+     flu              tpit_49                    0.130                  0.145
+   covid         window_asinh                    0.147                  0.192
+     flu         window_asinh                    0.140                  0.153
+   covid  window_asinh_median                    0.150                  0.193
+     flu  window_asinh_median                    0.140                  0.152
+   covid window_boxcox_median                    0.150                  0.193
+     flu window_boxcox_median                    0.141                  0.153
+   covid   window_mlog_median                    0.148                  0.192
+     flu   window_mlog_median                    0.141                  0.152
+
+Up to and after the peak: share of cases and levels with a change of sign of the score's alpha-quantile, and the mean gap (in units of the median |score|):
+ disease            candidate flip   gap
+   covid           median_rms 0.76  2.19
+   covid           base_width 0.67  1.15
+   covid            boxcox_25 0.67  1.16
+   covid            boxcox_75 0.67  1.53
+   covid        centred_asinh 0.67  0.97
+   covid         centred_mlog 0.67  1.00
+   covid             half_iqr 0.67  1.08
+   covid             identity 0.67  1.77
+   covid            level_rms 0.67  1.71
+   covid                log1p 0.67  1.04
+   covid                  pit 0.67  0.99
+   covid            power_100 0.67  1.00
+   covid            power_150 0.67  0.85
+   covid            power_200 0.67  0.78
+   covid             power_25 0.67  1.53
+   covid             power_50 0.67  1.31
+   covid             power_75 0.67  1.13
+   covid       power_level_75 0.67  1.28
+   covid           power_m100 0.67  3.39
+   covid     revisions_cutoff 0.67  1.24
+   covid               spread 0.67  1.07
+   covid                 sqrt 0.67  1.32
+   covid              tpit_25 0.67  1.55
+   covid              tpit_49 0.67  1.50
+   covid         window_asinh 0.67  1.62
+   covid  window_asinh_median 0.67  1.67
+   covid window_boxcox_median 0.67  1.73
+   covid   window_mlog_median 0.67  1.80
+   covid     revisions_target 0.62  0.97
+     flu           median_rms 0.45  4.76
+     flu     revisions_target 0.31  2.23
+     flu           base_width 0.30  2.00
+     flu            boxcox_25 0.30  1.17
+     flu            boxcox_75 0.30  2.44
+     flu        centred_asinh 0.30  0.88
+     flu         centred_mlog 0.30  0.98
+     flu             half_iqr 0.30  1.24
+     flu             identity 0.30  3.70
+     flu            level_rms 0.30  9.81
+     flu                log1p 0.30  0.90
+     flu                  pit 0.30  0.82
+     flu            power_100 0.30  1.36
+     flu            power_150 0.30  1.02
+     flu            power_200 0.30  0.88
+     flu             power_25 0.30  2.85
+     flu             power_50 0.30  2.23
+     flu             power_75 0.30  1.73
+     flu       power_level_75 0.30  2.03
+     flu           power_m100 0.30 12.00
+     flu     revisions_cutoff 0.30  3.29
+     flu               spread 0.30  1.25
+     flu                 sqrt 0.30  1.63
+     flu              tpit_25 0.30  2.54
+     flu              tpit_49 0.30  2.55
+     flu         window_asinh 0.30  2.76
+     flu  window_asinh_median 0.30  4.55
+     flu window_boxcox_median 0.30  4.78
+     flu   window_mlog_median 0.30  4.50
+
+all past scores: pooled change versus the base (%):
+ disease  design            candidate loss.after ce.after loss.before ce.before loss.overall ce.overall
+   covid delay 0                log1p        5.4      1.2        10.8      15.9          5.5       27.8
+   covid delay 0         window_asinh        3.1      1.1         3.8       8.9          5.7       30.2
+   covid delay 0            boxcox_25        5.0      1.6        10.5      15.4          5.8       39.6
+   covid delay 0     revisions_target        4.1      0.1         8.3       9.5          5.8       34.8
+   covid delay 0       power_level_75        5.2      1.6        10.4      15.3          5.9       40.6
+   covid delay 0            power_150        6.9      2.2        10.8      13.0          6.2       13.0
+   covid delay 0   window_mlog_median        5.0      6.0         2.7       5.6          6.2       33.4
+   covid delay 0            power_100        6.4      2.4        11.7      14.9          6.4       26.7
+   covid delay 0                 sqrt        4.7      2.0        10.0      14.1          6.4       52.4
+   covid delay 0             power_75        6.0      2.6        11.1      14.9          6.6       38.5
+   covid delay 0 window_boxcox_median        6.4      6.5         2.4       5.1          6.7       29.8
+   covid delay 0            power_200        8.4      1.6         8.9       9.9          6.9        5.9
+   covid delay 0             power_50        5.4      2.8        10.3      13.5          7.0       51.9
+   covid delay 0  window_asinh_median        7.3      6.7         2.4       5.2          7.0       28.4
+   covid delay 0            boxcox_75        3.9      1.3         9.5      12.5          7.3       71.9
+   covid delay 0           base_width        6.8      2.7        11.0      16.2          7.6       41.8
+   covid delay 0                  pit        8.6      4.0        12.2      20.8          7.7       40.2
+   covid delay 0             power_25        4.3      1.9         9.8      12.2          7.8       72.0
+   covid delay 0     revisions_cutoff        6.1     -0.6         7.0       9.6          7.8       46.2
+   covid delay 0               spread        8.5      3.2        11.1      16.9          7.8       34.2
+   covid delay 0        centred_asinh        8.8      3.6        11.0      17.7          7.9       35.5
+   covid delay 0         centred_mlog        8.7      3.1        11.1      17.0          7.9       34.4
+   covid delay 0             half_iqr        8.6      3.0        11.2      16.1          8.1       33.0
+   covid delay 0            level_rms        9.3      3.4        15.3      19.5          8.8       22.6
+   covid delay 0             identity        3.2      0.6         9.6      10.8          9.4       84.2
+   covid delay 0              tpit_25       17.9      7.0        10.9       7.6         13.5       33.7
+   covid delay 0              tpit_49       17.9      7.0        11.1       7.6         13.5       33.6
+   covid delay 0           median_rms       33.1     14.7        53.7      24.6         35.4       36.7
+   covid delay 0           power_m100        1.5     -6.4        14.3       7.3         40.4       97.0
+   covid delay 1     revisions_target        9.4     14.5        -0.8      -2.7          5.1       -9.1
+   covid delay 1         window_asinh        9.0     11.6        -2.2       0.5          5.1      -14.6
+   covid delay 1   window_mlog_median       10.1     17.3        -2.9      -2.2          5.6      -12.6
+   covid delay 1            boxcox_75        9.2     15.4         1.8       0.8          6.3       21.6
+   covid delay 1 window_boxcox_median       12.0     17.6        -2.9      -1.7          6.3      -14.3
+   covid delay 1             identity        7.1     13.2         2.2       0.2          6.4       30.5
+   covid delay 1  window_asinh_median       13.1     18.6        -3.0      -1.9          6.6      -14.3
+   covid delay 1             power_25        9.7     15.8         2.1       0.6          6.8       22.1
+   covid delay 1                 sqrt       11.4     17.1         1.8       1.4          6.9        9.3
+   covid delay 1            boxcox_25       13.2     17.2         1.8       2.3          7.5        0.8
+   covid delay 1             power_50       12.1     17.3         2.2       1.3          7.5        8.9
+   covid delay 1       power_level_75       13.4     17.2         1.8       2.1          7.6        1.2
+   covid delay 1     revisions_cutoff       11.8     14.3        -0.2      -1.2          7.6        2.5
+   covid delay 1                log1p       15.0     16.9         1.9       2.3          8.2       -5.2
+   covid delay 1             power_75       14.1     18.1         2.4       2.0          8.2        1.1
+   covid delay 1            power_100       15.8     17.8         2.6       2.2          9.0       -5.0
+   covid delay 1           base_width       16.9     16.0         2.8       3.9         10.6        1.6
+   covid delay 1            power_150       19.1     17.4         2.0       1.8         10.6      -10.0
+   covid delay 1                  pit       19.3     19.1         4.3       8.2         11.3        3.4
+   covid delay 1        centred_asinh       19.4     17.2         2.8       4.7         11.4       -0.7
+   covid delay 1               spread       19.1     16.4         2.9       4.2         11.4       -1.8
+   covid delay 1         centred_mlog       19.3     16.3         2.9       3.9         11.5       -1.8
+   covid delay 1            level_rms       17.5     21.6         7.8       2.0         11.6      -11.5
+   covid delay 1             half_iqr       19.2     16.3         2.9       3.2         11.7       -2.5
+   covid delay 1            power_200       24.1     17.5         0.5       0.1         13.1      -11.2
+   covid delay 1              tpit_49       27.0     25.4        -1.3      -9.3         16.3      -14.5
+   covid delay 1              tpit_25       27.1     26.1        -1.4      -9.5         16.4      -13.9
+   covid delay 1           power_m100        2.3      3.9         7.1      -1.4         24.1       27.6
+   covid delay 1           median_rms       41.2     28.5        39.3       9.5         36.3       -1.7
+     flu delay 0   window_mlog_median        1.3     -2.3        -0.5      -3.3          0.6      -19.7
+     flu delay 0 window_boxcox_median        2.1     -2.9        -0.7      -3.4          0.7      -18.8
+     flu delay 0  window_asinh_median        2.5     -3.7        -0.8      -3.5          0.8      -18.8
+     flu delay 0              tpit_25        2.9     -1.0        -0.6      -5.2          1.1      -24.5
+     flu delay 0              tpit_49        2.9     -1.0        -0.6      -5.3          1.1      -24.3
+     flu delay 0         window_asinh        2.4     -2.4         0.4      -2.0          1.1      -17.6
+     flu delay 0             power_25        9.2     14.9       -11.1     -19.1          3.4        9.0
+     flu delay 0             power_50       15.1     28.8       -13.0     -19.4          3.8        5.1
+     flu delay 0            boxcox_75        8.9     12.8       -10.9     -18.8          4.0       12.1
+     flu delay 0                 sqrt       13.8     26.1       -12.8     -20.4          4.0        7.1
+     flu delay 0             identity        7.1      8.3        -9.7     -18.5          5.7       12.4
+     flu delay 0           base_width       24.2     21.1       -12.9     -22.9          6.4       -5.5
+     flu delay 0            boxcox_25       26.6     48.4       -15.3     -23.0          7.4        1.5
+     flu delay 0             power_75       29.1     48.3       -15.2     -22.3          7.8       -5.4
+     flu delay 0       power_level_75       30.6     55.5       -15.6     -23.0          8.8        0.3
+     flu delay 0     revisions_target       32.5     22.3       -11.9     -20.2          8.9       -1.3
+     flu delay 0     revisions_cutoff       30.2     19.5        -9.8     -17.5          9.8        6.9
+     flu delay 0             half_iqr       37.3     36.6       -15.3     -26.3          9.9      -24.4
+     flu delay 0            level_rms       20.8     43.9        -3.3      -5.5         10.1      -24.4
+     flu delay 0               spread       40.5     41.2       -15.7     -26.8         11.3      -21.3
+     flu delay 0                  pit       48.7     55.4       -16.7     -24.2         15.1      -16.2
+     flu delay 0            power_100       56.6     69.7       -17.4     -23.8         17.4      -17.2
+     flu delay 0         centred_mlog       43.9     39.3       -10.9     -27.3         17.6      -22.1
+     flu delay 0                log1p       63.4     79.8       -18.1     -24.1         20.5       -9.7
+     flu delay 0        centred_asinh       57.8     41.1         3.2     -27.7         39.8      -21.3
+     flu delay 0            power_150      125.0     68.9       -19.1     -23.6         43.3      -32.7
+     flu delay 0            power_200      142.3     57.7       -19.4     -19.8         49.6      -39.4
+     flu delay 0           median_rms       82.3     70.4        28.6      27.2         52.6      -23.0
+     flu delay 0           power_m100        6.9      6.2        -3.9     -17.1         83.7       18.7
+     flu delay 1  window_asinh_median        1.8     -3.7        -0.8      -5.9          0.6      -26.8
+     flu delay 1 window_boxcox_median        1.5     -3.6        -0.7      -5.7          0.6      -28.0
+     flu delay 1   window_mlog_median        0.9     -2.2        -0.5      -5.8          0.6      -30.2
+     flu delay 1         window_asinh        1.6     -3.0         0.2      -4.5          0.8      -26.4
+     flu delay 1              tpit_25        2.3      1.4        -0.7      -8.1          1.1      -29.0
+     flu delay 1              tpit_49        2.3      0.9        -0.8      -8.0          1.1      -29.1
+     flu delay 1             power_50       16.6     39.1       -14.7     -26.2          5.0       32.6
+     flu delay 1             power_25       10.3     20.6       -12.5     -24.4          5.2       40.1
+     flu delay 1                 sqrt       15.4     34.0       -14.4     -26.9          5.5       36.9
+     flu delay 1            boxcox_75       10.0     18.9       -12.3     -24.3          6.1       41.9
+     flu delay 1           base_width       26.5     27.4       -14.5     -27.3          7.5       12.2
+     flu delay 1             identity        8.2     14.0       -10.9     -24.5          8.7       43.2
+     flu delay 1            level_rms       16.6     56.5        -3.0      -6.3          8.9      -26.4
+     flu delay 1            boxcox_25       30.3     69.4       -17.1     -27.7          9.5       29.8
+     flu delay 1             power_75       32.8     68.7       -17.3     -28.0          9.5       19.6
+     flu delay 1             half_iqr       41.5     46.8       -17.0     -30.9         11.3      -17.6
+     flu delay 1       power_level_75       35.3     79.7       -17.5     -27.9         11.3       27.6
+     flu delay 1     revisions_target       38.5     32.6       -14.5     -25.9         11.5       28.7
+     flu delay 1     revisions_cutoff       33.5     28.6       -11.5     -22.8         11.9       39.6
+     flu delay 1               spread       45.1     51.3       -17.5     -31.1         12.8      -13.7
+     flu delay 1                  pit       55.9     71.4       -18.4     -29.2         18.1       -7.4
+     flu delay 1         centred_mlog       48.3     50.1       -12.6     -31.5         19.1      -15.4
+     flu delay 1            power_100       65.4     96.1       -19.6     -26.7         20.8        0.9
+     flu delay 1                log1p       74.3    106.4       -20.4     -27.1         25.0       10.7
+     flu delay 1        centred_asinh       62.6     51.9         1.5     -32.6         41.5      -13.9
+     flu delay 1            power_150      144.3     95.9       -21.2     -25.1         50.6      -26.7
+     flu delay 1            power_200      163.4     76.6       -21.0     -21.9         57.8      -39.2
+     flu delay 1           median_rms       94.8     95.0        32.1      27.9         64.4      -13.6
+     flu delay 1           power_m100        9.4      9.7        -3.1     -23.9        116.7       45.6
+
+last 26 scores: pooled change versus the base (%):
+ disease  design            candidate loss.after ce.after loss.before ce.before loss.overall ce.overall
+   covid delay 0                 sqrt       13.7      2.3         9.6      13.3         13.3       82.8
+   covid delay 0            boxcox_75       10.8     -0.1         8.8      12.2         14.0      101.1
+   covid delay 0            boxcox_25       17.5      4.5        10.9      15.2         14.1       67.9
+   covid delay 0             power_50       14.9      3.7        10.0      13.1         14.6       83.7
+   covid delay 0       power_level_75       18.3      4.7        10.7      14.8         14.8       70.8
+   covid delay 0             power_75       19.3      5.8        11.5      14.5         15.4       67.2
+   covid delay 0             power_25       11.4      0.4         9.0      11.9         15.6      101.9
+   covid delay 0                log1p       22.2      6.5        12.4      15.9         16.0       52.0
+   covid delay 0     revisions_target       18.7      3.2        11.1       7.5         16.5       44.8
+   covid delay 0            power_100       24.4      7.7        13.1      15.2         17.4       48.2
+   covid delay 0   window_mlog_median        8.1     -0.5         3.9       6.3         17.6       85.7
+   covid delay 0            level_rms       19.5      3.0        24.5      23.8         17.9       44.3
+   covid delay 0  window_asinh_median       10.8      1.8         3.3       5.0         18.2       74.7
+   covid delay 0             identity        9.0     -2.3         8.6      10.3         18.5      109.5
+   covid delay 0 window_boxcox_median        9.8      1.8         3.3       5.4         18.5       78.4
+   covid delay 0         window_asinh        7.3     -4.7         5.6       9.3         19.2       73.8
+   covid delay 0     revisions_cutoff       19.7      3.3         9.4       7.9         19.3       64.9
+   covid delay 0                  pit       28.2     10.6        12.7      22.8         20.8       70.2
+   covid delay 0        centred_asinh       31.5     11.8        11.9      19.6         22.8       65.9
+   covid delay 0              tpit_49       29.3      2.6        18.0       6.9         22.8       58.7
+   covid delay 0              tpit_25       29.3      2.5        17.3       6.5         22.9       59.0
+   covid delay 0               spread       31.9     12.1        11.7      18.3         23.0       63.6
+   covid delay 0         centred_mlog       32.5     11.8        11.7      18.7         23.4       63.7
+   covid delay 0           base_width       31.1     11.7        10.9      16.5         23.8       70.4
+   covid delay 0             half_iqr       33.3     12.2        11.4      17.1         23.9       60.6
+   covid delay 0            power_150       37.5     14.2        17.9      12.9         24.8       21.3
+   covid delay 0            power_200       56.0     21.3        22.6       9.2         35.2        6.9
+   covid delay 0           median_rms       53.4     14.9        87.8      26.2         58.9       81.2
+   covid delay 0           power_m100        6.3     -9.4        12.3       6.9         79.0      110.9
+   covid delay 1            boxcox_75       15.0     11.0         2.6      -0.4         13.4       61.2
+   covid delay 1                 sqrt       19.9     15.2         2.8       0.0         14.2       45.6
+   covid delay 1             power_25       15.8     11.8         2.9      -0.5         14.8       62.8
+   covid delay 1             power_50       21.7     16.4         3.3       0.2         15.6       45.7
+   covid delay 1             identity       11.7      7.1         2.9      -0.2         16.1       68.9
+   covid delay 1            boxcox_25       26.1     17.6         3.5      -0.3         16.4       29.8
+   covid delay 1   window_mlog_median       11.7      8.5        -1.3      -0.6         16.4       41.2
+   covid delay 1       power_level_75       27.1     17.9         3.3      -0.6         17.2       32.4
+   covid delay 1         window_asinh       11.7      4.2         0.5       2.5         17.6       35.7
+   covid delay 1  window_asinh_median       14.9     11.5        -1.4      -1.0         17.7       38.8
+   covid delay 1 window_boxcox_median       13.7     10.9        -1.4      -0.5         17.7       40.3
+   covid delay 1     revisions_target       26.8     18.1         2.5      -6.4         17.8       10.2
+   covid delay 1             power_75       28.7     19.4         4.2      -0.3         18.2       30.3
+   covid delay 1                log1p       33.4     19.6         4.4      -0.6         19.9       16.2
+   covid delay 1     revisions_cutoff       26.1     15.1         3.1      -3.3         20.1       32.0
+   covid delay 1            level_rms       28.2     16.3        16.6       5.7         21.5       12.8
+   covid delay 1            power_100       36.4     21.5         5.0      -1.2         21.8       14.6
+   covid delay 1                  pit       42.5     23.5         5.2       6.9         26.7       35.0
+   covid delay 1              tpit_49       36.6     16.2        15.6      -8.0         26.7        6.2
+   covid delay 1              tpit_25       37.0     16.6        15.2      -8.6         26.9        5.8
+   covid delay 1        centred_asinh       46.9     25.2         4.3       2.5         29.5       31.1
+   covid delay 1               spread       47.1     25.5         4.2       1.2         29.5       29.5
+   covid delay 1           base_width       45.9     25.6         3.6       0.4         30.0       35.8
+   covid delay 1         centred_mlog       48.0     25.5         4.2       1.7         30.2       30.0
+   covid delay 1             half_iqr       48.9     25.0         3.9       0.0         30.9       27.2
+   covid delay 1            power_150       56.0     28.0         7.9      -6.0         32.6       -6.2
+   covid delay 1            power_200       84.5     33.5        13.1     -12.0         48.9      -17.1
+   covid delay 1           median_rms       61.0     25.1        69.4      10.4         58.9       47.4
+   covid delay 1           power_m100        5.8     -3.8         7.4       0.0         70.4       60.4
+     flu delay 0             power_25        3.6      3.1       -10.6     -17.8         -0.7      -23.3
+     flu delay 0            boxcox_75        3.3      2.4       -10.4     -18.0         -0.2      -22.1
+     flu delay 0             power_50        8.0     17.2       -11.8     -17.4         -0.2      -20.5
+     flu delay 0                 sqrt        7.1     14.7       -11.7     -18.1          0.0      -22.6
+     flu delay 0             identity        2.0     -1.6        -9.4     -18.3          0.9      -23.2
+     flu delay 0   window_mlog_median        0.9     -1.7        -0.3      -3.3          0.9      -23.8
+     flu delay 0  window_asinh_median        1.8     -3.9        -0.5      -3.3          1.1      -22.7
+     flu delay 0 window_boxcox_median        1.5     -3.4        -0.5      -3.1          1.1      -22.7
+     flu delay 0              tpit_25        2.0     -2.4        -0.2      -4.7          1.2      -31.0
+     flu delay 0              tpit_49        2.0     -2.3        -0.2      -4.7          1.2      -30.9
+     flu delay 0         window_asinh        1.6     -2.0         0.7      -1.6          1.3      -23.0
+     flu delay 0           base_width       15.3     11.5       -11.8     -19.6          2.9      -23.9
+     flu delay 0            boxcox_25       17.7     37.7       -13.8     -19.3          3.1      -21.5
+     flu delay 0             power_75       19.5     38.0       -13.8     -18.1          3.3      -23.9
+     flu delay 0            level_rms        9.7     30.4        -2.8      -4.2          4.3      -31.1
+     flu delay 0     revisions_cutoff       17.1     11.1        -7.7     -14.7          4.4      -28.2
+     flu delay 0     revisions_target       18.3     15.8        -8.1     -15.1          4.4      -30.3
+     flu delay 0       power_level_75       21.6     44.1       -14.2     -19.6          4.5      -21.1
+     flu delay 0             half_iqr       29.4     29.4       -14.4     -22.9          6.7      -30.8
+     flu delay 0               spread       31.5     34.5       -14.6     -23.5          7.5      -29.3
+     flu delay 0                  pit       35.7     44.4       -15.4     -20.6          9.3      -24.9
+     flu delay 0            power_100       44.2     61.3       -16.0     -18.7         12.0      -28.1
+     flu delay 0         centred_mlog       32.6     32.9       -10.0     -24.5         12.4      -29.4
+     flu delay 0                log1p       50.9     67.6       -16.8     -20.4         14.8      -24.8
+     flu delay 0        centred_asinh       37.6     33.8         3.9     -25.1         29.2      -28.5
+     flu delay 0            power_150       98.8     60.8       -18.2     -21.0         32.6      -39.3
+     flu delay 0            power_200      111.3     56.9       -18.1     -17.2         37.8      -42.4
+     flu delay 0           median_rms       75.3     58.1        30.5      32.8         52.8      -31.5
+     flu delay 0           power_m100        1.2     -1.2        -2.7     -18.3         57.5      -27.8
+     flu delay 1             power_25        5.1      6.5       -12.9     -25.7         -0.3      -11.3
+     flu delay 1             power_50       10.6     21.8       -14.9     -26.1          0.0      -11.4
+     flu delay 1            boxcox_75        4.8      5.0       -12.6     -25.3          0.4      -10.2
+     flu delay 1                 sqrt        9.5     19.2       -14.6     -26.3          0.4       -9.7
+     flu delay 1         window_asinh        1.1     -3.6         0.3      -4.5          0.9      -40.9
+     flu delay 1  window_asinh_median        1.4     -4.8        -0.7      -5.9          0.9      -41.3
+     flu delay 1   window_mlog_median        0.7     -3.0        -0.5      -5.8          0.9      -43.9
+     flu delay 1              tpit_25        1.6     -0.2        -0.6      -8.0          1.0      -43.0
+     flu delay 1              tpit_49        1.6     -0.4        -0.7      -7.9          1.0      -42.9
+     flu delay 1 window_boxcox_median        1.2     -4.3        -0.6      -5.7          1.0      -42.2
+     flu delay 1             identity        3.2      1.1       -11.4     -26.1          1.9      -13.6
+     flu delay 1           base_width       19.3     16.5       -14.7     -26.2          3.4      -19.7
+     flu delay 1             power_75       25.0     54.1       -17.2     -25.9          4.3      -15.1
+     flu delay 1            boxcox_25       22.9     53.6       -17.1     -26.3          4.4       -9.0
+     flu delay 1            level_rms        8.4     41.7        -2.7      -5.6          4.4      -41.3
+     flu delay 1     revisions_target       24.6     20.6       -12.3     -23.2          5.3      -21.6
+     flu delay 1     revisions_cutoff       21.5     17.6       -10.4     -21.6          5.5      -13.5
+     flu delay 1       power_level_75       28.1     65.1       -17.5     -26.7          6.2       -8.8
+     flu delay 1             half_iqr       36.8     40.0       -17.4     -28.8          8.4      -28.3
+     flu delay 1               spread       39.6     45.9       -17.8     -29.1          9.4      -25.3
+     flu delay 1                  pit       46.0     62.9       -18.7     -27.7         12.2      -21.5
+     flu delay 1         centred_mlog       40.6     43.8       -13.0     -29.1         14.3      -25.8
+     flu delay 1            power_100       57.2     88.2       -19.8     -26.4         15.7      -21.4
+     flu delay 1                log1p       65.8     94.1       -20.6     -27.4         19.5      -14.9
+     flu delay 1        centred_asinh       45.9     46.1         0.8     -30.6         31.3      -24.7
+     flu delay 1            power_150      125.1     92.9       -21.9     -25.9         41.6      -36.9
+     flu delay 1            power_200      141.8     82.1       -20.9     -20.1         49.0      -43.9
+     flu delay 1           median_rms       88.8     84.8        33.7      32.8         65.1      -26.6
+     flu delay 1           power_m100        2.6     -1.6        -2.2     -25.8         80.0      -23.4
+
+MultiQT: pooled change versus the base (%):
+ disease  design            candidate loss.after ce.after loss.before ce.before loss.overall ce.overall
+   covid delay 0               spread        5.7     -4.0         4.1       6.9          4.1        9.4
+   covid delay 0            boxcox_25        5.7     -9.3         5.8      10.4          4.2       25.3
+   covid delay 0                 sqrt        4.7    -10.2         6.3      12.3          4.5       40.8
+   covid delay 0                  pit        6.7     -4.3         5.2       9.0          4.7       10.5
+   covid delay 0             power_75        6.8     -8.3         6.1      10.4          4.9       26.4
+   covid delay 0        centred_asinh        7.3     -3.0         4.3       8.1          5.0       10.3
+   covid delay 0                log1p        8.1     -7.7         5.2       9.3          5.0       13.0
+   covid delay 0             power_50        5.7    -10.0         6.5      12.2          5.2       40.8
+   covid delay 0       power_level_75        8.7     -4.1         2.2       5.8          5.2       13.6
+   covid delay 0            power_100        9.1     -5.6         5.6       7.9          5.6       13.5
+   covid delay 0         centred_mlog        8.3     -3.1         4.5       8.5          5.7       12.9
+   covid delay 0            boxcox_75        4.6    -12.5         6.8      14.5          6.0       57.4
+   covid delay 0             power_25        5.2    -12.2         6.8      13.9          6.7       54.7
+   covid delay 0           base_width        9.9     -4.4         4.2       9.1          7.1       19.9
+   covid delay 0             half_iqr       10.8     -4.0         4.5       8.8          7.2       15.4
+   covid delay 0   window_mlog_median        5.0     -7.6         3.8       7.1          8.5       41.8
+   covid delay 0             identity        5.3    -12.2         6.8      14.6          9.5       61.2
+   covid delay 0 window_boxcox_median        7.1     -4.5         4.2       5.5          9.7       36.6
+   covid delay 0  window_asinh_median        8.0     -3.6         4.3       5.0          9.8       34.9
+   covid delay 0            level_rms        6.4    -12.9        26.9      21.7         10.1       32.6
+   covid delay 0         window_asinh        6.7     -5.9         5.7       7.7         10.7       41.4
+   covid delay 0            power_150       19.4     -1.2         6.2       3.7         11.3       -2.0
+   covid delay 0     revisions_cutoff       11.9    -11.3        10.5       9.5         11.9       41.9
+   covid delay 0     revisions_target       12.3    -12.1        15.2       9.5         12.9       35.7
+   covid delay 0              tpit_49       27.1    -11.9        29.4      10.2         24.1       46.9
+   covid delay 0            power_200       41.5      2.3        11.7      -1.3         24.7       -6.9
+   covid delay 0              tpit_25       29.2    -12.9        30.0      10.6         26.1       49.4
+   covid delay 0           median_rms       27.9      5.3        68.5      34.0         34.8       45.0
+   covid delay 0           power_m100        7.9    -17.2        36.8       7.3        148.7       68.4
+   covid delay 1                 sqrt        9.5     -0.1         0.4       1.2          5.0        2.0
+   covid delay 1            boxcox_75        8.5     -3.2         0.8       2.4          5.5       14.2
+   covid delay 1             power_50       10.4      0.4         0.4       1.3          5.5        1.2
+   covid delay 1            boxcox_25       11.6      1.6         0.0      -2.0          5.6       -9.3
+   covid delay 1             power_25        9.1     -2.3         0.7       2.5          6.0       12.6
+   covid delay 1             power_75       12.8      3.5        -0.3      -1.8          6.1       -8.6
+   covid delay 1               spread       11.9      4.5        -0.1      -1.0          6.4      -16.9
+   covid delay 1                  pit       13.7      4.8         0.8      -0.3          7.5      -17.7
+   covid delay 1       power_level_75       15.8      7.2        -3.6      -6.5          7.5      -22.7
+   covid delay 1        centred_asinh       14.1      5.8        -0.5      -1.1          7.6      -17.7
+   covid delay 1                log1p       15.7      4.1        -0.6      -3.7          7.6      -18.3
+   covid delay 1            power_100       16.4      6.3        -0.7      -4.7          7.9      -16.8
+   covid delay 1   window_mlog_median        7.6     -0.7         0.6       0.3          7.9       10.5
+   covid delay 1         centred_mlog       15.6      6.3        -0.6      -1.4          8.4      -16.7
+   covid delay 1             identity        8.3     -4.5         1.2       2.3          8.4       17.7
+   covid delay 1 window_boxcox_median        9.8      2.0         1.4       0.4          9.1        7.6
+   covid delay 1  window_asinh_median       10.9      2.6         1.6      -0.3          9.3        7.1
+   covid delay 1           base_width       17.4      6.3        -0.9      -1.0          9.7      -14.0
+   covid delay 1         window_asinh       10.6      1.2         2.9       1.0         10.4       10.8
+   covid delay 1             half_iqr       19.0      6.6        -0.7      -1.9         10.5      -16.2
+   covid delay 1            level_rms        9.3     -5.6        24.5      10.1         11.0        7.8
+   covid delay 1     revisions_cutoff       16.3     -2.5         5.6      -3.0         12.1        2.9
+   covid delay 1     revisions_target       18.0     -1.4         9.0      -3.6         13.0       -2.5
+   covid delay 1            power_150       31.1     10.2         0.1      -9.7         16.2      -26.6
+   covid delay 1              tpit_49       38.9     -2.0        34.3      -4.2         31.9        9.0
+   covid delay 1           median_rms       29.6      9.0        57.6      21.5         33.2       15.1
+   covid delay 1            power_200       59.8     12.4         7.0     -17.7         33.7      -27.3
+   covid delay 1              tpit_25       41.2     -2.3        34.8      -3.7         33.9        9.7
+   covid delay 1           power_m100        9.1    -11.9        30.9      -7.1        135.8       40.5
+     flu delay 0                 sqrt        7.6     10.0        -7.1     -11.7          1.2      -38.3
+     flu delay 0              tpit_25        3.7     -5.1        -2.7      -4.5          1.3      -29.5
+     flu delay 0              tpit_49        3.7     -5.1        -2.6      -4.6          1.4      -30.1
+     flu delay 0            boxcox_75        3.2      0.0        -3.7      -6.8          1.6      -33.5
+     flu delay 0             power_25        3.5      1.0        -3.7      -7.2          1.8      -32.9
+     flu delay 0             power_50        8.7     10.7        -7.0     -12.2          1.8      -40.0
+     flu delay 0         window_asinh        5.3     -5.1        -2.1      -3.6          2.8      -24.5
+     flu delay 0   window_mlog_median        2.1     -7.0        -0.8      -1.2          2.9      -20.2
+     flu delay 0            boxcox_25       15.4     20.4        -9.6     -15.0          3.1      -39.7
+     flu delay 0  window_asinh_median        4.4     -6.6        -1.1      -1.9          3.4      -21.7
+     flu delay 0        centred_asinh       18.7     10.1       -10.0     -16.3          3.5      -36.2
+     flu delay 0           base_width       15.1      9.8        -7.2     -13.2          3.6      -40.8
+     flu delay 0 window_boxcox_median        3.6     -6.1        -0.8      -2.0          3.6      -21.0
+     flu delay 0               spread       19.7     13.3       -10.1     -15.9          3.7      -36.7
+     flu delay 0         centred_mlog       20.9     13.9        -9.9     -16.8          4.3      -38.7
+     flu delay 0             power_75       19.3     23.3        -9.7     -15.1          4.5      -41.8
+     flu delay 0             identity        1.9     -3.0        -1.1      -4.9          5.5      -18.5
+     flu delay 0       power_level_75       22.4     25.5       -12.5     -18.8          5.6      -34.4
+     flu delay 0     revisions_target       21.7      5.1        -6.9     -10.8          5.8      -38.3
+     flu delay 0                  pit       22.3      8.5        -9.9     -15.2          5.9      -34.4
+     flu delay 0             half_iqr       25.5     17.1       -10.2     -19.1          6.1      -41.5
+     flu delay 0     revisions_cutoff       19.8      5.4        -4.7      -9.1          6.7      -36.4
+     flu delay 0                log1p       32.0     26.5       -12.1     -18.7          8.5      -37.3
+     flu delay 0            level_rms       18.9     22.8        -2.8      -4.8          8.7      -28.4
+     flu delay 0            power_100       38.7     30.6       -11.9     -17.8         11.0      -41.1
+     flu delay 0            power_150      104.9     32.7       -13.9     -22.6         36.3      -40.7
+     flu delay 0           median_rms       49.1     23.3        32.6      33.3         39.2      -20.9
+     flu delay 0            power_200      147.9     33.5       -15.6     -24.9         52.8      -38.3
+     flu delay 0           power_m100       10.3     15.9        11.7     -20.1        266.3       29.5
+     flu delay 1                 sqrt        7.2     17.2        -7.2     -14.6          1.3      -43.5
+     flu delay 1              tpit_25        2.6      0.3        -2.1      -5.6          1.3      -38.9
+     flu delay 1              tpit_49        2.6      0.0        -2.1      -5.7          1.3      -38.9
+     flu delay 1             power_50        7.7     19.6        -6.9     -14.7          1.6      -45.2
+     flu delay 1            boxcox_75        2.3      3.6        -3.2      -7.9          1.7      -43.0
+     flu delay 1             power_25        2.3      4.4        -3.1      -9.0          1.9      -41.7
+     flu delay 1         window_asinh        3.5     -4.1        -1.8      -3.1          2.3      -32.3
+     flu delay 1  window_asinh_median        1.9     -4.3        -0.6      -2.0          2.8      -33.2
+     flu delay 1   window_mlog_median        0.9     -5.2        -0.3      -2.6          3.0      -29.9
+     flu delay 1 window_boxcox_median        1.5     -4.3        -0.4      -1.7          3.2      -30.9
+     flu delay 1           base_width       14.4     15.7        -7.3     -16.6          3.4      -46.2
+     flu delay 1            boxcox_25       16.7     30.9       -10.8     -19.1          3.4      -41.8
+     flu delay 1        centred_asinh       19.8     14.7       -11.3     -20.4          3.5      -41.1
+     flu delay 1               spread       21.7     17.9       -11.4     -19.4          4.0      -40.6
+     flu delay 1         centred_mlog       22.4     18.8       -11.2     -21.4          4.5      -43.1
+     flu delay 1             power_75       20.5     38.1       -10.8     -19.0          4.9      -44.6
+     flu delay 1     revisions_cutoff       16.5     15.9        -5.4     -12.8          5.5      -41.9
+     flu delay 1             identity        1.3     -3.3        -0.3      -5.4          5.9      -19.3
+     flu delay 1       power_level_75       23.9     40.2       -14.1     -23.5          6.1      -36.4
+     flu delay 1             half_iqr       26.8     23.0       -11.2     -23.2          6.4      -45.3
+     flu delay 1     revisions_target       22.1     15.8        -6.9     -14.4          6.4      -40.5
+     flu delay 1                  pit       25.5     12.2       -11.3     -19.2          7.1      -40.6
+     flu delay 1                log1p       35.5     38.6       -13.9     -22.9          9.4      -42.0
+     flu delay 1            level_rms       19.6     48.2        -2.6      -5.8         10.3      -40.0
+     flu delay 1            power_100       41.9     50.6       -13.4     -22.2         11.8      -44.4
+     flu delay 1            power_150      114.9     56.4       -15.4     -26.8         39.7      -47.3
+     flu delay 1           median_rms       62.7     49.0        33.8      31.0         48.5      -25.9
+     flu delay 1            power_200      162.9     59.7       -16.9     -26.9         58.6      -46.6
+     flu delay 1           power_m100       11.6     19.1        14.4     -15.8        250.0       28.1
+
+same phase (hindsight): pooled change versus the base (%):
+ disease  design            candidate loss.after ce.after loss.before ce.before loss.overall ce.overall
+   covid delay 0            power_150       -7.6    -24.9         0.1      -8.9         -4.7       19.0
+   covid delay 0            power_200       -8.1    -24.7         2.8     -11.8         -4.6       11.7
+   covid delay 0                log1p       -6.4    -25.5        -2.1      -4.9         -4.1       41.7
+   covid delay 0            power_100       -4.8    -24.4        -0.9      -5.0         -2.6       39.6
+   covid delay 0            boxcox_25       -5.1    -25.5        -1.4      -3.1         -2.1       60.5
+   covid delay 0       power_level_75       -5.0    -25.6        -1.6      -3.9         -1.8       63.5
+   covid delay 0        centred_asinh       -3.8    -21.6        -0.6      -1.9         -1.3       59.6
+   covid delay 0               spread       -4.0    -22.0        -0.5      -2.9         -1.3       56.8
+   covid delay 0             half_iqr       -4.4    -22.5        -0.2      -3.5         -1.2       54.5
+   covid delay 0         centred_mlog       -3.9    -21.8        -0.4      -2.6         -1.1       57.1
+   covid delay 0                  pit       -3.7    -20.3         1.6       1.2         -1.0       64.5
+   covid delay 0             power_75       -3.6    -24.1        -0.7      -3.4         -0.7       59.5
+   covid delay 0           base_width       -4.9    -22.1        -0.3      -2.4         -0.2       66.1
+   covid delay 0                 sqrt       -3.6    -25.9        -1.0      -3.7          0.8       79.7
+   covid delay 0             power_50       -2.6    -25.5        -0.6      -3.7          2.1       79.6
+   covid delay 0            boxcox_75       -2.4    -26.2        -0.5      -3.4          4.7       97.7
+   covid delay 0         window_asinh       -6.1    -21.7        -1.0      -1.8          5.5       59.8
+   covid delay 0             power_25       -1.9    -26.2        -0.3      -3.5          6.6       98.9
+   covid delay 0  window_asinh_median        2.3    -17.8        -2.1      -3.7          7.3       55.8
+   covid delay 0     revisions_target        7.7    -22.8        -2.7      -6.7          7.5       56.1
+   covid delay 0 window_boxcox_median        2.3    -16.3        -1.7      -2.4          7.9       57.7
+   covid delay 0            level_rms        4.7    -20.3        19.5      -1.7          8.3       33.8
+   covid delay 0     revisions_cutoff        7.9    -26.4        -3.6      -6.7          9.0       72.0
+   covid delay 0   window_mlog_median        2.7    -17.3        -0.5      -1.9          9.0       63.6
+   covid delay 0             identity       -1.1    -25.9         0.2      -3.3         13.8      106.9
+   covid delay 0              tpit_49       40.2    -19.4        14.7      -8.3         29.6       65.0
+   covid delay 0              tpit_25       41.3    -19.1        14.0      -8.2         30.3       65.6
+   covid delay 0           median_rms       30.4     -8.3        52.6      -0.1         34.8       60.1
+   covid delay 0           power_m100        5.0    -26.1         3.7      -3.7        134.5      119.7
+   covid delay 1                log1p       -0.5    -15.4        -8.1     -18.6         -2.6        5.6
+   covid delay 1            power_150       -1.8    -13.8        -3.3     -23.1         -2.3       -7.4
+   covid delay 1            power_200       -3.8    -15.4         3.2     -25.6         -1.9      -10.5
+   covid delay 1            boxcox_25        0.5    -14.8        -7.8     -16.5         -1.1       18.9
+   covid delay 1            power_100        1.1    -14.0        -7.1     -18.7         -1.1        5.9
+   covid delay 1       power_level_75        0.6    -14.9        -7.9     -17.0         -0.9       21.7
+   covid delay 1             power_75        2.0    -13.5        -7.1     -16.3          0.2       19.1
+   covid delay 1                 sqrt        1.5    -14.7        -6.8     -14.5          1.1       34.6
+   covid delay 1               spread        3.9    -11.0        -6.1     -16.0          1.5       16.8
+   covid delay 1        centred_asinh        4.4    -10.6        -6.2     -15.2          1.6       18.7
+   covid delay 1             half_iqr        3.5    -11.6        -5.8     -16.9          1.6       15.2
+   covid delay 1         centred_mlog        4.2    -11.1        -6.0     -15.9          1.7       17.3
+   covid delay 1           base_width        2.7    -10.7        -6.2     -14.5          2.0       26.3
+   covid delay 1                  pit        4.4     -9.7        -3.5     -11.2          2.0       24.3
+   covid delay 1             power_50        2.5    -14.3        -6.5     -14.8          2.3       34.5
+   covid delay 1     revisions_target        7.3    -16.4        -8.7     -17.8          4.0       12.9
+   covid delay 1            boxcox_75        2.0    -16.0        -5.6     -13.2          4.3       53.7
+   covid delay 1         window_asinh        1.0    -10.4        -4.7      -8.8          5.6       25.1
+   covid delay 1             power_25        2.5    -15.5        -5.5     -13.2          5.8       54.4
+   covid delay 1     revisions_cutoff        8.0    -17.2        -8.6     -16.6          6.2       31.7
+   covid delay 1            level_rms        8.7     -5.5        17.1     -17.5          9.7        0.8
+   covid delay 1  window_asinh_median       13.1     -0.4        -5.0      -8.6          9.8       25.6
+   covid delay 1 window_boxcox_median       13.1     -0.1        -4.6      -7.0         10.5       27.8
+   covid delay 1   window_mlog_median       12.8     -0.7        -3.9      -6.8         11.4       33.3
+   covid delay 1             identity        2.5    -15.9        -4.3     -12.0         11.9       64.1
+   covid delay 1           median_rms       33.1      1.4        46.2     -14.0         34.4       24.8
+   covid delay 1              tpit_49       50.7     -8.1        15.6     -20.1         34.4       23.8
+   covid delay 1              tpit_25       52.6     -8.3        15.2     -20.1         35.5       24.2
+   covid delay 1           power_m100        5.0    -19.7         0.7     -10.2        117.6       76.7
+     flu delay 0             power_50        3.0     15.1       -31.0     -45.2         -9.2       -9.0
+     flu delay 0             power_75       10.4     42.4       -33.2     -45.1         -9.1       -8.3
+     flu delay 0            boxcox_25        9.5     34.6       -33.0     -45.0         -8.0       -8.0
+     flu delay 0       power_level_75       12.6     38.9       -33.8     -45.1         -7.6       -7.2
+     flu delay 0                 sqrt        2.5     12.3       -29.7     -45.4         -6.9      -10.6
+     flu delay 0             power_25        0.5      1.5       -27.7     -44.6         -5.9      -15.7
+     flu delay 0            power_100       22.3     52.0       -33.9     -43.7         -5.7      -18.8
+     flu delay 0           base_width        8.2     21.5       -27.8     -39.4         -5.0      -19.0
+     flu delay 0     revisions_cutoff        8.2     14.3       -25.6     -40.6         -5.0      -23.8
+     flu delay 0             half_iqr       18.7     43.9       -28.4     -40.5         -3.5      -22.6
+     flu delay 0            boxcox_75        0.4      0.6       -26.3     -45.4         -3.3      -16.9
+     flu delay 0               spread       20.8     46.8       -29.6     -42.4         -3.2      -22.1
+     flu delay 0                log1p       31.0     64.6       -34.8     -44.1         -1.9      -14.2
+     flu delay 0     revisions_target       10.9     10.5       -22.4     -43.8         -0.9      -23.5
+     flu delay 0            level_rms        3.9     17.1        -8.8     -21.4         -0.2       -7.1
+     flu delay 0            power_150       33.0     33.4       -30.1     -38.9          0.0      -37.3
+     flu delay 0            power_200       34.6     22.2       -28.8     -37.4          1.1      -37.0
+     flu delay 0             identity       -0.1     -1.8       -23.2     -45.3          1.2      -22.5
+     flu delay 0         window_asinh        0.0     -3.2        -1.8      -3.4          2.1        0.8
+     flu delay 0  window_asinh_median        0.6     -4.9        -2.4      -4.6          2.9       -0.1
+     flu delay 0 window_boxcox_median        0.4     -4.3        -2.4      -4.9          3.3       -0.5
+     flu delay 0                  pit       22.1     45.8       -25.1     -42.0          3.4      -18.0
+     flu delay 0         centred_mlog       32.9     47.7       -27.5     -41.3          4.5      -20.8
+     flu delay 0              tpit_49        0.8     -1.8        -2.2      -7.6          4.7       -6.5
+     flu delay 0              tpit_25        0.8     -1.9        -2.1      -7.7          4.8       -6.7
+     flu delay 0   window_mlog_median        0.1     -3.7        -1.8      -5.5          5.1       -2.2
+     flu delay 0           median_rms       35.5     45.1         2.9      -5.5         18.2      -16.0
+     flu delay 0        centred_asinh       67.4     48.6       -23.9     -42.4         27.0      -20.5
+     flu delay 0           power_m100        0.2     -1.1        30.0     -49.8        164.6      -29.7
+     flu delay 1             power_50        4.4     26.0       -31.2     -51.4         -8.2        2.0
+     flu delay 1             power_75       14.4     55.4       -34.2     -49.9         -7.4        1.3
+     flu delay 1            boxcox_25       13.4     56.1       -33.1     -50.3         -5.6        8.5
+     flu delay 1                 sqrt        3.7     22.5       -28.9     -51.6         -5.1        6.3
+     flu delay 1       power_level_75       17.9     65.2       -34.3     -49.4         -5.0        8.2
+     flu delay 1             power_25        0.7      6.3       -26.8     -50.7         -4.5       -0.3
+     flu delay 1     revisions_cutoff       11.0     16.8       -26.6     -47.6         -3.9       -9.6
+     flu delay 1           base_width       11.3     30.0       -28.0     -44.4         -3.5      -15.2
+     flu delay 1            power_100       31.4     69.6       -35.4     -47.1         -2.4      -14.5
+     flu delay 1            boxcox_75        0.6      5.3       -24.6     -51.5         -1.2        0.9
+     flu delay 1            level_rms        1.7     20.3        -6.8     -20.4         -1.0      -14.2
+     flu delay 1             half_iqr       26.2     56.0       -29.2     -46.6         -0.5      -19.6
+     flu delay 1               spread       28.5     59.8       -30.4     -48.0         -0.1      -17.9
+     flu delay 1         window_asinh        0.2     -4.2        -0.2      -3.0          0.7      -13.8
+     flu delay 1  window_asinh_median        0.7     -4.9        -0.9      -4.3          0.7      -15.0
+     flu delay 1     revisions_target       14.9     13.6       -23.3     -50.5          0.8       -8.1
+     flu delay 1 window_boxcox_median        0.5     -4.4        -0.9      -4.5          0.8      -15.3
+     flu delay 1   window_mlog_median        0.1     -3.9        -0.5      -4.4          1.5      -17.7
+     flu delay 1              tpit_49        0.9     -1.0         0.5      -5.1          2.5      -21.5
+     flu delay 1              tpit_25        0.8     -1.0         0.6      -5.2          2.7      -21.5
+     flu delay 1                log1p       42.7     83.0       -35.8     -48.3          3.0       -5.0
+     flu delay 1             identity       -0.2      0.5       -20.6     -51.9          3.9       -4.7
+     flu delay 1            power_150       49.5     49.0       -31.0     -41.6          6.5      -41.4
+     flu delay 1         centred_mlog       40.7     61.6       -28.2     -46.7          7.7      -17.5
+     flu delay 1                  pit       30.1     59.2       -23.3     -47.1          8.3      -13.8
+     flu delay 1            power_200       54.1     30.6       -28.9     -39.0          9.1      -45.4
+     flu delay 1           median_rms       43.7     64.5         3.7      -6.2         23.1      -18.1
+     flu delay 1        centred_asinh       75.2     61.2       -24.3     -48.2         30.4      -17.5
+     flu delay 1           power_m100        0.1     -1.8        49.0     -54.5        196.9       -8.5
