@@ -11,13 +11,17 @@
 # base_model: the base forecasts of both diseases, "cmu_submission" (the CMU-TimeSeries hub
 # submissions) or "windowed_seasonal" (our forecasts of R/00_base_forecasts.R, the longer
 # history); R/01_data_overview.R sets the dates from it. Each base has its own output folder
-# (output_dir: data, results, pdf and cache): output/ and output/windowed_seasonal/.
+# (output_dir: data, results, pdf and cache): output/ and output/windowed_seasonal/. The
+# default is cmu_submission; the environment variable MULTIQT_BASE_MODEL chooses the base
+# of one run without changing the default, e.g.
+#   MULTIQT_BASE_MODEL=windowed_seasonal Rscript R/01_data_overview.R
 # horizons: the horizons run, tuned and evaluated. windowed_seasonal leaves out horizon -1:
 # its forecasts there have zero width once the week before is reported (the latest report
 # is a predictor). R/01 prepares horizon -1 for both bases: the methods read the horizon -1
 # forecasts as the start of each forecast path.
 multiqt_settings <- function() {
-  base_model <- "cmu_submission"    # "cmu_submission" or "windowed_seasonal".
+  base_model <- Sys.getenv("MULTIQT_BASE_MODEL", "cmu_submission")
+  stopifnot(base_model %in% c("cmu_submission", "windowed_seasonal"))
   list(
   base_model = base_model,
   output_dir = if (base_model == "cmu_submission") "output" else file.path("output", base_model),
