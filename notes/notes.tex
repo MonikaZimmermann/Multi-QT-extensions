@@ -1141,21 +1141,6 @@ expected bias $\mu^\alpha(w)$ for each week $w$ relative to the peak,
 learned on earlier waves and applied with the probability of each phase.
 One or two winters are little to learn such a profile from.
 
-\paragraph{Open issue: the exploding $t$-PIT scale (to do).} The $t$-PIT
-scale \eqref{eq:scale-tpit} divides by the kernel density of the recent
-reports at the forecast median, which is almost zero when the median lies
-outside their range (late summer 2026; California COVID at delay 1 in
-March 2025). The guard against the running median does not contain it:
-the median includes the current week and is inflated when the explosion
-comes early, as in the $S_0$ rows of California, where every rate then
-fails and the tuning picks the edge of its grid
-(Section~\ref{sec:results-scaled}). To do: guard against the median of the
-past weeks only, after a minimum number of weeks; bound the normalized
-scale, e.g.\ to $[.05,20]\,S_0$ or tighter; floor the density (a
-bandwidth tied to the forecast's spread, or the power scale where the
-median leaves the range of the reports); then rerun the $t$-PIT methods
-and their tuning alone.
-
 \clearpage
 
 \section{Coding Updates}
@@ -1629,13 +1614,27 @@ For a selected window $W$ of $N=|W|$ rows, average over rows and all
  \rho_\alpha\!\left(\log(1+\max\{q_t^\alpha,0\}),\log(1+y_t^\star)\right),
  \label{eq:evaluation-log}\\
  \mathrm{CE}(W)
- &=\frac1m\sum_{\alpha\in\A}
- \left|\frac1N\sum_{t\in W}\ind\{y_t^\star\le q_t^\alpha\}-\alpha\right|.
+ &=\frac1m\sum_{\alpha\in\A}\bigl|e^\alpha(W)\bigr|,\qquad
+ e^\alpha(W)=\frac1N\sum_{t\in W}\ind\{y_t^\star\le q_t^\alpha\}-\alpha.
  \label{eq:evaluation-ce}
 \end{align}
-Columns are \texttt{quantile\_loss}, \texttt{log\_quantile\_loss} and
-\texttt{coverage\_error}; tuning uses \texttt{loss}, \texttt{log\_loss}
-and \texttt{coverage\_error}. CE averages weeks before taking the absolute
+The calibration error does not say in which direction the forecasts miss.
+Its two signed parts do (since 16 November 2026):
+\begin{equation}
+ \mathrm{Bias}(W)=\frac1m\sum_{\alpha\in\A}e^\alpha(W),\qquad
+ \mathrm{Disp}(W)=\frac{1}{|\A_+|}\sum_{\alpha\in\A_+}e^\alpha(W)
+  -\frac{1}{|\A_-|}\sum_{\alpha\in\A_-}e^\alpha(W),
+ \label{eq:evaluation-bias}
+\end{equation}
+with $\A_\pm$ the levels above and below the median. A positive bias
+means the outcome falls below the quantiles too often: the forecasts lie
+too high (as after a peak); a negative bias, too low (as on the rise). A
+positive dispersion means the upper quantiles cover too often and the
+lower too rarely: the intervals are too wide; a negative one, too narrow.
+$|\mathrm{Bias}|\le\mathrm{CE}$, and a forecast with zero bias and
+dispersion can still have a CE, from a miss that is not linear in the
+level. Columns are \texttt{quantile\_loss}, \texttt{log\_quantile\_loss},
+\texttt{coverage\_error}, \texttt{bias} and \texttt{dispersion}. CE averages weeks before taking the absolute
 residual. All feedback designs use the same latest truth; empty windows
 give missing scores. Evaluation losses are never divided by $L_0$.
 Scripts 04/06 display the criterion of the tracker; script 02 displays
@@ -1679,7 +1678,10 @@ For each window it reports
 \texttt{reduction} is a ratio of week-weighted losses (positive is better);
 \texttt{share\_improved} weights cases equally, counts ties as not improved, and is
 printed for at least five cases. CE panels also average case scores
-with week weights. Each page displays the ten methods with lowest
+with week weights. A second tree, \path{multiqt_evaluation_tree_bias.pdf},
+replaces each CE panel by the bias (bar) and the dispersion (diamond)
+of~\eqref{eq:evaluation-bias}, pooled the same way, with the base's as
+dashed and dotted lines. Each page displays the ten methods with lowest
 pooled after-peak loss: a descriptive evaluation ranking, not tuning.
  Tree panels
 share axes; clipping is marked \texttt{<} or \texttt{>}.
@@ -1704,22 +1706,20 @@ The methods below use the preceding data, feedback, tuning and evaluation
 conventions unless stated otherwise.
 
 \paragraph{Methods run.} Since 13 November 2026 every tracker learns at
-the adaptive rate (Section~\ref{sec:learning-rates}), and 26 of the 54
+the adaptive rate (Section~\ref{sec:learning-rates}), and 21 of the 51
 methods stay in the code but are not run (\texttt{paused\_methods} in
 \texttt{R/03\_functions.R}; deleting a name runs the method again), chosen
 from the run of 12 November: the median rebuilds \texttt{studentized},
 \texttt{studentized\_zero}, \texttt{studentized\_base},
 \texttt{median\_constant} and \texttt{median\_constant\_zero} ($+37\%$ to
 $+60\%$; their question is answered in Section~\ref{sec:results-median})
-and \texttt{studentized\_full}; the $t$-PIT scale with its four mixtures,
-until its explosion is fixed (Section~\ref{sec:results-scaled}); the
-equal-weight rate grids and equal-weight recent starts of the power and
+and \texttt{studentized\_\allowbreak full}; the equal-weight rate grids and equal-weight recent starts of the power and
 spread scales; the rate grids with sharing and the outer MultiQT
 (\texttt{shared}, \texttt{shared\_common}, \texttt{shared\_outer},
 \texttt{shared\_common\_outer}; sharing cost 5 to 6 points);
 \texttt{restart\_persistent}, \texttt{restart\_weighted} and the outer
-weekly starts; \texttt{score\_equal}; \texttt{oracle\_target}; and
-\texttt{sqrt\_adaptive}. The 28 methods run besides the base are Fixed and
+weekly starts; \texttt{score\_\allowbreak equal};
+\texttt{oracle\_\allowbreak target}; and \texttt{sqrt\_\allowbreak adaptive}. The 29 methods run besides the base are Fixed and
 Leaky MultiQT, both also on the \texttt{log1p} tracker, REF-op and
 \texttt{sqrt\_constant}; the leak chosen online (\texttt{leaky\_\allowbreak select},
 \texttt{leaky\_\allowbreak weighted}); \texttt{studentized\_\allowbreak level\_\allowbreak rms},
@@ -1727,10 +1727,11 @@ Leaky MultiQT, both also on the \texttt{log1p} tracker, REF-op and
 learned rate grids and recent starts; \texttt{uniform}, \texttt{weighted},
 \texttt{weighted\_\allowbreak common}, \texttt{restart\_\allowbreak uniform},
 \texttt{restart\_\allowbreak recent}, \texttt{restart\_\allowbreak recent\_\allowbreak dual} and
-\texttt{score\_learned}; the sign-flip experts (\texttt{power\_flip},
-\texttt{level\_flip}, \texttt{width\_flip}) and the two-phase trackers
+\texttt{score\_learned}; the sign-flip experts (\texttt{power\_\allowbreak flip},
+\texttt{level\_\allowbreak flip}, \texttt{width\_\allowbreak flip}) and the two-phase trackers
 (\texttt{phase\_power}, \texttt{phase\_oracle}, the latter a hindsight
-benchmark), Section~\ref{sec:two-phase-methods}.
+benchmark), Section~\ref{sec:two-phase-methods}, and polar MultiQT
+(\texttt{polar}).
 
 \subsubsection{Single trackers}
 \label{sec:single-trackers}
@@ -1851,44 +1852,35 @@ how much the scale suppresses or amplifies accumulated corrections.
 They are implementation defaults, not requirements of studentization.
 
 \paragraph{Scales of the most stationary scores.}
-Three further studentized methods use the scales whose scores drifted
-least (Section~\ref{sec:residual-scales}), chosen from three different
-ideas: the forecast's level, where the forecast lies among the recent
-reports, and the forecast's own spread. Each is a function of the
-forecast and of reports known at the cutoff:
+Two further studentized methods use scales whose scores drifted least
+(Section~\ref{sec:residual-scales}), chosen from two different ideas: the
+forecast's level and the forecast's own spread. Each is a function of
+the forecast known at the cutoff:
 \begin{align}
  \widehat\sigma_{t,\mathrm{pow}}&=(1+b_t^{.5})^{p},\qquad p=.5,
  \label{eq:scale-power}\\
- \widehat\sigma_{t,\mathrm{tpit}}&=
- \frac{g_\nu\bigl(G_\nu^{-1}(\hat F_t(b_t^{.5}))\bigr)}{\hat F_t'(b_t^{.5})},
- \qquad \nu=25,
- \label{eq:scale-tpit}\\
  \widehat\sigma_{t,\mathrm{spr}}^\alpha&=s_t\Bigl(1+
  \frac{|b_t^\alpha-b_t^{.5}|}{s_t}\Bigr)^{1-\lambda},\qquad
  s_t=\tfrac12\bigl(b_t^{.75}-b_t^{.25}\bigr),\ \lambda=.4.
  \label{eq:scale-spread}
 \end{align}
-The power scale (\texttt{power\_sigma()}) grows with the forecast median.
-The $t$-PIT scale (\texttt{tpit\_\allowbreak sigma()}) is the derivative scale of the
-$t$-PIT of~\cite{vst} at the forecast median: $\hat F_t$ is the
-distribution function of the last 26 reports known at the cutoff (at
-least 8), smoothed by a normal kernel, and $G_\nu$ the $t$ distribution
-with density $g_\nu$. The spread scale (\texttt{spread\_sigma()}) is the
+The power scale (\texttt{power\_\allowbreak sigma()}) grows with the
+forecast median. The spread scale (\texttt{spread\_\allowbreak sigma()}) is the
 derivative scale of a symmetric Box-Cox transform centred at the forecast
 median: per level, U-shaped around the median, with the weighted
 projection. Each scale is kept within a factor of 20 of the median of its
-values so far, the current week included (the $t$-PIT scale explodes when the forecast median leaves
-the range of the recent reports), then divided by its median over the
-$S_0$ rows and multiplied by $S_0$ (\texttt{normalized\_scale()}); the
+values so far, the current week included, then divided by its median over
+the $S_0$ rows and multiplied by $S_0$ (\texttt{normalized\_\allowbreak scale()}); the
 bounds $[.05S_0,S_0]$ would cut the peaks of these scales and are not
 applied. Each scale serves a tracker (\texttt{studentized\_\allowbreak power},
-\texttt{studentized\_\allowbreak tpit}, \texttt{studentized\_\allowbreak spread}, at the
+\texttt{studentized\_\allowbreak spread}, at the
 adaptive rate of its scores) and four mixtures, whose rates are multiples
 of the rolling scale of the same scores
 (Table~\ref{tab:expert-combinations}). Added on 12 November 2026
-(Section~\ref{sec:results-scaled}). The guard of 20
-does not stop the $t$-PIT scale from exploding
-(Section~\ref{sec:results-scaled}, ``Known issue'').
+(Section~\ref{sec:results-scaled}). A third scale, the $t$-PIT
+of~\cite{vst} at the forecast median, was removed on 16 November 2026:
+it exploded whenever the forecast median left the range of the recent
+reports.
 
 \begingroup
 \small
@@ -1946,10 +1938,6 @@ Method ID & Centre and scale & Initialization and purpose\\
 \texttt{studentized\_power}
  & $a_t^\alpha=b_t^\alpha$; common $\sigma_{t,\mathrm{pow}}$~\eqref{eq:scale-power}
  & $\tilde u_{\mathrm{init}}=0$. Corrections scale with the forecast median.\\
-\texttt{studentized\_tpit}
- & $a_t^\alpha=b_t^\alpha$; common $\sigma_{t,\mathrm{tpit}}$~\eqref{eq:scale-tpit}
- & $\tilde u_{\mathrm{init}}=0$. Corrections scale with where the forecast
-   median lies among the recent reports.\\
 \texttt{studentized\_spread}
  & $a_t^\alpha=b_t^\alpha$; $\sigma_{t,\mathrm{spr}}^\alpha$~\eqref{eq:scale-spread}
  & $\tilde u_{\mathrm{init}}=0$. Per-level spread of the forecast; weighted
@@ -2119,13 +2107,9 @@ forecast median one common scale $s/T'(z(b_t^{.5}))$; per level U-shaped
 around $m$, $\sqrt{s^2+(b_t^\alpha-m)^2}$ for asinh, $s(1+|z|)^{1-\lambda}$
 for Box-Cox and $s/c+|b_t^\alpha-m|$ for the mirror log. Centred at the
 forecast median, every derivative scale at the median is proportional to
-$s_t$. The empirical distribution function of the window is only
-nondecreasing, flat between and beyond the reports; smoothed with a normal
-kernel, as in \texttt{tpit\_sigma()}, it has a derivative, and the
-$t$-PIT scale at the median measures where the forecast median lies among
-the recent reports. The paper's parameter grids (asinh $c=.1,\ldots,1$,
-Box-Cox $\lambda=0,\ldots,1$, mirror log $c=.1,\ldots,1$, $t$-PIT
-$\nu=9,\ldots,49$, each exact, at the median and per level) were explored
+$s_t$. The paper's parameter grids (asinh $c=.1,\ldots,1$,
+Box-Cox $\lambda=0,\ldots,1$, mirror log $c=.1,\ldots,1$, each exact, at
+the median and per level) were explored
 first (\path{agent/scripts/residual_scales.R}); the parameter changed the
 drift by at most $0.03$, and R/07 keeps one or two members of each.
 
@@ -2183,7 +2167,6 @@ Revisions, every target or own target & $(y-b_t^\alpha)/\sigma_{t,\mathrm{rev}}$
 \multicolumn{5}{@{}l}{\emph{Transforms of Uniejewski (2025)}}\\
 asinh ($c=1$), window, exact & $T(z_w(y))-T(z_w(b_t^\alpha))$ & transform & D R M & ---\\
 asinh ($c=1$), Box-Cox ($\lambda=0$), mirror log ($c=.3$): window, at the median & $(y-b_t^\alpha)\,T'(z_w(b_t^{.5}))/s_w$ & common scale & D R M & ---\\
-$t$-PIT ($\nu=25,49$), window, at the median & $(y-b_t^\alpha)/\sigma_{t,\mathrm{tpit}}$ & common scale & D R W & \texttt{studentized\_\allowbreak tpit} ($\nu=25$; not run, explodes)\\
 asinh ($c=1$), mirror log ($c=1/3$): centred, exact & $T(z_c(y))-T(z_c(b_t^\alpha))$ & transform & D R & ---\\
 \end{longtable}
 \endgroup
@@ -2422,10 +2405,10 @@ Method IDs & Weighting and bank\\
 \texttt{restart\_recent\_dual} & Two copies per start, rates $.03$ and $.3$ times the rolling scale; the 16 copies of the eight most recent starts; adaptive $\lambda$, sharing, per-quantile weights.\\
 \texttt{score\_equal} & Equal weights on the declared score bank.\\
 \texttt{score\_learned} & Same score bank; adaptive $\lambda$, sharing, per-quantile weights.\\
-\texttt{power\_uniform}, \texttt{tpit\_uniform}, \texttt{spread\_uniform} & Equal weights on the 12 rate experts of the scaled tracker, rates $m$ times the rolling scale of its scores.\\
-\texttt{power\_weighted\_common}, \texttt{tpit\_weighted\_common}, \texttt{spread\_weighted\_common} & Same scaled rate bank; common weights, no sharing (as \texttt{weighted\_common}).\\
-\texttt{power\_restart\_equal}, \texttt{tpit\_restart\_equal}, \texttt{spread\_restart\_equal} & Equal weights on the eight most recent weekly starts of the scaled tracker, at its adaptive rate.\\
-\texttt{power\_restart\_recent}, \texttt{tpit\_restart\_recent}, \texttt{spread\_restart\_recent} & Same starts; adaptive $\lambda$, sharing, per-quantile weights (as \texttt{restart\_recent}).\\
+\texttt{power\_uniform}, \texttt{spread\_uniform} & Equal weights on the 12 rate experts of the scaled tracker, rates $m$ times the rolling scale of its scores.\\
+\texttt{power\_weighted\_common}, \texttt{spread\_weighted\_common} & Same scaled rate bank; common weights, no sharing (as \texttt{weighted\_common}).\\
+\texttt{power\_restart\_equal}, \texttt{spread\_restart\_equal} & Equal weights on the eight most recent weekly starts of the scaled tracker, at its adaptive rate.\\
+\texttt{power\_restart\_recent}, \texttt{spread\_restart\_recent} & Same starts; adaptive $\lambda$, sharing, per-quantile weights (as \texttt{restart\_recent}).\\
 \texttt{leaky\_weighted} & Leak bank: Leaky MultiQT at the adaptive rate for seven leaks $\delta=0,\ldots,.5$; common weights with sharing.\\
 \texttt{power\_flip}, \texttt{level\_flip}, \texttt{width\_flip} & Sign-flip experts: the base, a studentized tracker (power scale, level RMS, base width) and its mirror; adaptive $\lambda$, sharing, per-quantile weights.\\
 \bottomrule
@@ -2989,7 +2972,7 @@ the rise larger after the peak (Section~\ref{sec:base-width-failure}).
 The methods that are no longer run lost more with the tuned rates of 12
 November: the median rebuilds $49\%$ to $60\%$
 (Section~\ref{sec:results-median}), the base-width trackers $26\%$ and
-$37\%$, the $t$-PIT scale $30\%$.
+$37\%$.
 
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Studentized full
 base'', ``Power scale'' and ``Spread scale'' (pooled: pp.~1 and 7);
@@ -3073,8 +3056,7 @@ and of the studentized methods; scales as functions of the forecast
 their parameter grids); then the best of them in two checks
 (Section~\ref{sec:scale-checks}) and in MultiQT
 (Section~\ref{sec:scale-multiqt}). One scale per idea became a method: the
-power $p=.5$ of the median (the level), the $t$-PIT (where the forecast
-median lies among the recent reports) and the spread per level (the
+power $p=.5$ of the median (the level) and the spread per level (the
 forecast's own spread).
 
 \begin{center}\small
@@ -3116,10 +3098,8 @@ asinh ($c=1$), window, exact & 1.62 & 68\% & 1.35 & 76\%\\
 asinh ($c=1$), window, at the median & 1.64 & 54\% & 1.35 & 76\%\\
 Box-Cox ($\lambda=0$), window, at the median & 1.64 & 52\% & 1.35 & 74\%\\
 Mirror log ($c=.3$), window, at the median & 1.65 & 50\% & 1.37 & 70\%\\
-$t$-PIT ($\nu=25$), window, at the median (\texttt{studentized\_tpit}) & 1.65 & 52\% & 1.32 & 86\%\\
-$t$-PIT ($\nu=49$), window, at the median & 1.64 & 50\% & 1.31 & 86\%\\
-asinh ($c=1$), centred, exact & 1.63 & 56\% & 1.32 & 80\%\\
-Mirror log ($c=1/3$), centred, exact & 1.64 & 58\% & 1.32 & 80\%\\
+asinh ($c=1$), centred, exact & 1.64 & 52\% & 1.33 & 78\%\\
+Mirror log ($c=1/3$), centred, exact & 1.64 & 64\% & 1.32 & 82\%\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -3150,9 +3130,9 @@ than the identity in $60$ to $66\%$ of the COVID cases. Scales that grow
 too fast ($p=1.5$, $2$) drift almost as much as no scale or more, and a
 scale that shrinks with the level ($p=-1$) drifts most. For flu the
 base's own spread is the best yardstick: the base width, half its
-interquartile range, the spread per level, the centred transforms, the PIT
-and the $t$-PIT drift least ($1.31$ to $1.33$, less than the identity in
-$76$ to $86\%$ of the cases).
+interquartile range, the spread per level, the centred transforms and the
+PIT drift least ($1.31$ to $1.33$, less than the identity in $76$ to
+$86\%$ of the cases).
 
 \paragraph{Up to and after the peak.} The hindsight $\alpha$-quantile of
 each score in the 8 weeks up to the peak and in the 8 weeks after it shows
@@ -3180,8 +3160,7 @@ against $1.56$) and the base width for flu ($1.29$ against $1.30$). The
 revisions of every target drift like the power scale for COVID and less
 for flu ($1.35$, less than the identity in $82\%$ of the cases). The window transforms of Uniejewski add
 nothing for COVID; for flu they lie between the power and the spread
-scales, except the $t$-PIT at the median, which reacts to where the
-forecast median lies among the recent reports. Of the scales from recent
+scales. Of the scales from recent
 errors, the level RMS is among the less stable, and the median rebuild is
 the least stable for flu. Per-level Box-Cox scales are almost never in the
 band (under $1\%$ of the weeks), the centred asinh in $56\%$ (flu $65\%$),
@@ -3237,8 +3216,7 @@ forecast that quantile stability justifies
 the methods (latest counts per $100{,}000$, evaluation weeks). The base is
 issued before five scores are reported; crossing levels are sorted; every
 scale is kept within a factor of 20 of the median of its values so far,
-which binds only where a scale explodes ($t$-PIT, when the forecast median
-lies far outside the recent counts). R/07 computes both checks for every
+which binds only where a scale explodes. R/07 computes both checks for every
 candidate; Table~\ref{tab:running-quantile} shows a selection.
 
 \begin{center}\small
@@ -3262,7 +3240,6 @@ Revisions, own target ($h\le2$) & 5.8 & 34.8 & 4.1 & 0.1 & 8.9 & $-1.3$ & 32.5 &
 PIT of the base & 7.7 & 40.2 & 8.6 & 4.0 & 15.1 & $-16.2$ & 48.7 & 55.4\\
 asinh ($c=1$), window, exact & 5.7 & 30.2 & 3.1 & 1.1 & 1.1 & $-17.6$ & 2.4 & $-2.4$\\
 Box-Cox ($\lambda=0$), window, at the median & 6.7 & 29.8 & 6.4 & 6.5 & 0.7 & $-18.8$ & 2.1 & $-2.9$\\
-$t$-PIT ($\nu=25$), window, at the median & 13.5 & 33.7 & 17.9 & 7.0 & 1.1 & $-24.5$ & 2.9 & $-1.0$\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -3389,7 +3366,6 @@ Spread per level      & 5.2  & $-3.7$ & 8.8  & 3.8 & $-38.6$ & 20.7\\
 Level RMS             & 10.5 & 20.2   & 7.8  & 9.5 & $-34.2$ & 19.2\\
 PIT of the base       & 6.1  & $-3.6$ & 10.2 & 6.5 & $-37.5$ & 23.9\\
 asinh, window, exact  & 10.5 & 26.1   & 8.7  & 2.6 & $-28.4$ & 4.4\\
-$t$-PIT ($\nu=25$), window, at the median & 30.0 & 29.6 & 35.2 & 1.3 & $-34.2$ & 3.2\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -3404,10 +3380,10 @@ every candidate in \path{output/results/score_selection/running_quantile.csv}
 With the same untuned rule the scores part more than in the drift ratio.
 For COVID the square root, the spread and the power $.5$ lose least
 ($+5\%$), the identity, the level RMS and the window asinh most ($+9\%$ to
-$+11\%$), and the $t$-PIT scale explodes ($+30\%$). The scales that grow
+$+11\%$). The scales that grow
 with the forecast or its spread also undo the COVID calibration damage of
 the adaptive rate on counts (identity $+39\%$; spread, PIT, \texttt{log1p}
-$-3\%$ to $-4\%$). For flu the square root, the $t$-PIT, the power $.5$
+$-3\%$ to $-4\%$). For flu the square root, the power $.5$
 and Box-Cox $.75$ lose about $1.5\%$ at $34\%$ to $43\%$ less calibration
 error; after flu peaks the window scores and the identity lose least
 ($+2\%$ to $+4\%$) and the level-tied scores most (\texttt{log1p} $+34\%$).
@@ -3646,14 +3622,14 @@ and~\ref{tab:mixture-vs-fixed-after}
 (\path{agent/outputs/mixture_vs_fixed_bootstrap_adaptive/tables.csv} and
 \path{pooled_by_cell.csv}).
 
-\subsection{Scaled methods: power, \texorpdfstring{$t$}{t}-PIT and spread scales}
+\subsection{Scaled methods: power and spread scales}
 \label{sec:results-scaled}
 The power and spread scales
 (\eqref{eq:scale-power}, \eqref{eq:scale-spread}) each drive a tracker at
 the adaptive rate of its scores and two mixtures: the rate grid with
 learned common weights and the eight most recent weekly starts with
-learned weights (Table~\ref{tab:expert-combinations}); the $t$-PIT scale
-and the equal-weight variants are no longer run.
+learned weights (Table~\ref{tab:expert-combinations}); the equal-weight
+variants are no longer run.
 
 \begin{center}\small
 \setlength{\tabcolsep}{3.5pt}
@@ -3703,36 +3679,12 @@ with the forecast and issue the correction learned in the rise larger
 after the peak (Section~\ref{sec:base-width-failure}).
 \item \textbf{Which scale.} The power scale is better on counts, the spread
 scale on the log scale; after peaks the spread scale loses more.
-\item \textbf{Known issue: the $t$-PIT scale explodes} (run of 12
-November; the $t$-PIT methods are no longer run). The scale
-$1/\hat F_t'(b_t^{.5})$ becomes astronomically large (raw values up to
-$10^{36}$) when the forecast median lies outside the range of the last 26
-reports, where the kernel density is almost zero: in the late-summer 2026
-trough, when the counts fall below every forecast median, and for
-California COVID at delay 1 in March 2025. The guard of
-\texttt{normalized\_scale()} keeps the scale within $20$ times the median
-of its values so far, but that median includes the current week and can
-itself be inflated early on. In California (COVID, $h=3$, delay 1) the
-explosion falls in the $S_0$ rows: the reference median becomes
-$3.7\times10^7$, so the normalized scale is about $0$ in most weeks and
-up to $10^{13}S_0$ in three. The pooled tuning loss for COVID at delay 1
-was then about $6\times10^8\%$ at every rate, and the tuning picked
-$.003$, the lower edge of its grid. Elsewhere the guard caps the scale
-at $20$ to $36$ times $S_0$ in the late-summer weeks (California and
-Texas, COVID $h=3$), still large enough to blow up the fast rates:
-\texttt{tpit\_uniform} loses $85\%$, $127\%$ and $74\%$ for COVID, and
-\texttt{studentized\_tpit} $109\%$ at delay 0. The learned grid escapes
-by moving its weight to $\kappa=0$ (California, COVID $h=2$, delay 0:
-$0.86$). The results of the $t$-PIT scale therefore reflect this
-implementation more than the score; see the open issue in
-Section~\ref{sec:open-issues}.
 \end{itemize}
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Power scale''
 and ``Spread scale'' (pooled: pp.~1 and 7); the forecasts on pages 8 and 9
 of each location's eleven in \path{multiqt_method_forecasts/}; the weights
 on pages 7 to 10 of each location's ten in \path{multiqt_weight_timelines/}
-(rate grid and weekly starts per scale). The diagnosis of the $t$-PIT
-scale is not plotted (\path{agent/scripts/tpit_explosion_check.R}).
+(rate grid and weekly starts per scale).
 
 \subsection{Sign-flip experts and two-phase trackers}
 \label{sec:results-phase}
