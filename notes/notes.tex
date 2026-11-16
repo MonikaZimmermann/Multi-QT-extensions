@@ -1211,9 +1211,11 @@ The flu winter 2024/25 peak belongs to tuning. Plotted target weeks after
 September 2026 are outside the evaluation period and are not scored.
 
 \paragraph{Own \texttt{windowed\_\allowbreak seasonal} forecasts: the longer-history alternative.}
-The longer-history setup starts on reference date 14 October 2023,
-with tuning target dates through 27 April 2024 and evaluation after the
-reporting gap below, through 30 September 2026.
+The longer-history setup starts on reference date 14 October 2023;
+the trackers learn from the 2023/24 season on (no tuning since 13
+November), and the evaluation runs after the reporting gap below, from
+November 2024 through 30 September 2026 (results in
+Section~\ref{sec:results-longer-history}).
 Script 00 implements generation of both COVID and flu forecasts
 with unchanged, pinned Delphi code and packages and historical HHS
 reports for the earlier period. 
@@ -3909,6 +3911,111 @@ experts'' and ``Two-phase trackers'' (pooled: pp.~1 and 7); the forecasts
 on pages 10 and 11 of each location's eleven in
 \path{multiqt_method_forecasts/}; the weights of the sign-flip experts on
 the sixth page of each location in \path{multiqt_weight_timelines/}.
+
+\subsection{Longer history: the \texttt{windowed\_seasonal} base}
+\label{sec:results-longer-history}
+The same workflow on our own \texttt{windowed\_seasonal} forecasts
+(Section~\ref{sec:data-preparation}), run on 15--16 November 2026
+(scripts 01, 04, 06, 02 and 07 with \texttt{MULTIQT\_BASE\_MODEL=windowed\_seasonal},
+outputs in \path{output/windowed_seasonal/}): every method of
+Section~\ref{sec:methods} at its adaptive rate, the same designs and
+pooling, horizons $0$ to $3$. The trackers learn from October 2023 on,
+the 2023/24 season from HHS reports, and carry their state across the
+reporting gap of May to November 2024. The evaluation runs from November
+2024 through September 2026: two winters instead of the one of the CMU
+base. Percentages are relative to each run's own base, so the two columns
+of a disease compare how much each base leaves to correct, over different
+weeks and horizons.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{Loss per $100{,}000$} & \multicolumn{2}{c}{Calibration error}\\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Base & COVID & Flu & COVID & Flu\\
+\midrule
+CMU--TimeSeries submissions & 0.164 & 0.436 & 0.056 & 0.084\\
+Own \texttt{windowed\_seasonal} & 0.181 & 0.502 & 0.066 & 0.111\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:longer-history-bases}
+\begin{center}\small Table \thetable: The two bases on their common target
+weeks (June 2025 to September 2026), the 10 largest states without Florida,
+horizons $0$ to $3$.
+\end{center}
+
+\begin{center}\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{COVID} & \multicolumn{2}{c}{Flu} & COVID up to peak\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(l){6-6}
+Method & windowed & CMU & windowed & CMU & windowed / CMU\\
+\midrule
+\texttt{fixed}             & 11.1 / 36  & 7.5 / 21  & 2.7 / $-61$  & 5.1 / $-31$  & 16.6 / 2.2\\
+\texttt{leaky}             & 4.1 / $-29$ & 1.3 / 1   & 1.1 / $-39$  & 3.1 / $-21$  & 8.4 / 2.9\\
+\texttt{fixed\_log}        & $-1.5$ / $-31$ & 6.9 / $-18$ & 3.4 / $-58$ & 10.2 / $-40$ & 5.3 / $-0.8$\\
+\texttt{sqrt\_constant}    & $-1.2$ / $-24$ & 3.6 / $-19$ & $-2.2$ / $-64$ & $-0.3$ / $-39$ & 5.3 / $-3.3$\\
+\texttt{ref\_op}           & 0.8 / $-31$ & 1.1 / $-5$ & $-1.4$ / $-35$ & 0.7 / $-30$ & 5.5 / 0.6\\
+\texttt{studentized\_power}& 5.2 / 2   & 5.2 / 4   & $-1.2$ / $-64$ & 2.0 / $-43$ & 11.3 / 0.6\\
+\texttt{studentized\_pit}  & $-4.4$ / $-31$ & 7.3 / $-13$ & 2.2 / $-52$ & 7.3 / $-39$ & 4.3 / 1.1\\
+\texttt{restart\_recent}   & 0.1 / $-15$ & $-0.1$ / $-4$ & $-0.4$ / $-20$ & 1.2 / $-12$ & 1.5 / 0.3\\
+\texttt{power\_flip}       & 0.2 / $-39$ & 1.6 / $-12$ & $-1.1$ / $-26$ & 1.6 / $-27$ & 2.9 / $-4.1$\\
+\texttt{phase\_power}      & 0.8 / $-11$ & 2.1 / 1   & $-1.9$ / $-64$ & 0.7 / $-38$ & 7.5 / $-0.2$\\
+\texttt{phase\_oracle} (hindsight) & $-0.3$ / $-2$ & $-1.0$ / 17 & $-5.4$ / $-61$ & $-2.7$ / $-34$ & 1.9 / $-4.7$\\
+\texttt{polar}             & 9.9 / 6   & 6.1 / 9   & 1.9 / $-53$  & 4.3 / $-30$  & 15.9 / 1.9\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:longer-history-methods}
+\begin{center}\small Table \thetable: Change of the pooled loss / calibration
+error versus each run's own base (\%), mean over the three designs; the
+last column the loss up to the COVID peaks. Windowed: evaluation November
+2024 to September 2026, horizons $0$ to $3$; CMU: June 2025 to September
+2026, horizons $-1$ to $3$ (\path{agent/scripts/windowed_vs_cmu.R}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{Our base is worse than CMU's} on the weeks both runs score:
+$10\%$ more loss for COVID and $15\%$ for flu, and $18\%$ and $33\%$ more
+calibration error (Table~\ref{tab:longer-history-bases}). It is one
+autoregressive model, CMU's an ensemble that also uses
+emergency-department visits (NSSP).
+\item \textbf{More methods beat it, mostly on calibration.} For flu,
+Delphi's square-root tracker ($-2.2\%$ loss, $-64\%$ CE), the two-phase
+tracker ($-1.9\%$, $-64\%$), REF-op and the power scale gain loss and
+remove most of the calibration error; for COVID the PIT tracker
+($-4.4\%$), the log1p tracker and Delphi's square-root tracker. The
+calibration gains are larger than with the CMU base, often about twice:
+a worse base leaves more to correct. The corrected forecasts stay well above the CMU
+base's loss.
+\item \textbf{Up to the COVID peaks most methods lose} (Fixed MultiQT
+$+16.6\%$, against $+2.2\%$ with CMU's base). In the 2024/25 winter this
+comes from the corrections learned in 2023/24 and carried across the
+reporting gap: started fresh after the gap, Fixed MultiQT loses $0.1\%$
+up to that winter's peaks instead of $16.2\%$, Leaky MultiQT $0.0\%$
+instead of $8.0\%$ (delay 0). In the later COVID waves Fixed MultiQT loses
+about $16\%$ either way, so there the loss is not the gap's. For flu the
+carried corrections help instead: started fresh, Fixed MultiQT loses
+$7.2\%$ after the 2024/25 peaks instead of $1.8\%$
+(\path{agent/scripts/windowed_gap_check.R}). A flu season repeats the bias
+of the season before; a COVID wave does not.
+\item \textbf{The phase is worth more for flu with this base}:
+\texttt{phase\_oracle} $-5.4\%$ against $-2.7\%$ with CMU's, and the
+error-based two-phase tracker already gains ($-1.9\%$).
+\end{itemize}
+What two winters make possible: a seasonal timing prior and a seasonal
+centre (Section~\ref{sec:open-issues}) need earlier seasons to learn
+from, and the carried flu corrections suggest that such a profile exists
+for flu but not for COVID.
+
+\emph{Plots.} The bar plot, the tree and the trade-off pages (pooled:
+pp.~1 and 8) have the file names of the CMU base, in the folder
+\path{output/windowed_seasonal/pdf/}; the corrected-label designs are in
+its files ending in \texttt{\_corrected}.
 
 \subsection{Locations}
 \label{sec:results-locations}
