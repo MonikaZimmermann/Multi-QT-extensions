@@ -4378,6 +4378,8 @@ Hidden v2, three phases (weights as issued)  & 2.2    & $-0.8$ & 0.0    & $-4.2$
 Hidden v2, three phases (updated weights)    & 0.5    & $-1.0$ & 3.6    & $-4.5$\\
 Hidden v2, coordinates with their own rates  & $-0.3$ & 1.7    & 14.4   & $-1.9$\\
 Hidden v2, angle + slow offset               & $-0.5$ & 0.8    & 12.9   & $-2.6$\\
+Hidden v3 (COVID, European prior), three phases & 1.7  &        & $-0.9$ & \\
+Hidden v3 (COVID, European prior), angle     & $-0.5$ &        & 5.9    & \\
 \addlinespace
 Three phases, true phase (hindsight)         & $-2.2$ & $-4.8$ & $-0.9$ & $-5.6$\\
 \bottomrule
@@ -4403,6 +4405,17 @@ the angle with the logistic bias probability stays the better choice.
 \item \textbf{The updated weights} help a little for flu ($-4.5\%$ against
 $-4.2\%$), not for COVID; the coordinates with their own rates do not beat
 the free phases.
+\item \textbf{A COVID prior from other countries} (version 3,
+\path{hidden_phase3.R}, 17 November): the chain counts the weeks of the
+current rise or tail, and the chance of the turn depends on that duration,
+learned from the COVID waves of the EU/EEA countries (ECDC ERVISS weekly
+hospital admissions since mid-2022, waves known 26 weeks before the cutoff;
+adding the US states' waves did not help). It recognizes the COVID phase
+better (AUC $0.71$ and $0.69$ against $0.67$ and $0.62$), and its three
+phases match the true phase on the longer history ($-0.9\%$), but the angle
+with the logistic bias probability stays better for COVID ($-2.6\%$, with
+the holidays alone $-4.1\%$): for COVID the sign of the bias matters more
+than the phase.
 \end{itemize}
 A practical choice per disease, so far: flu, the hidden-phase model with
 three free phases; COVID, the angle with the bias probability with the
