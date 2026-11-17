@@ -189,6 +189,9 @@ method_labels <- function(p) {
     phase_power = paste0("Two-phase power scale (decline probability from the last ",
       p$phase_rows, " errors)"),
     phase_oracle = "Two-phase power scale (phase in hindsight)",
+    phase_angle = paste0("Angle + slow offset (", p$phase_slow, "), probability that the base is ",
+      "too high (R/05)"),
+    phase_hidden = "Hidden-phase model: three free phases, updated weights (R/05)",
     # The expert banks of the scaled trackers (scaled_methods in R/03), rates in multiples of
     # the rolling scale of their scores: the rate grid and the most recent weekly starts.
     unlist(lapply(names(scale_titles), function(scale) setNames(paste0(scale_titles[[scale]], ": ",

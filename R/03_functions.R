@@ -336,7 +336,41 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
     case$feedback_observed <- labels$observed
     case$feedback_samples <- labels$samples
   }
+  case$phase <- phase_inputs(case)
   case
+}
+# Phase inputs of a case (phase_angle, phase_hidden; R/05_phase_probabilities.R), or NULL for
+# locations without them: p_bias, per row the probability that the report falls below the base
+# median (known at the row's cutoff); P, per row the hidden-phase probabilities (rise, overshoot,
+# tail) of its target week at its cutoff; W[s, t, ], the probabilities of row s's target week as
+# known at the cutoff of issue week t (updated once reported; the weights when row s is learned
+# at week t). The file is read once per session.
+phase_cache <- new.env()
+phase_inputs <- function(case) {
+  file <- file.path(multiqt_settings()$output_dir, "data", "phase_probabilities.rds")
+  if (!file.exists(file)) return(NULL)
+  stamp <- paste(file, file.mtime(file))
+  if (!identical(phase_cache$stamp, stamp)) {
+    x <- readRDS(file)
+    phase_cache$bias <- split(x$bias, paste(x$bias$disease, x$bias$location, x$bias$horizon))
+    phase_cache$hidden <- split(x$hidden, paste(x$hidden$disease, x$hidden$location))
+    phase_cache$stamp <- stamp
+  }
+  bias <- phase_cache$bias[[paste(case$disease, case$location, case$horizon)]]
+  hidden <- phase_cache$hidden[[paste(case$disease, case$location)]]
+  if (is.null(bias) || is.null(hidden)) return(NULL)
+  n <- nrow(case$base)
+  stopifnot(nrow(bias) == n)
+  classes <- c("rise", "over", "tail")
+  lookup <- function(cutoff, week) {
+    i <- match(paste(cutoff, week), paste(hidden$cutoff, hidden$week))
+    out <- as.matrix(hidden[i, classes]); out[is.na(i), ] <- 1 / 3
+    pmin(pmax(out, .005), 1)
+  }
+  pairs <- expand.grid(s = seq_len(n), t = seq_len(n))
+  list(p_bias = bias$p_bias[order(bias$row)],
+    P = lookup(case$as_of, case$target_date),
+    W = array(lookup(case$as_of[pairs$t], case$target_date[pairs$s]), c(n, n, 3)))
 }
 # Label of a feedback design.
 feedback_label <- function(delay, revisions = FALSE, corrected = FALSE)
@@ -447,6 +481,14 @@ case_as_of <- function(case, week, frozen_s0 = NULL, frozen_loss_scale = NULL) {
     "truth_latest", "as_of", "cutoff_source", "period", "peak_index", "peak_date",
     "relative_week")) case[[name]] <- case[[name]][rows]
   case$base <- case$base[rows, , drop = FALSE]
+  # Phase inputs: the re-run learns every row with its phase probabilities as known at this
+  # week's cutoff.
+  if (!is.null(case$phase)) {
+    W <- case$phase$W[rows, rows, , drop = FALSE]
+    for (w in rows) W[, w, ] <- case$phase$W[rows, week, ]
+    case$phase <- list(p_bias = case$phase$p_bias[rows],
+      P = case$phase$P[rows, , drop = FALSE], W = W)
+  }
   case$feedback_observed <- own$observed
   case$feedback_samples <- samples
   case$feedback_date <- own$date
@@ -1418,6 +1460,33 @@ polar_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, unit, an
   q
 }
 
+# Phase-weighted MultiQT (phase_angle, phase_hidden; notes, "One family" and Proposition
+# "Phase-weighted coverage"): per level the correction sum_j (P_t V)_j z_j of states z_j,
+# issued as b_t + sigma_t * correction (isoreg; the states are not projected); P (n x K): the
+# phase probabilities of each row known at its cutoff; V (K x J) maps the states to the
+# phases; rate (J): their rate factors. A report on row s learned at issue week t moves z_j by
+# eta_t rate_j (W_ts V)_j (alpha - covered), W_ts = weights(t, s) the phase probabilities of
+# row s as known then. phase_angle: P = (1 - p, p), V = (shared, flip) = (1 1; 1 -1): a slow
+# per-level offset and one correction whose sign follows 1 - 2p. phase_hidden: three free
+# phases, V = I.
+phase_weighted_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, sigma, P,
+                                   weights, V = diag(ncol(P)), rate = rep(1, ncol(V)),
+                                   warmup_weeks = 0L, feedback_samples = NULL) {
+  n <- nrow(base)
+  stopifnot(nrow(P) == n, nrow(V) == ncol(P), length(rate) == ncol(V), length(eta) == n)
+  Z <- matrix(0, ncol(V), length(alpha))
+  q <- base
+  for (week in seq_len(n)) {
+    if (week <= warmup_weeks) next
+    for (s in feedback_by_week[[week]]) {
+      step <- eta[week] * (alpha - covered_share(feedback[s], feedback_samples[[s]], q[s, ]))
+      Z <- Z + outer(rate * drop(weights(week, s) %*% V), step)
+    }
+    q[week, ] <- isoreg(base[week, ] + sigma[week] * drop((P[week, ] %*% V) %*% Z))$yf
+  }
+  q
+}
+
 # Sign-flip experts (power_flip, level_flip, width_flip): the base, a tracker's forecasts
 # and its mirror, the base minus the tracker's correction, 2 b_t - q_t, levels sorted. All
 # [week x level] in counts / count_scale; experts named base, tracker and mirror.
@@ -1637,6 +1706,9 @@ method_parameters <- function() list(
   # phase_power: the decline probability from the last phase_rows learned rows
   # (decline_probability()).
   phase_rows = 4L,
+  # phase_angle: the rate factor of its slow per-level offset (as REF-op's slow term, .003
+  # against .03); not tuned.
+  phase_slow = .1,
   # Score-based experts (score_experts, score_methods): learned weights per level with H and
   # sharing 1/(2H) as the other learned mixtures; not tuned.
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
@@ -1692,6 +1764,8 @@ parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "
 # probability in the score").
 flip_methods <- c("power_flip", "level_flip", "width_flip")
 phase_methods <- c("phase_power", "phase_oracle")
+# Phase from outside data (R/05_phase_probabilities.R; since 17 November 2026).
+outside_methods <- c("phase_angle", "phase_hidden")
 method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_op",
   "sqrt_constant", "sqrt_adaptive", "leaky_select", "leaky_weighted", "studentized",
   "studentized_base", "median_constant",
@@ -1700,7 +1774,8 @@ method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_o
   "weighted", "weighted_common", "shared",
   "shared_common", "restart_uniform", "restart_weighted", "restart_recent", "restart_recent_dual",
   score_methods, "restart_persistent", "shared_outer", "shared_common_outer",
-  "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods, "polar")
+  "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods, "polar",
+  outside_methods)
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
@@ -1715,7 +1790,10 @@ paused_methods <- c(
   "shared", "shared_common", "shared_outer", "shared_common_outer",      # Rate grid.
   "restart_persistent", "restart_weighted", "restart_uniform_outer",
   "restart_weighted_outer",                                              # Weekly starts.
-  "score_equal")                                                         # Score bank.
+  "score_equal",                                                         # Score bank.
+  # 17 November 2026: the rate-grid mixtures and the PIT tracker.
+  "uniform", "weighted", "weighted_common", "power_weighted_common", "spread_weighted_common",
+  "studentized_pit")
 active_methods <- setdiff(method_names, paused_methods)
 # The method families of 04's plots (forecast pages, trade-off colours); their methods are
 # also the candidates of 06's tree.
@@ -1740,7 +1818,8 @@ method_groups <- list(
     startsWith(scaled_methods, "spread_")]),
   "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
     flip_methods, "polar"),
-  "Two-phase trackers" = c("original", "studentized_power", phase_methods))
+  "Two-phase trackers" = c("original", "studentized_power", phase_methods),
+  "Phase from outside data" = c("original", "phase_oracle", outside_methods))
 # Only the methods that run: a group keeps its active methods and is dropped when only the
 # base and Fixed MultiQT are left.
 method_groups <- Filter(function(group) length(setdiff(group, c("original", "fixed"))) > 0L,
@@ -1756,6 +1835,8 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   power_flip = "Sign-flip experts: power scale", level_flip = "Sign-flip experts: level RMS",
   width_flip = "Sign-flip experts: base width",
   phase_power = "Two-phase power scale (decline probability)",
+  phase_angle = "Angle + slow offset (bias probability, outside data)",
+  phase_hidden = "Hidden-phase model (three phases, outside data)",
   phase_oracle = "Two-phase power scale (phase in hindsight)",
   uniform = "Rate grid: equal", weighted = "Rate grid: learned, no sharing",
   weighted_common = "Rate grid: learned, common weights",
@@ -1797,7 +1878,7 @@ group_palettes <- c("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Studentized median" = "Burg",
   "Studentized full base" = "BluGrn", "Power scale" = "Peach",
   "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
-  "Two-phase trackers" = "Dark Mint")
+  "Two-phase trackers" = "Dark Mint", "Phase from outside data" = "Teal")
 home_group <- local({
   home <- character()
   for (group in names(method_groups)) for (method in method_groups[[group]])
@@ -2085,7 +2166,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     names_of <- c(paste0("studentized_", scale_name), paste0(scale_name, c("_uniform",
       "_weighted_common", "_restart_equal", "_restart_recent")))
     needed <- want(names_of) || (scale_name == "power" &&
-      want("power_flip", "phase_power", "phase_oracle"))
+      want("power_flip", "phase_power", "phase_oracle", outside_methods))
     if (!needed) next
     scale_key <- paste(scale_name, params$power_p, params$spread_lambda, params$scale_guard)
     studentized <- memo(paste("scale", scale_key), normalized_scale(studentized_scale(case,
@@ -2152,6 +2233,26 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
       predictions$phase_power <- phase(decline_probability(case, params$phase_rows))
     if (want("phase_oracle")) predictions$phase_oracle <- phase(ifelse(
       is.finite(case$relative_week), as.numeric(case$relative_week > 0), .5))
+  }
+  # Phase from outside data (R/05_phase_probabilities.R; notes, "The angle from a phase
+  # probability", "Weather, holidays and the hidden-phase model"), on the power scale at the
+  # adaptive rate of phase_power: phase_angle, the angle with the probability that the base is
+  # too high plus a slow per-level offset (phase_slow); phase_hidden, three free phases with the
+  # hidden-phase model's probabilities, learned with the probabilities as known when each
+  # report arrives. Locations without phase inputs (outside the pooled locations): NA.
+  if (want(outside_methods)) {
+    power <- scaled$power
+    outside <- function(P, weights, V, rate) phase_weighted_multiqt(case$base,
+      case$feedback_observed, case$feedback_by_week, case$alpha, rate_of(power$unit),
+      power$scale, P, weights, V, rate, power$warmup, case$feedback_samples) / count_scale
+    ph <- case$phase
+    if (want("phase_angle")) predictions$phase_angle <- if (is.null(ph)) base * NA else {
+      P2 <- cbind(1 - ph$p_bias, ph$p_bias)
+      outside(P2, function(t, s) P2[s, ], cbind(shared = c(1, 1), flip = c(1, -1)),
+        c(params$phase_slow, 1))
+    }
+    if (want("phase_hidden")) predictions$phase_hidden <- if (is.null(ph)) base * NA else
+      outside(ph$P, function(t, s) ph$W[s, t, ], diag(3), rep(1, 3))
   }
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
   # The first-start control has exactly the same birth rule as the restart copies.
