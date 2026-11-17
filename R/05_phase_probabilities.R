@@ -12,14 +12,18 @@
 #   hidden   the hidden-phase model (rise, overshoot weeks 1-4, tail): a hidden Markov chain
 #            whose flu prior is a logistic hazard of the peak fitted on WHO/NREVSS laboratory
 #            test positivity (2014/15-2019/20, 2022/23, 2023/24) with the season week, holidays
-#            and humidity, and whose COVID prior is the same hazard fitted at each cutoff on the
-#            COVID rises known then; data: the growth of the reports and of NSSP visits, Gaussian
+#            and humidity; for COVID the chain counts the weeks of the current rise or tail and
+#            the chance of the turn depends on that duration, learned from the COVID waves of
+#            the EU/EEA countries (ECDC ERVISS hospital admissions, waves whose peak lies at least
+#            26 weeks before the cutoff); data: the growth of the reports and of NSSP visits, Gaussian
 #            per phase with a holiday shift. Predictive probabilities of each target week at its
 #            cutoff, and the updated (smoothed) probabilities of earlier weeks at later cutoffs
 #            (phase_hidden).
 # Downloads once, into the project root: nssp_vintages_epidata.parquet (Delphi's Epidata, needs
-# external/delphi/library from R/00) and weather_openmeteo.parquet (Open-Meteo, no key; raw
-# responses cached in external/open_meteo/). NREVSS: Delphi's flu auxiliary data
+# external/delphi/library from R/00), weather_openmeteo.parquet (Open-Meteo, no key; raw
+# responses cached in external/open_meteo/) and erviss_covid_admissions.parquet (ECDC ERVISS,
+# the weekly SARS-CoV-2 hospital admissions of the EU/EEA countries, all ages, from 2022 week
+# 25; a snapshot, not versioned). NREVSS: Delphi's flu auxiliary data
 # (external/delphi/aux_data/flusion_data, extracted by R/00).
 # Run from the project root after R/01: [MULTIQT_BASE_MODEL=windowed_seasonal] Rscript
 # R/05_phase_probabilities.R (about 15 minutes). Writes <output_dir>/data/phase_probabilities.rds.
@@ -154,6 +158,17 @@ location city lat lon weight timezone
   num$issue <- num$valid - num$lead
   arrow::write_parquet(num[c("location", "kind", "lead", "valid", "issue", "temperature",
     "humidity")], weather_file)
+}
+# COVID waves of other countries: ECDC ERVISS (EU/EEA), weekly SARS-CoV-2 hospital admissions.
+erviss_file <- "erviss_covid_admissions.parquet"
+if (!file.exists(erviss_file)) {
+  raw <- tempfile(fileext = ".csv")
+  download.file(paste0("https://raw.githubusercontent.com/EU-ECDC/Respiratory_viruses_weekly_data/",
+    "main/data/nonSentinelSeverity.csv"), raw, quiet = TRUE)
+  x <- read.csv(raw)
+  x <- x[x$pathogen == "SARS-CoV-2" & x$indicator == "hospitaladmissions" & x$age == "total", ]
+  arrow::write_parquet(data.frame(country = x$countryname, yearweek = x$yearweek,
+    value = x$value), erviss_file)
 }
 weather_all <- as.data.frame(arrow::read_parquet(weather_file))
 weather_all$location <- as.character(weather_all$location)
@@ -575,6 +590,91 @@ transition <- function(h_peak, h_mid) {
   T
 }
 collapse <- function(a) cbind(rise = a[, 1], over = rowSums(a[, 2:5, drop = FALSE]), tail = a[, 6])
+# COVID prior: rise and tail durations (weeks) of the waves of other countries. A rise lasts
+# from the midpoint between two peaks (find_peaks()) to the peak, a tail from week 5 after a
+# peak to the next midpoint; the hazard by duration d is events / at risk, pooled over d +- 1,
+# kept in [.01, .6] (.3 with fewer than 3 at risk), up to D = 40 weeks.
+eu <- as.data.frame(arrow::read_parquet(erviss_file))
+iso_week_end <- function(yw) {
+  y <- as.integer(substr(yw, 1, 4)); w <- as.integer(substr(yw, 7, 8))
+  jan4 <- as.Date(paste0(y, "-01-04"))
+  jan4 - (as.integer(format(jan4, "%u")) - 1) + 7 * (w - 1) + 6
+}
+eu$date <- iso_week_end(eu$yearweek)
+eu <- eu[order(eu$country, eu$date), ]
+eu_series <- Filter(function(s) nrow(s) >= 100 && median(s$value) >= 5,
+  split(eu[c("date", "value")], eu$country))
+wave_durations <- function(dates, values, known) {
+  pk <- dates[find_peaks(values, 8L, .3, .1, 3L, scale = max(values))$row]
+  pk <- pk[pk <= known]
+  if (length(pk) < 2L) return(NULL)
+  mid <- as.Date(floor((as.numeric(pk[-1]) + as.numeric(pk[-length(pk)])) / 2), origin = "1970-01-01")
+  data.frame(rise = round(as.numeric(pk[-1] - mid) / 7),
+    tail = round(as.numeric(mid - pk[-length(pk)]) / 7) - 4)
+}
+duration_hazard <- function(durations, D = 40L) {
+  durations <- pmin(pmax(durations[is.finite(durations)], 1), D)
+  e <- tabulate(durations, D); r <- rev(cumsum(rev(e)))
+  vapply(seq_len(D), function(d) {
+    k <- max(1, d - 1):min(D, d + 1)
+    if (sum(r[k]) < 3) .3 else min(max(sum(e[k]) / sum(r[k]), .01), .6)
+  }, numeric(1))
+}
+# The COVID chain: states rise_1..rise_D, overshoot 1-4, tail_1..tail_D; rise_d turns to the
+# overshoot with hazard hr[d], tail_d to rise_1 with ht[d]; the last duration state absorbs.
+covid_chain <- function(ser, em, cutoff, disease) {
+  euw <- do.call(rbind, lapply(eu_series, function(s) wave_durations(s$date, s$value, cutoff - 182)))
+  hr <- duration_hazard(euw$rise); ht <- duration_hazard(euw$tail)
+  D <- 40L; S <- 2L * D + 4L
+  iR <- seq_len(D); iO <- D + 1:4; iT <- D + 4L + seq_len(D)
+  step <- function(a) {                         # One week of the chain.
+    out <- numeric(S)
+    out[iR[1]] <- sum(a[iT] * ht)
+    out[iR[-1]] <- a[iR[-D]] * (1 - hr[-D]); out[iR[D]] <- out[iR[D]] + a[iR[D]] * (1 - hr[D])
+    out[iO[1]] <- sum(a[iR] * hr); out[iO[2:4]] <- a[iO[1:3]]
+    out[iT[1]] <- a[iO[4]]
+    out[iT[-1]] <- a[iT[-D]] * (1 - ht[-D]); out[iT[D]] <- out[iT[D]] + a[iT[D]] * (1 - ht[D])
+    out
+  }
+  back <- function(v) {                         # The transpose of `step`.
+    out <- numeric(S)
+    out[iR] <- (1 - hr) * v[c(iR[-1], iR[D])] + hr * v[iO[1]]
+    out[iO[1:3]] <- v[iO[2:4]]; out[iO[4]] <- v[iT[1]]
+    out[iT] <- (1 - ht) * v[c(iT[-1], iT[D])] + ht * v[iR[1]]
+    out
+  }
+  col3 <- function(A) cbind(rise = rowSums(A[, iR, drop = FALSE]),
+    over = rowSums(A[, iO, drop = FALSE]), tail = rowSums(A[, iT, drop = FALSE]))
+  do.call(rbind, lapply(states, function(l) {
+    s <- ser[[l]]
+    w <- s$target_end_date
+    n <- length(w)
+    P3 <- matrix(1, n, 3)
+    for (column in names(em)) {
+      cf <- coef(em[[column]]$fit)
+      M <- outer(rep(1, n), cf[paste0("phase", classes)]) +
+        (cf[["hol_break"]] * s$hol_break + cf[["hol_post"]] * s$hol_post)
+      g <- s[[column]]
+      Dn <- dnorm(g, M, matrix(em[[column]]$sd, n, 3, byrow = TRUE))
+      Dn[!is.finite(g), ] <- 1
+      P3 <- P3 * Dn
+    }
+    L <- cbind(matrix(P3[, 1], n, D), matrix(P3[, 2], n, 4), matrix(P3[, 3], n, D))
+    alpha <- matrix(NA_real_, n, S)
+    a <- rep(1 / S, S) * L[1, ]; alpha[1, ] <- a / sum(a)
+    for (i in 2:n) { a <- step(alpha[i - 1, ]) * L[i, ]; alpha[i, ] <- a / sum(a) }
+    beta <- matrix(1, n, S)
+    for (i in (n - 1):1) { b <- back(L[i + 1, ] * beta[i + 1, ]); beta[i, ] <- b / sum(b) }
+    smooth <- alpha * beta; smooth <- smooth / rowSums(smooth)
+    ahead <- matrix(NA_real_, 6, S); a <- alpha[n, ]
+    for (m in 1:6) { a <- step(a); ahead[m, ] <- a }
+    keep <- w >= cutoff - 7 * 80
+    rbind(data.frame(disease, location = l, cutoff, week = w[keep], kind = "smoothed",
+        col3(smooth[keep, , drop = FALSE])),
+      data.frame(disease, location = l, cutoff, week = w[n] + 7 * (1:6), kind = "ahead",
+        col3(ahead)))
+  }))
+}
 phase_probabilities <- function(disease, cutoff) {
   lag_days <- as.numeric(cutoff - max(known_complete(reports[[paste(disease, states[1])]], cutoff)$target_end_date))
   shift <- revision_shift(disease, cutoff, lag_days)
@@ -592,46 +692,16 @@ phase_probabilities <- function(disease, cutoff) {
   }
   em <- list(growth = emission("growth"), nssp_growth = emission("nssp_growth"))
   em <- Filter(Negate(is.null), em)
-  # COVID: a logistic hazard with holidays and humidity on the rises known then, else constant.
-  if (disease == "covid") {
-    d <- do.call(rbind, lapply(states, function(l) {
-      s <- ser[[l]]
-      s <- s[s$target_end_date <= cutoff - 182, ]
-      if (nrow(s) < 52L) return(NULL)
-      pk <- s$target_end_date[find_peaks(s$value, 8L, .3, .1, 3L, scale = max(s$value))$row]
-      if (length(pk) < 2L) return(NULL)
-      mid <- as.Date(floor((as.numeric(pk[-1]) + as.numeric(pk[-length(pk)])) / 2), origin = "1970-01-01")
-      do.call(rbind, lapply(seq_along(mid), function(j) {
-        wk <- s$target_end_date[s$target_end_date > mid[j] & s$target_end_date <= pk[j + 1]]
-        if (!length(wk)) return(NULL)
-        data.frame(location = l, week = wk, event = as.numeric(wk == pk[j + 1]),
-          tail_weeks = (as.numeric(mid[j]) - as.numeric(pk[j])) / 7 - 5)
-      }))
-    }))
-    h_tail <- if (is.null(d) || !nrow(d)) 1 / 12 else
-      1 / max(mean(unique(d[c("location", "tail_weeks")])$tail_weeks), 2)
-    covid_fit <- NULL
-    if (!is.null(d) && sum(d$event) >= 8L) {
-      d <- cbind(d, holiday_covariates(d$week))
-      d <- cbind(d, do.call(rbind, lapply(seq_len(nrow(d)), function(i)
-        weekly_humidity(d$location[i], d$week[i]))))
-      covid_fit <- tryCatch(suppressWarnings(glm(event ~ hol_break + hol_post + hol_thanks +
-        hum_level + hum_anom, binomial, d)), error = function(e) NULL)
-    }
-    h_rise_const <- if (is.null(d) || !nrow(d)) 1 / 12 else sum(d$event) / nrow(d)
-  }
+  if (disease == "covid") return(covid_chain(ser, em, cutoff, disease))
+  # Flu: the NREVSS hazard of the peak (by season week, holidays, humidity) and the calendar
+  # hazard of the midpoint.
   do.call(rbind, lapply(states, function(l) {
     s <- ser[[l]]
     w <- s$target_end_date
     n <- length(w)
     weeks_all <- c(w, w[n] + 7 * (1:6))
-    h_peak <- if (disease == "flu") flu_peak_hazard_at(l, weeks_all, cutoff) else
-      if (is.null(covid_fit)) rep(h_rise_const, length(weeks_all)) else {
-        nd <- data.frame(holiday_covariates(weeks_all), weekly_humidity(l, weeks_all, cutoff))
-        pmin(pmax(predict(covid_fit, nd, type = "response"), .002), .95)
-      }
-    h_mid <- if (disease == "flu") flu_mid_hazard[season_week(weeks_all) + 1L] else
-      rep(h_tail, length(weeks_all))
+    h_peak <- flu_peak_hazard_at(l, weeks_all, cutoff)
+    h_mid <- flu_mid_hazard[season_week(weeks_all) + 1L]
     T_at <- function(date) { i <- match(date, weeks_all); transition(h_peak[i], h_mid[i]) }
     # Likelihood of week i: report growth and NSSP growth, each Gaussian per phase.
     P3 <- matrix(1, n, 3)
