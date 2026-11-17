@@ -1886,7 +1886,7 @@ The methods below use the preceding data, feedback, tuning and evaluation
 conventions unless stated otherwise.
 
 \paragraph{Methods run.} Since 13 November 2026 every tracker learns at
-the adaptive rate (Section~\ref{sec:learning-rates}), and 21 of the 51
+the adaptive rate (Section~\ref{sec:learning-rates}), and 27 of the 53
 methods stay in the code but are not run (\texttt{paused\_methods} in
 \texttt{R/03\_functions.R}; deleting a name runs the method again), chosen
 from the run of 12 November: the median rebuilds \texttt{studentized},
@@ -1899,19 +1899,49 @@ spread scales; the rate grids with sharing and the outer MultiQT
 \texttt{shared\_common\_outer}; sharing cost 5 to 6 points);
 \texttt{restart\_persistent}, \texttt{restart\_weighted} and the outer
 weekly starts; \texttt{score\_\allowbreak equal};
-\texttt{oracle\_\allowbreak target}; and \texttt{sqrt\_\allowbreak adaptive}. The 29 methods run besides the base are Fixed and
+\texttt{oracle\_\allowbreak target}; and \texttt{sqrt\_\allowbreak adaptive}; since 17
+November also the rate-grid mixtures (\texttt{uniform}, \texttt{weighted},
+\texttt{weighted\_\allowbreak common}, \texttt{power\_\allowbreak weighted\_\allowbreak common},
+\texttt{spread\_\allowbreak weighted\_\allowbreak common}; a single rate does as well,
+Section~\ref{sec:results-weighting}) and the PIT tracker
+(\texttt{studentized\_\allowbreak pit}); their results are those of their last run. The
+25 methods run besides the base are Fixed and
 Leaky MultiQT, both also on the \texttt{log1p} tracker, REF-op and
 \texttt{sqrt\_constant}; the leak chosen online (\texttt{leaky\_\allowbreak select},
 \texttt{leaky\_\allowbreak weighted}); \texttt{studentized\_\allowbreak level\_\allowbreak rms},
-\texttt{studentized\_\allowbreak pit} and the power and spread trackers with their
-learned rate grids and recent starts; \texttt{uniform}, \texttt{weighted},
-\texttt{weighted\_\allowbreak common}, \texttt{restart\_\allowbreak uniform},
+the power and spread trackers with their recent starts;
+\texttt{restart\_\allowbreak uniform},
 \texttt{restart\_\allowbreak recent}, \texttt{restart\_\allowbreak recent\_\allowbreak dual} and
 \texttt{score\_learned}; the sign-flip experts (\texttt{power\_\allowbreak flip},
 \texttt{level\_\allowbreak flip}, \texttt{width\_\allowbreak flip}) and the two-phase trackers
 (\texttt{phase\_power}, \texttt{phase\_oracle}, the latter a hindsight
-benchmark), Section~\ref{sec:two-phase-methods}, and polar MultiQT
-(\texttt{polar}).
+benchmark), Section~\ref{sec:two-phase-methods}; polar MultiQT
+(\texttt{polar}); and, since 17 November, the two methods with the phase from
+outside data (below).
+
+\paragraph{Phase from outside data: \texttt{phase\_angle} and
+\texttt{phase\_hidden}.} Script 05 (\path{R/05_phase_probabilities.R}) computes,
+for the base and the pooled locations, the phase inputs known at each
+cutoff (Section~\ref{sec:sign-flip}, ``Phase probabilities from outside the
+feedback'' and ``Weather, holidays and the hidden-phase model''); it downloads
+once the NSSP visits (\path{nssp_vintages_epidata.parquet}) and the weather
+(\path{weather_openmeteo.parquet}). Both methods use the power scale
+\eqref{eq:scale-power} at the adaptive rate of \texttt{phase\_power}
+(\texttt{phase\_weighted\_multiqt()}):
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item \texttt{phase\_angle}: the angle~\eqref{eq:phase-angle} with the probability
+that the base is too high (reports, base growth, NSSP, holidays, humidity,
+onset) and a slow per-level offset at a tenth of the rate, so that the
+overall coverage keeps its guarantee (Proposition~\ref{prop:phase-weighted});
+the choice for COVID;
+\item \texttt{phase\_hidden}: three free phases~\eqref{eq:three-phase} with the
+hidden-phase model's probabilities, learned with the probabilities as known
+when each report arrives; the choice for flu.
+\end{itemize}
+Both run for both diseases, so that each is compared on the other disease
+as well. Outside the pooled locations they have no inputs and no
+forecasts. Checked: script 05 reproduces the experiments in
+\path{agent/scripts/phase_angle/} exactly.
 
 \subsubsection{Single trackers}
 \label{sec:single-trackers}
