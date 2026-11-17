@@ -809,6 +809,64 @@ and the signed version one correction with a fixed sign per phase,
 $w_t=P_t\cdot c$, with $c=(1,-1,1)$ (flipped only in the overshoot) or
 $c=(1,-1,-1)$ (the angle with $p_t=P_t^{\mathrm{over}}+P_t^{\mathrm{tail}}$).
 
+\begin{proposition}[Phase-weighted coverage]
+\label{prop:phase-weighted}
+Fix a level $\alpha$ and number the learned rows $s=1,\dots,n$ in the
+order they are learned, $C_s=\ind\{y_s\le q_s^\alpha\}$ the coverage of
+the issued forecast by the label learned (an indicator or a corrected
+label, Proposition~\ref{prop:corrected-labels}). Let the correction be
+built from states $z_1,\dots,z_J$ (per level), where learning row $s$
+moves $z_j$ by $\eta\rho_j\,\omega_{s,j}(\alpha-C_s)$, with a rate factor
+$\rho_j>0$ and a weight $\omega_{s,j}\in[-1,1]$ fixed when row $s$ is
+learned. If every state stays bounded, $|z_j|\le B_j$, then
+\begin{equation}
+ \Bigl|\sum_{s=1}^n\omega_{s,j}\,(C_s-\alpha)\Bigr|\le\frac{2B_j}{\eta\rho_j},
+ \qquad j=1,\dots,J,
+ \label{eq:phase-weighted}
+\end{equation}
+for every sequence of counts and weights. In particular:
+\begin{enumerate}[label=(\alph*),leftmargin=*,itemsep=2pt]
+\item free phases ($z_k=u^k$, $\omega_{s,k}=P_s^k\ge0$,
+$\sum_kP_s^k=1$): within every phase, the coverage weighted by the phase
+probabilities, $\sum_sP_s^kC_s/\sum_sP_s^k$, approaches $\alpha$ as
+$\sum_sP_s^k$ grows, and so does the overall coverage (the sum over the
+phases);
+\item the tied angle ($\omega_s=1-2p_s$): only the contrast
+$\sum_s(1-2p_s)(C_s-\alpha)$ is bounded; the overall coverage is not;
+\item the angle with a slow offset ($\omega_{s,1}=1$ at rate $\rho_1$,
+$\omega_{s,2}=1-2p_s$): the overall sum and the contrast are bounded, hence
+both phase sums,
+$\sum_s(1-p_s)(C_s-\alpha)$ and $\sum_sp_s(C_s-\alpha)$, the overall one
+with the larger constant $2B_1/(\eta\rho_1)$;
+\item coordinates $u^k=\sum_jV_{kj}z_j$ with an invertible $V$ and their
+own rates: each phase sum is a linear combination of the $J=K$ bounded
+sums, so every phase keeps its guarantee, with constants that depend on
+the rates.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+The states are not projected, so
+$z_{j,\mathrm{end}}-z_{j,1}=\eta\rho_j\sum_s\omega_{s,j}(\alpha-C_s)$, and
+$|z_j|\le B_j$ gives~\eqref{eq:phase-weighted}. (a) follows with
+$\omega_{s,k}=P_s^k$ and summing over $k$; (b) is the case $J=1$; (c) and
+(d) by writing $P_s^k$ as a combination of the weights of the states:
+$1-p_s=\frac12\bigl(1+(1-2p_s)\bigr)$, $p_s=\frac12\bigl(1-(1-2p_s)\bigr)$,
+and in general $P_s=V^{-\top}(\omega_{s,1},\dots,\omega_{s,K})$ for
+weights $\omega_s=V^\top P_s$.
+\end{proof}
+
+The guarantee holds for the weights used, whatever they are, as long as
+they are fixed when a row is learned: the phase probabilities known at the
+row's cutoff, or the updated (smoothed) probabilities known when its report
+arrives. It becomes coverage within the true phases only insofar as the
+weights approach the phase indicators. It is a guarantee of the
+group-conditional kind~\cite{gibbs-cherian-candes,bastani2022}, with soft,
+data-dependent groups. Bounded states are assumed, as for MultiQT itself; a
+phase whose weights stay near zero is corrected slowly, so the bound can be
+large for it.
+
+
 \paragraph{Phase probabilities from outside the feedback.} Everything is
 known at the cutoff, without hindsight:
 \begin{itemize}[leftmargin=*,itemsep=1pt]
@@ -838,6 +896,41 @@ These methods are experiments in \path{agent/} so far
 (\path{agent/scripts/phase_angle/}: \path{fetch_nssp.R}, \path{signals.R},
 \path{trackers.R}, \path{three_phase.R}); results in
 Section~\ref{sec:results-phase-outside}.
+
+\paragraph{Weather, holidays and the hidden-phase model.} Further inputs
+known at the cutoff, added on 16 November 2026 (\path{signals2.R}):
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item \emph{holidays}: the share of the target week in the winter break
+(22 December to 3 January), the three weeks after it, the week of
+Thanksgiving; the calendar is known in advance;
+\item \emph{humidity}: specific humidity of the state (three large cities,
+weighted by population), its mean over the 14 days before the cutoff, its
+anomaly against 2014--2023 and the change that the 7-day forecast issued at
+the cutoff predicts (Open-Meteo: ERA5 reanalysis, and weather forecasts
+archived as issued since January 2024);
+\item \emph{onset}: if the latest report is at least 1.5 times the minimum of
+the last 20, the share of earlier rises (trough to peak) shorter than the
+weeks from that minimum to the target week;
+\item \emph{the other disease} (its growth, curvature and share of its
+16-week maximum) and \emph{the base's projected growth minus the realized
+growth} of the reports, alone and times the share of the 16-week maximum.
+\end{itemize}
+A \emph{hidden-phase model} replaces the logistic regressions by a filter
+(\path{hidden_phase.R}, \path{hidden_phase2.R}): a hidden Markov chain with
+the states rise, overshoot (four weeks) and tail, which turns from rise to
+overshoot with a weekly hazard and from tail to rise when the midpoint to
+the next peak passes. The prior is the hazard: for flu a discrete-time
+logistic model fitted on WHO/NREVSS laboratory test positivity of the 10
+states (nine with data) from 2014/15 to 2019/20, 2022/23 and 2023/24, with a
+spline in the week of the season, the holidays and the humidity (63 peaks;
+in the filter the humidity is observed up to the cutoff, then forecast for
+a week, then climatological); for COVID the same holiday and humidity
+inputs, fitted at each cutoff on the COVID rises known then. The data are
+the weekly growth of the reports and of NSSP visits, each Gaussian per
+phase with a holiday shift of the mean, learned online. The forward pass
+gives the phase probabilities used to issue; the backward pass gives the
+updated probabilities of earlier weeks, used as weights when their reports
+arrive (Proposition~\ref{prop:phase-weighted} allows both).
 
 \subsection{Revised reports as labels: corrected labels}
 \label{sec:corrected-labels}
@@ -2842,8 +2935,12 @@ set from the probability that the base is too high, beats the base overall
 ($-0.3\%$; COVID $-0.7\%$), the first method with a real-time phase to do
 so. With the true phase, three phases (rise, overshoot, tail) raise the
 ceiling from $-1.9\%$ to $-3.5\%$; online the short flu overshoot is not
-recognized in time. [Section~\ref{sec:results-phase-outside},
-Tables~\ref{tab:phase-signals} to~\ref{tab:three-phase}.]
+recognized in time. With holidays and humidity among the inputs the angle
+gains $2\%$ to $4\%$ on the longer history (the holidays matter most), and a
+hidden-phase model with a prior from eight seasons of flu test positivity comes
+close to the true phase for flu ($-4.5\%$ against $-5.6\%$).
+[Section~\ref{sec:results-phase-outside},
+Tables~\ref{tab:phase-signals} to~\ref{tab:hidden-phase}.]
 \item \textbf{COVID and flu.} COVID waves are broad and symmetric, and the
 base's bias is close to a mirror image around the peak; flu waves are
 sharp, the base is far too low on the rise, too high only for two or three
@@ -4210,6 +4307,118 @@ chosen once, after the failure of the earlier model
 uses NSSP as a predictor; Delphi's Epidata API (V4) stopped receiving NSSP
 data on 22 September 2026, after the evaluation period.
 
+\paragraph{Weather and holidays (16--17 November).} The angle with the bias
+probability, with the inputs of the weather paragraph of
+Section~\ref{sec:sign-flip} added or left out, on both bases
+(\path{angle_variants.R}; the longer-history base evaluates two winters,
+horizons $0$ to $3$):
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{CMU base} & \multicolumn{2}{c}{Longer history}\\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Inputs of the bias probability & COVID & Flu & COVID & Flu\\
+\midrule
+Reports and base only           & 0.3    & $-0.3$ & $-1.1$ & $-1.6$\\
++ holidays, humidity, onset     & 0.5    & $-2.0$ & $-2.6$ & $-2.3$\\
+\quad without the holidays      & 0.6    & $-1.4$ & 0.3    & $-1.8$\\
+\quad without the humidity      & 0.3    & $-0.9$ & $-3.6$ & $-1.9$\\
+\quad without the onset         & 0.3    & $-2.1$ & $-2.8$ & $-2.3$\\
++ holidays only                 & 0.2    & $-0.9$ & $-4.1$ & $-2.3$\\
++ humidity only                 & 0.4    & $-1.4$ & $-0.2$ & $-1.7$\\
+All + the other disease         & $-0.1$ & $-1.1$ & $-3.0$ & $-2.1$\\
+All + projected minus realized growth & 0.2 & $-2.1$ & $-2.2$ & $-2.5$\\
+All + NSSP                      & $-1.2$ & $-2.1$ & $-1.2$ & $-1.1$\\
+\addlinespace
+\texttt{phase\_oracle} (hindsight) & $-1.0$ & $-2.7$ & $-0.3$ & $-5.4$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:angle-inputs}
+\begin{center}\small Table \thetable: The angle with the bias probability
+of each set of inputs: pooled change of the loss versus each base (\%),
+mean over the three designs (\path{agent/outputs/phase_angle/}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{The holidays are the input that carries the gain most
+consistently}: leaving them out costs $0.5$ to $2.9$ points in three of the
+four columns, and with the holidays alone the angle gains $4.1\%$ for COVID
+and $2.3\%$ for flu on the longer history. The humidity helps flu on the
+CMU base; the onset timing adds nothing; the other disease and the
+projected growth change little; NSSP helps COVID on the CMU base only.
+\item \textbf{How stable.} A block bootstrap over the evaluation weeks
+(blocks of 8, 2000 draws; \path{bootstrap_angle.R}) gives, on the longer
+history, $-4.1\%$ (95\% interval $-9.3\%$ to $-0.3\%$, below the base in
+$98\%$ of the draws) for COVID with the holidays and $-2.3\%$ ($95\%$ of the
+draws) for flu; on the CMU base, with one flu winter, the flu gain of
+$2.0\%$ has the interval $-6\%$ to $+6\%$ ($73\%$), and COVID with NSSP
+$89\%$. The gains are spread over the states: on the longer history every
+state gains for flu ($92\%$ of the cases), COVID in $77\%$ of the cases.
+\end{itemize}
+
+\paragraph{The hidden-phase model.} The filter of Section~\ref{sec:sign-flip}
+with the NREVSS prior: version 1 with a calendar hazard and the growth of
+the reports, version 2 with holidays and humidity in the hazard, NSSP as a
+second data stream and the holiday shift.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{CMU base} & \multicolumn{2}{c}{Longer history}\\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Method & COVID & Flu & COVID & Flu\\
+\midrule
+Angle, bias probability with holidays, humidity, onset & 0.5 & $-2.0$ & $-2.6$ & $-2.3$\\
+Hidden v1, three phases (weights as issued)  & 2.1    & 0.0    & & \\
+Hidden v2, three phases (weights as issued)  & 2.2    & $-0.8$ & 0.0    & $-4.2$\\
+Hidden v2, three phases (updated weights)    & 0.5    & $-1.0$ & 3.6    & $-4.5$\\
+Hidden v2, coordinates with their own rates  & $-0.3$ & 1.7    & 14.4   & $-1.9$\\
+Hidden v2, angle + slow offset               & $-0.5$ & 0.8    & 12.9   & $-2.6$\\
+\addlinespace
+Three phases, true phase (hindsight)         & $-2.2$ & $-4.8$ & $-0.9$ & $-5.6$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:hidden-phase}
+\begin{center}\small Table \thetable: The hidden-phase model against the
+logistic angle: pooled change of the loss versus each base (\%), mean over
+the three designs (\path{agent/outputs/phase_angle/hidden_phase2/}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{For flu on the longer history the hidden-phase model with
+three free phases comes close to the true phase}: $-4.5\%$ against $-5.6\%$,
+with $72\%$ less calibration error; it recognizes the overshoot (its
+probability reaches $0.65$ in week 3 after the peak on the CMU base, against
+$0.34$ in version 1) and gets the tail right (weeks 5 to 8: $-3.7\%$, the
+logistic angle $+6.8\%$). On the CMU base, with one flu winter, it gains
+only $1.0\%$.
+\item \textbf{For COVID the hidden-phase model fails on the longer history}
+($+13\%$ to $+14\%$ for the tied forms): its prior has no long history, and
+the angle with the logistic bias probability stays the better choice.
+\item \textbf{The updated weights} help a little for flu ($-4.5\%$ against
+$-4.2\%$), not for COVID; the coordinates with their own rates do not beat
+the free phases.
+\end{itemize}
+A practical choice per disease, so far: flu, the hidden-phase model with
+three free phases; COVID, the angle with the bias probability with the
+holidays (and NSSP on the CMU base). Both are experiments in \path{agent/},
+evaluated on the same weeks their inputs were designed on.
+
+\paragraph{Bias and dispersion in the tree} (\path{multiqt_evaluation_tree_bias.pdf},
+run of 16 November). Pooled over the 10 states, the base's bias is $-0.19$ up to
+the COVID peaks and $+0.17$ after them, $-0.23$ up to the flu peaks and
+$-0.02$ after them (CMU base; longer history $-0.14$ / $+0.08$ and $-0.30$ /
+$-0.04$). The trackers remove most of the base's average bias and width
+error over the season (flu, power scale: bias $-0.07$ to $0.00$, dispersion
+$+0.06$ to $0.00$) but hardly change the bias up to and after the peaks;
+only \texttt{phase\_oracle} reduces it on both sides (COVID after peaks
+$+0.13$ against $+0.17$).
+
 \subsection{Longer history: the \texttt{windowed\_seasonal} base}
 \label{sec:results-longer-history}
 The same workflow on our own \texttt{windowed\_seasonal} forecasts
@@ -4677,6 +4886,17 @@ Sarabeth M. Mathis, Alexander E. Webber, Tom\'as M. Le\'on et al.
 2022--23 Seasons with a New Target Laboratory-Confirmed Influenza
 Hospitalizations}.
 Nature Communications 15:6289, 2024.
+
+\bibitem{gibbs-cherian-candes}
+Isaac Gibbs, John J. Cherian and Emmanuel J. Cand\`es.
+\emph{Conformal Prediction with Conditional Guarantees}.
+Journal of the Royal Statistical Society Series B 87(4):1100--1126, 2025.
+
+\bibitem{bastani2022}
+Osbert Bastani, Varun Gupta, Christopher Jung, Georgy Noarov, Ramya
+Ramalingam and Aaron Roth.
+\emph{Practical Adversarial Multivalid Conformal Prediction}.
+Advances in Neural Information Processing Systems 35, 2022.
 
 \end{thebibliography}
 
