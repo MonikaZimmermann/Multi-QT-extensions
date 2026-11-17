@@ -3,187 +3,175 @@ Drift ratio (1: no drift beyond chance), the 10 largest locations without Florid
 == COVID ==
                              candidate ratio short_horizons less_drift cases
                  Revisions, own target 1.549          1.549       0.87    30
-        Mirror log 1/3, centred, exact 1.608          1.551       0.78    40
-                (1 + b)^0.75 per level 1.609          1.553       0.90    40
+                (1 + b)^0.75 per level 1.608          1.551       0.88    40
                             1 + median 1.609          1.559       0.85    40
-                                 log1p 1.611          1.555       0.82    40
-                     (1 + median)^0.75 1.611          1.556       0.82    40
-            Level RMS of recent errors 1.612          1.568       0.72    40
-                Box-Cox 0.25 on counts 1.613          1.554       0.82    40
-                     Half the base IQR 1.614          1.555       0.80    40
-                       PIT of the base 1.615          1.554       0.88    40
-                            Base width 1.616          1.558       0.90    40
-                      Spread per level 1.617          1.561       0.88    40
-                 asinh, centred, exact 1.618          1.560       0.82    40
-               Revisions, every target 1.619          1.564       0.80    40
-                      (1 + median)^0.5 1.620          1.564       0.88    40
+                                 log1p 1.609          1.555       0.82    40
+                Box-Cox 0.25 on counts 1.611          1.554       0.88    40
+                     (1 + median)^0.75 1.612          1.558       0.80    40
+                     Half the base IQR 1.612          1.554       0.80    40
+            Level RMS of recent errors 1.613          1.567       0.72    40
+                       PIT of the base 1.615          1.555       0.85    40
+                            Base width 1.616          1.560       0.90    40
+        Mirror log 1/3, centred, exact 1.616          1.554       0.85    40
+                 asinh, centred, exact 1.616          1.562       0.85    40
+               Revisions, every target 1.617          1.561       0.82    40
+                      Spread per level 1.619          1.562       0.88    40
                   asinh, window, exact 1.621          1.570       0.82    40
-                           Square root 1.622          1.565       0.92    40
-          asinh, window, at the median 1.623          1.575       0.80    40
-         Median rebuild, recent errors 1.630          1.584       0.62    40
+                           Square root 1.622          1.566       0.92    40
+                      (1 + median)^0.5 1.622          1.566       0.82    40
+          asinh, window, at the median 1.623          1.574       0.80    40
       Box-Cox 0, window, at the median 1.631          1.580       0.78    40
- Mirror log 0.3, window, at the median 1.637          1.583       0.70    40
-       t-PIT 49, window, at the median 1.643          1.585       0.72    40
-                     (1 + median)^0.25 1.644          1.583       0.78    40
-                Box-Cox 0.75 on counts 1.644          1.588       0.80    40
-       t-PIT 25, window, at the median 1.644          1.590       0.68    40
-                      (1 + median)^1.5 1.646          1.585       0.62    40
+         Median rebuild, recent errors 1.632          1.585       0.62    40
+ Mirror log 0.3, window, at the median 1.635          1.582       0.70    40
+                Box-Cox 0.75 on counts 1.644          1.588       0.78    40
+                     (1 + median)^0.25 1.645          1.582       0.78    40
+                      (1 + median)^1.5 1.647          1.585       0.62    40
                               Identity 1.670          1.611       0.00    40
-                        (1 + median)^2 1.674          1.613       0.45    40
-                       (1 + median)^-1 1.743          1.683       0.07    40
+                        (1 + median)^2 1.676          1.613       0.45    40
+                       (1 + median)^-1 1.744          1.684       0.07    40
 
 == Flu ==
                              candidate ratio short_horizons less_drift cases
-                            1 + median 1.513          1.459       0.90    40
-                       PIT of the base 1.516          1.456       0.88    40
-                      Spread per level 1.517          1.458       0.85    40
-                (1 + b)^0.75 per level 1.519          1.455       1.00    40
-                 asinh, centred, exact 1.521          1.461       0.90    40
-                                 log1p 1.521          1.469       0.88    40
-                     (1 + median)^0.75 1.522          1.455       1.00    40
-        Mirror log 1/3, centred, exact 1.525          1.464       0.90    40
-                     Half the base IQR 1.532          1.468       0.82    40
-                Box-Cox 0.25 on counts 1.535          1.468       1.00    40
-                 Revisions, own target 1.554          1.554       1.00    30
-                            Base width 1.583          1.518       0.98    40
+                            1 + median 1.517          1.463       0.90    40
+                       PIT of the base 1.519          1.460       0.88    40
+                      Spread per level 1.520          1.461       0.85    40
+                 asinh, centred, exact 1.522          1.460       0.85    40
+                (1 + b)^0.75 per level 1.522          1.461       1.00    40
+        Mirror log 1/3, centred, exact 1.523          1.460       0.88    40
+                                 log1p 1.524          1.472       0.88    40
+                     (1 + median)^0.75 1.525          1.459       1.00    40
+                     Half the base IQR 1.532          1.467       0.82    40
+                Box-Cox 0.25 on counts 1.538          1.472       1.00    40
+                 Revisions, own target 1.555          1.555       1.00    30
+                            Base width 1.587          1.522       0.98    40
                       (1 + median)^0.5 1.592          1.529       1.00    40
-                           Square root 1.612          1.546       1.00    40
-               Revisions, every target 1.615          1.546       0.98    40
+                           Square root 1.615          1.550       1.00    40
                       (1 + median)^1.5 1.619          1.587       0.75    40
-            Level RMS of recent errors 1.627          1.562       0.92    40
-         Median rebuild, recent errors 1.639          1.571       0.70    40
-                     (1 + median)^0.25 1.678          1.614       0.90    40
-                Box-Cox 0.75 on counts 1.696          1.629       0.85    40
-                        (1 + median)^2 1.697          1.666       0.52    40
-       t-PIT 49, window, at the median 1.697          1.632       0.60    40
-       t-PIT 25, window, at the median 1.699          1.634       0.62    40
-                              Identity 1.748          1.686       0.00    40
-          asinh, window, at the median 1.853          1.789       0.25    40
-                  asinh, window, exact 1.855          1.790       0.17    40
-      Box-Cox 0, window, at the median 1.859          1.800       0.15    40
-                       (1 + median)^-1 1.862          1.806       0.05    40
- Mirror log 0.3, window, at the median 1.867          1.802       0.20    40
+               Revisions, every target 1.619          1.550       0.98    40
+            Level RMS of recent errors 1.631          1.566       0.92    40
+         Median rebuild, recent errors 1.643          1.575       0.70    40
+                     (1 + median)^0.25 1.684          1.622       0.90    40
+                        (1 + median)^2 1.698          1.668       0.52    40
+                Box-Cox 0.75 on counts 1.702          1.634       0.85    40
+                              Identity 1.750          1.689       0.00    40
+          asinh, window, at the median 1.856          1.793       0.25    40
+                  asinh, window, exact 1.858          1.792       0.17    40
+      Box-Cox 0, window, at the median 1.860          1.800       0.15    40
+                       (1 + median)^-1 1.870          1.813       0.00    40
+ Mirror log 0.3, window, at the median 1.872          1.808       0.17    40
 
 Peak-aligned drift, mean |coverage - alpha| over weeks -7 to 8 and the levels:
  disease            candidate drift.hindsight constant drift.running quantile
-   covid           base_width                    0.147                  0.157
+   covid           base_width                    0.146                  0.157
      flu           base_width                    0.166                  0.192
-   covid            boxcox_25                    0.146                  0.156
+   covid            boxcox_25                    0.145                  0.156
      flu            boxcox_25                    0.175                  0.200
-   covid            boxcox_75                    0.143                  0.169
+   covid            boxcox_75                    0.142                  0.169
      flu            boxcox_75                    0.178                  0.191
-   covid        centred_asinh                    0.148                  0.158
+   covid        centred_asinh                    0.147                  0.158
      flu        centred_asinh                    0.178                  0.202
-   covid         centred_mlog                    0.149                  0.157
+   covid         centred_mlog                    0.148                  0.157
      flu         centred_mlog                    0.178                  0.202
-   covid             half_iqr                    0.149                  0.156
+   covid             half_iqr                    0.148                  0.156
      flu             half_iqr                    0.177                  0.201
-   covid             identity                    0.142                  0.170
+   covid             identity                    0.141                  0.170
      flu             identity                    0.181                  0.190
-   covid            level_rms                    0.139                  0.148
+   covid            level_rms                    0.138                  0.148
      flu            level_rms                    0.192                  0.210
-   covid                log1p                    0.143                  0.147
+   covid                log1p                    0.142                  0.147
      flu                log1p                    0.195                  0.218
-   covid           median_rms                    0.158                  0.164
-     flu           median_rms                    0.225                  0.236
-   covid                  pit                    0.146                  0.160
+   covid           median_rms                    0.157                  0.164
+     flu           median_rms                    0.226                  0.236
+   covid                  pit                    0.145                  0.160
      flu                  pit                    0.181                  0.207
-   covid            power_100                    0.140                  0.143
+   covid            power_100                    0.139                  0.143
      flu            power_100                    0.193                  0.214
-   covid            power_150                    0.124                  0.132
+   covid            power_150                    0.123                  0.132
      flu            power_150                    0.201                  0.218
-   covid            power_200                    0.115                  0.127
+   covid            power_200                    0.114                  0.127
      flu            power_200                    0.193                  0.209
    covid             power_25                    0.143                  0.170
      flu             power_25                    0.177                  0.190
-   covid             power_50                    0.147                  0.163
+   covid             power_50                    0.146                  0.163
      flu             power_50                    0.174                  0.192
-   covid             power_75                    0.146                  0.153
-     flu             power_75                    0.176                  0.200
-   covid       power_level_75                    0.146                  0.158
-     flu       power_level_75                    0.176                  0.202
+   covid             power_75                    0.145                  0.153
+     flu             power_75                    0.177                  0.200
+   covid       power_level_75                    0.145                  0.158
+     flu       power_level_75                    0.177                  0.202
    covid           power_m100                    0.138                  0.162
      flu           power_m100                    0.185                  0.190
    covid     revisions_cutoff                    0.139                  0.151
-     flu     revisions_cutoff                    0.172                  0.201
+     flu     revisions_cutoff                    0.173                  0.201
    covid     revisions_target                    0.139                  0.149
      flu     revisions_target                    0.163                  0.188
-   covid               spread                    0.149                  0.157
-     flu               spread                    0.178                  0.203
-   covid                 sqrt                    0.146                  0.165
+   covid               spread                    0.148                  0.157
+     flu               spread                    0.179                  0.203
+   covid                 sqrt                    0.145                  0.165
      flu                 sqrt                    0.174                  0.193
-   covid              tpit_25                    0.142                  0.145
-     flu              tpit_25                    0.154                  0.186
-   covid              tpit_49                    0.142                  0.145
-     flu              tpit_49                    0.154                  0.186
-   covid         window_asinh                    0.151                  0.156
+   covid         window_asinh                    0.150                  0.156
      flu         window_asinh                    0.179                  0.195
-   covid  window_asinh_median                    0.144                  0.143
+   covid  window_asinh_median                    0.143                  0.143
      flu  window_asinh_median                    0.180                  0.191
-   covid window_boxcox_median                    0.145                  0.144
+   covid window_boxcox_median                    0.144                  0.144
      flu window_boxcox_median                    0.180                  0.190
-   covid   window_mlog_median                    0.146                  0.144
+   covid   window_mlog_median                    0.145                  0.144
      flu   window_mlog_median                    0.180                  0.190
 
 Up to and after the peak: share of cases and levels with a change of sign of the score's alpha-quantile, and the mean gap (in units of the median |score|):
  disease            candidate flip   gap
-   covid           median_rms 0.80  0.81
-   covid     revisions_target 0.67  0.65
-   covid           base_width 0.65  1.13
-   covid            boxcox_25 0.65  0.92
-   covid            boxcox_75 0.65  1.24
-   covid        centred_asinh 0.65  0.93
-   covid         centred_mlog 0.65  0.96
-   covid             half_iqr 0.65  1.05
-   covid             identity 0.65  1.42
-   covid            level_rms 0.65  0.90
-   covid                log1p 0.65  0.80
-   covid                  pit 0.65  0.89
-   covid            power_100 0.65  0.87
-   covid            power_150 0.65  0.60
-   covid            power_200 0.65  0.46
-   covid             power_25 0.65  1.36
-   covid             power_50 0.65  1.21
-   covid             power_75 0.65  1.05
-   covid       power_level_75 0.65  1.09
-   covid           power_m100 0.65 -3.84
-   covid     revisions_cutoff 0.65  0.79
-   covid               spread 0.65  0.98
-   covid                 sqrt 0.65  1.07
-   covid              tpit_25 0.65  1.13
-   covid              tpit_49 0.65  1.11
-   covid         window_asinh 0.65  0.93
-   covid  window_asinh_median 0.65  1.07
-   covid window_boxcox_median 0.65  1.13
-   covid   window_mlog_median 0.65  1.19
-     flu     revisions_target 0.38  2.67
-     flu           base_width 0.34  1.98
+   covid           median_rms 0.80  0.52
+   covid     revisions_target 0.67  0.49
+   covid           base_width 0.66  1.10
+   covid            boxcox_25 0.66  0.89
+   covid            boxcox_75 0.66  1.17
+   covid        centred_asinh 0.66  0.92
+   covid         centred_mlog 0.66  0.95
+   covid             half_iqr 0.66  1.04
+   covid             identity 0.66  1.30
+   covid            level_rms 0.66  0.59
+   covid                log1p 0.66  0.77
+   covid                  pit 0.66  0.88
+   covid            power_100 0.66  0.86
+   covid            power_150 0.66  0.60
+   covid            power_200 0.66  0.46
+   covid             power_25 0.66  1.30
+   covid             power_50 0.66  1.18
+   covid             power_75 0.66  1.03
+   covid       power_level_75 0.66  1.06
+   covid           power_m100 0.66 -8.28
+   covid     revisions_cutoff 0.66  0.63
+   covid               spread 0.66  0.97
+   covid                 sqrt 0.66  1.02
+   covid         window_asinh 0.66  0.90
+   covid  window_asinh_median 0.66  1.06
+   covid window_boxcox_median 0.66  1.12
+   covid   window_mlog_median 0.66  1.18
+     flu     revisions_target 0.38  2.66
+     flu           median_rms 0.34  5.52
+     flu           base_width 0.34  1.97
      flu            boxcox_25 0.34  1.50
-     flu            boxcox_75 0.34  3.56
+     flu            boxcox_75 0.34  3.55
      flu        centred_asinh 0.34  0.91
      flu         centred_mlog 0.34  1.04
-     flu             half_iqr 0.34  1.40
-     flu             identity 0.34  6.09
-     flu            level_rms 0.34  5.45
+     flu             half_iqr 0.34  1.39
+     flu             identity 0.34  6.07
+     flu            level_rms 0.34  5.48
      flu                log1p 0.34  1.07
-     flu           median_rms 0.34  5.51
      flu                  pit 0.34  0.90
      flu            power_100 0.34  1.82
      flu            power_150 0.34  1.09
      flu            power_200 0.34  0.84
-     flu             power_25 0.34  4.39
-     flu             power_50 0.34  3.30
+     flu             power_25 0.34  4.38
+     flu             power_50 0.34  3.29
      flu             power_75 0.34  2.46
      flu       power_level_75 0.34  2.66
-     flu           power_m100 0.34 31.58
+     flu           power_m100 0.34 31.33
      flu     revisions_cutoff 0.34  3.22
      flu               spread 0.34  1.39
-     flu                 sqrt 0.34  2.16
-     flu              tpit_25 0.34  6.77
-     flu              tpit_49 0.34  6.56
-     flu         window_asinh 0.34  2.64
-     flu  window_asinh_median 0.34  4.64
-     flu window_boxcox_median 0.34  4.95
+     flu                 sqrt 0.34  2.15
+     flu         window_asinh 0.34  2.63
+     flu  window_asinh_median 0.34  4.62
+     flu window_boxcox_median 0.34  4.94
      flu   window_mlog_median 0.34  5.83
 
 all past scores: pooled change versus the base (%):
@@ -213,8 +201,6 @@ all past scores: pooled change versus the base (%):
    covid delay 0   window_mlog_median        1.5    -16.5        27.4      52.3          9.9       44.6
    covid delay 0             identity       -2.4    -14.1        29.2      77.7         13.0      154.6
    covid delay 0            level_rms        7.3     -9.0        31.3      57.3         13.3       39.2
-   covid delay 0              tpit_49       18.7      0.8        38.8      64.4         17.5       60.5
-   covid delay 0              tpit_25       19.1      1.5        39.1      64.3         17.7       60.5
    covid delay 0           median_rms       17.6     -3.2        53.6      60.9         28.1       28.2
    covid delay 0           power_m100        9.3    -16.8        54.2      70.5         74.2      188.6
    covid delay 1            power_150       -7.5     -9.2        -4.3      26.6         -6.8      -25.7
@@ -242,8 +228,6 @@ all past scores: pooled change versus the base (%):
    covid delay 1             identity       -0.7    -11.4        30.8      78.4         12.2      123.6
    covid delay 1   window_mlog_median        4.9    -15.0        33.5      57.3         13.2       37.6
    covid delay 1            level_rms       12.3     -5.7        30.1      52.4         14.3       22.5
-   covid delay 1              tpit_49       44.5     11.1        35.0      49.9         23.2       35.3
-   covid delay 1              tpit_25       44.7     11.2        35.6      50.0         23.4       35.6
    covid delay 1           median_rms       25.3     -5.6        53.2      61.2         30.5       10.0
    covid delay 1           power_m100       12.4    -15.8        59.9      72.9         72.3      155.5
      flu delay 0     revisions_target       11.4      0.5       -10.5      -8.0         -3.4      -49.2
@@ -269,8 +253,6 @@ all past scores: pooled change versus the base (%):
      flu delay 0  window_asinh_median       10.7    -14.1        -6.1      -2.3          7.4      -55.4
      flu delay 0 window_boxcox_median        9.4    -15.0        -5.7      -2.1          8.0      -55.5
      flu delay 0   window_mlog_median        8.1    -18.8        -4.5      -0.9          9.1      -55.0
-     flu delay 0              tpit_49       37.8     14.6        -7.8     -16.5         11.6      -50.9
-     flu delay 0              tpit_25       38.1     15.3        -7.7     -16.6         11.7      -50.9
      flu delay 0            power_150       84.6     96.1       -19.0     -16.7         14.1      -54.0
      flu delay 0           median_rms       76.9     41.4        -5.3       6.3         27.4      -59.8
      flu delay 0            power_200      136.8    116.3       -20.8     -27.7         28.6      -54.3
@@ -298,8 +280,6 @@ all past scores: pooled change versus the base (%):
      flu delay 1  window_asinh_median       10.7    -13.3        -5.2      -1.4         11.0      -62.5
      flu delay 1 window_boxcox_median        9.5    -14.0        -4.9      -1.5         11.8      -62.7
      flu delay 1   window_mlog_median        8.1    -20.4        -3.7      -0.6         13.2      -62.1
-     flu delay 1              tpit_49       37.1      9.7        -3.8     -15.3         15.9      -58.1
-     flu delay 1              tpit_25       37.5     10.4        -3.7     -15.3         16.1      -58.1
      flu delay 1            power_150       94.5    115.0       -20.4     -16.8         16.4      -60.6
      flu delay 1            power_200      156.5    133.9       -23.7     -29.1         32.8      -59.3
      flu delay 1           power_m100        0.6     -8.3        -1.5      -6.8         39.8      -35.9
@@ -332,8 +312,6 @@ last 26 scores: pooled change versus the base (%):
    covid delay 0   window_mlog_median        4.9     -8.7        28.0      56.9         12.2       53.5
    covid delay 0     revisions_target        4.2     -8.5        22.4      45.9         13.6       60.4
    covid delay 0            level_rms       13.6      2.5        32.1      63.0         16.3       35.2
-   covid delay 0              tpit_49       17.9      1.1        39.1      68.3         18.6       58.3
-   covid delay 0              tpit_25       18.4      1.7        39.5      68.4         18.9       59.1
    covid delay 0           median_rms       32.9      4.6        60.7      72.8         40.0       56.7
    covid delay 0           power_m100       12.8    -13.4        44.3      58.8         52.2      126.5
    covid delay 1            power_150        7.3     11.8         3.5      52.2         -0.1      -26.5
@@ -361,8 +339,6 @@ last 26 scores: pooled change versus the base (%):
    covid delay 1         window_asinh        6.3     -7.5        31.7      77.2         12.5       21.3
    covid delay 1   window_mlog_median        9.6     -2.9        33.1      59.6         14.5       26.9
    covid delay 1            level_rms       22.3     10.6        30.5      56.9         18.1        4.6
-   covid delay 1              tpit_49       40.0     12.3        35.4      53.9         23.9       10.3
-   covid delay 1              tpit_25       40.7     13.4        36.0      54.2         24.2       10.9
    covid delay 1           median_rms       40.9      5.4        58.4      72.3         41.5       24.5
    covid delay 1           power_m100       16.3    -12.6        50.5      62.2         52.0       81.5
      flu delay 0     revisions_cutoff       14.9      0.0       -12.4      -8.8         -2.9      -47.1
@@ -387,8 +363,6 @@ last 26 scores: pooled change versus the base (%):
      flu delay 0         window_asinh       16.6     -8.2        -2.8       1.9          9.1      -54.1
      flu delay 0  window_asinh_median       12.4    -11.5        -5.0      -1.0         11.0      -55.5
      flu delay 0 window_boxcox_median       10.7    -14.3        -4.7      -1.1         11.9      -55.5
-     flu delay 0              tpit_49       31.4      7.4        -4.5      -6.2         12.9      -51.8
-     flu delay 0              tpit_25       31.8      7.6        -4.4      -6.1         13.1      -51.7
      flu delay 0   window_mlog_median        8.9    -18.9        -3.7      -0.3         14.6      -53.9
      flu delay 0            power_150      100.9    110.8       -14.1     -13.3         21.9      -48.4
      flu delay 0            power_200      149.2    144.9       -17.9     -28.1         34.3      -53.3
@@ -415,8 +389,6 @@ last 26 scores: pooled change versus the base (%):
      flu delay 1                log1p       47.1     75.8        -9.2      -1.2          9.0      -59.1
      flu delay 1         window_asinh       14.8     -6.0         0.0       3.8         13.4      -56.5
      flu delay 1  window_asinh_median       10.9     -8.5        -4.1      -0.1         15.6      -61.9
-     flu delay 1              tpit_49       30.9      6.8        -2.4      -8.3         16.9      -63.3
-     flu delay 1              tpit_25       31.2      7.0        -2.4      -8.3         17.0      -63.3
      flu delay 1 window_boxcox_median        9.8    -11.7        -4.0      -0.3         17.3      -61.6
      flu delay 1   window_mlog_median        8.6    -17.4        -3.1       0.3         21.6      -60.7
      flu delay 1            power_150      117.9    143.5       -17.2     -16.5         25.3      -60.7
@@ -449,9 +421,7 @@ MultiQT: pooled change versus the base (%):
    covid delay 0   window_mlog_median        6.8     -2.8        12.1      31.4          8.8       20.8
    covid delay 0            level_rms        4.6     -9.5        19.8      33.7          9.8       13.2
    covid delay 0             identity        6.7     -7.0        17.8      42.0         10.7       59.5
-   covid delay 0              tpit_49       16.9     -4.8        18.8      38.9         14.5       29.1
    covid delay 0     revisions_cutoff        7.7     -5.7        23.2      39.0         15.2       37.1
-   covid delay 0              tpit_25       17.5     -6.2        19.5      39.9         15.4       30.3
    covid delay 0     revisions_target        7.5     -2.8        23.3      35.4         17.2       55.8
    covid delay 0           median_rms        8.9      0.9        41.3      52.0         21.8       17.3
    covid delay 0           power_m100       10.2    -13.2        45.3      33.4        112.7       54.0
@@ -481,8 +451,6 @@ MultiQT: pooled change versus the base (%):
    covid delay 1     revisions_cutoff        9.5      0.1        21.6      34.6         13.1        8.4
    covid delay 1     revisions_target        9.6      4.2        21.7      31.1         14.3       19.2
    covid delay 1           median_rms       13.2      0.2        39.7      51.0         22.2       -6.0
-   covid delay 1              tpit_49       46.3      7.5        18.4      32.3         24.5       -3.3
-   covid delay 1              tpit_25       48.1      6.7        18.6      32.5         25.8       -2.7
    covid delay 1           power_m100       15.9    -11.4        51.9      32.0        127.0       47.7
      flu delay 0     revisions_target       16.8      2.8       -10.7      -8.9         -1.9      -48.0
      flu delay 0                 sqrt        3.3    -18.9        -5.4      -1.5         -1.9      -48.2
@@ -507,8 +475,6 @@ MultiQT: pooled change versus the base (%):
      flu delay 0 window_boxcox_median       27.8      3.2        -6.9      -2.6         11.9      -52.3
      flu delay 0   window_mlog_median       16.0     -6.5        -4.7      -1.0         11.9      -49.9
      flu delay 0  window_asinh_median       35.0      6.4        -7.7      -3.5         12.6      -51.5
-     flu delay 0              tpit_25       68.4      9.8        -4.2     -27.6         22.3      -46.2
-     flu delay 0              tpit_49       68.8     11.3        -4.0     -27.6         22.6      -46.0
      flu delay 0            power_150      126.9     76.7       -20.9     -24.7         25.0      -49.2
      flu delay 0           median_rms       55.3     35.5         9.8      31.8         28.0      -35.8
      flu delay 0            power_200      185.9     83.7       -23.6     -38.1         40.6      -45.7
@@ -537,8 +503,6 @@ MultiQT: pooled change versus the base (%):
      flu delay 1  window_asinh_median       35.5     18.3        -6.7      -2.9         17.7      -62.5
      flu delay 1   window_mlog_median       16.0     -1.5        -4.0      -0.7         18.1      -58.0
      flu delay 1            power_150      148.8    107.0       -20.7     -25.8         31.8      -59.5
-     flu delay 1              tpit_49       87.0     29.1         0.8     -18.1         33.0      -54.0
-     flu delay 1              tpit_25       86.7     30.6         1.0     -18.2         33.2      -53.7
      flu delay 1           median_rms       84.0     59.2        16.7      34.4         47.1      -45.0
      flu delay 1            power_200      236.4    114.3       -22.6     -37.0         56.2      -54.3
      flu delay 1           power_m100        7.1    -14.8        19.3     -19.1        530.2      -28.1
@@ -569,8 +533,6 @@ same phase (hindsight): pooled change versus the base (%):
    covid delay 0     revisions_cutoff        7.0    -15.4         2.2      -1.7          9.9       62.7
    covid delay 0     revisions_target       11.2    -17.6         1.4      -5.2         11.2       76.3
    covid delay 0            level_rms        9.7    -13.5        13.8       0.9         12.4       39.3
-   covid delay 0              tpit_49       42.9     24.9         4.5       1.5         15.5       60.2
-   covid delay 0              tpit_25       44.0     25.8         4.6       1.4         15.8       60.4
    covid delay 0             identity       11.4     18.2         4.1      17.5         18.2      161.8
    covid delay 0           median_rms       19.0     15.3        38.5       6.9         27.8       40.4
    covid delay 0           power_m100       36.9     19.7        19.1       3.0        144.0      166.6
@@ -600,8 +562,6 @@ same phase (hindsight): pooled change versus the base (%):
    covid delay 1            level_rms       12.4    -15.8         9.2      -5.7         11.9       17.8
    covid delay 1             identity       16.0     20.8         3.3      16.9         18.8      137.6
    covid delay 1           median_rms       22.8     10.8        32.3       2.3         26.3       17.7
-   covid delay 1              tpit_49      100.6     45.6         3.0      -0.4         30.1       35.0
-   covid delay 1              tpit_25      100.9     45.3         2.9      -0.3         30.2       35.2
    covid delay 1           power_m100       47.5     18.5        15.7      -1.9        148.7      135.1
      flu delay 0            power_100        5.7     -1.4       -27.5     -31.8        -14.3      -40.3
      flu delay 0                log1p        6.3      4.6       -27.1     -32.3        -13.9      -39.9
@@ -628,8 +588,6 @@ same phase (hindsight): pooled change versus the base (%):
      flu delay 0             identity       -2.1    -15.2       -10.2     -15.1          0.3      -43.9
      flu delay 0   window_mlog_median       -2.8    -19.3       -15.7     -15.8          0.7      -43.7
      flu delay 0           median_rms       11.8     -2.6         3.8     -36.3         11.9      -56.3
-     flu delay 0              tpit_49        2.7     -8.3         9.7     -52.7         23.7      -51.6
-     flu delay 0              tpit_25        2.8     -7.9         9.9     -52.8         23.9      -51.5
      flu delay 0            power_200       15.6     10.0        36.6     -60.7         29.2      -50.2
      flu delay 0           power_m100       -0.4     -7.5         1.3     -16.3         77.7      -54.3
      flu delay 1            power_100        7.3      0.1       -29.5     -32.3        -14.9      -49.8
@@ -658,6 +616,4 @@ same phase (hindsight): pooled change versus the base (%):
      flu delay 1   window_mlog_median       -2.6    -17.9       -14.0     -15.7          8.8      -58.4
      flu delay 1           median_rms       15.2     -1.6        -1.2     -27.7         14.1      -64.4
      flu delay 1            power_200       17.0      9.0        32.1     -60.3         27.0      -56.7
-     flu delay 1              tpit_49        2.5    -15.8         7.6     -37.2         28.4      -60.0
-     flu delay 1              tpit_25        2.6    -15.5         8.2     -37.2         28.9      -60.1
      flu delay 1           power_m100       -0.6     -7.9         2.0     -18.7         96.2      -62.3
