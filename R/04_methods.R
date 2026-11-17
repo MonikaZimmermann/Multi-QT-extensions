@@ -632,7 +632,7 @@ run_results <- function(runs, run_params) list(
     constant_sigma = run$constant_sigma,
     base_sigma_levels = paste(run_params$median_base_levels, collapse = "-"),
     median_start = run_params$median_start)))),
-  expert_grid = do.call(rbind, lapply(runs, function(run)
+  expert_grid = do.call(rbind, lapply(runs, function(run) if (!is.null(run$rate_experts))
     with_case(run, run$rate_experts$experts))),
   restart_experts = do.call(rbind, lapply(runs, function(run) with_case(run,
     data.frame(run$restart_experts$experts, birth_week = run$restart_experts$birth_week)))))
@@ -700,7 +700,9 @@ write_result(results$scores, "summary_scores.csv")                # The plotted 
 write_result(all_scores, "summary_scores_all_locations.csv")    # Every disease of score_diseases.
 write_result(results$scores_by_level, "summary_scores_by_level.csv")
 write_result(results$scales, "scales.csv")
-write_result(results$expert_grid, "expert_grid.csv")
+# The rate grid only when a rate-grid mixture runs (none since 17 November: paused_methods).
+if (is.null(results$expert_grid)) unlink(file.path(result_dir, "expert_grid.csv")) else
+  write_result(results$expert_grid, "expert_grid.csv")
 write_result(results$restart_experts, "restart_experts.csv")
 
 # 8. CALIBRATION ERROR AND QUANTILE LOSS ON MATCHED WINDOWS ----------
