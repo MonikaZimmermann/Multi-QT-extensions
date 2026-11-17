@@ -23,7 +23,8 @@ transform <- settings$transform
 tradeoff_feedback <- settings$feedback_designs
 # Diseases plotted and scored for every location, horizon and feedback design.
 score_diseases <- c("covid", "flu")
-cores <- max(1L, parallel::detectCores() - 2L)
+# MULTIQT_CORES caps the cores, e.g. on a shared server; default all but two.
+cores <- as.integer(Sys.getenv("MULTIQT_CORES", max(1L, parallel::detectCores() - 2L)))
 plot_levels <- (1:9) / 10
 phases <- c("overall", "before", "after")
 prepared <- read_prepared(settings)           # The base model's prepared data and output folder.

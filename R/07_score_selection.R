@@ -30,7 +30,8 @@ permutations <- 30L                       # Permuted orders for its noise.
 min_scores <- 5L                          # Running quantile: the base until 5 scores exist.
 recent_scores <- 26L                      # Its window variant: the last 26 scores only.
 weeks_relative <- -7:8                    # Peak-aligned coverage.
-cores <- max(1L, parallel::detectCores() - 2L)
+# MULTIQT_CORES caps the cores, e.g. on a shared server; default all but two.
+cores <- as.integer(Sys.getenv("MULTIQT_CORES", max(1L, parallel::detectCores() - 2L)))
 result_dir <- file.path(settings$output_dir, "results", "score_selection")
 figure_dir <- file.path(settings$output_dir, "pdf")
 dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)

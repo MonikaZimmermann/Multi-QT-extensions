@@ -32,7 +32,7 @@ prepared <- read_prepared(settings)
 params <- method_parameters()
 diseases <- c("covid", "flu")
 states <- settings$pooled_locations
-cores <- 10L
+cores <- as.integer(Sys.getenv("MULTIQT_CORES", 10L))
 incomplete <- as.Date(c("2024-05-04", "2024-11-02"))   # R/01: incomplete reporting.
 clamp <- function(p, lo = .02) pmin(pmax(p, lo), 1 - lo)
 classes <- c("rise", "over", "tail")

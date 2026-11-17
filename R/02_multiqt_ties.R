@@ -19,7 +19,8 @@ design_names <- with(designs, ifelse(revisions, "re-run", paste("delay", delay))
 design_files <- gsub("[ -]", "", design_names)          # File names: "delay0", "rerun".
 design_of <- function(rows) ifelse(rows$feedback_revisions, "re-run",
   paste("delay", rows$feedback_delay))
-cores <- max(1L, parallel::detectCores() - 2L)
+# MULTIQT_CORES caps the cores, e.g. on a shared server; default all but two.
+cores <- as.integer(Sys.getenv("MULTIQT_CORES", max(1L, parallel::detectCores() - 2L)))
 expert_multipliers <- settings$expert_multipliers
 multiplier_min <- min(expert_multipliers[expert_multipliers > 0])
 multiplier_max <- max(expert_multipliers)
