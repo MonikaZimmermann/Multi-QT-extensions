@@ -758,6 +758,87 @@ give. A probability from the forecasts themselves (the base's own trend
 over the horizons of one cutoff) would not lag; it was tested and does not
 predict the sign (Section~\ref{sec:results-phase}).
 
+\paragraph{One family.} The sign-flip experts, polar MultiQT and the
+two-phase tracker all issue
+\begin{equation}
+ q_t^\alpha=b_t^\alpha+\sigma_t\sum_k w_{t,k}\,u_t^{k,\alpha}
+ \label{eq:phase-family}
+\end{equation}
+(projected onto $\K$): a few corrections $u^k$ learned by MultiQT, and
+weights $w_t$ that choose and sign them. They differ only in the number
+of corrections and in where the weights come from: the sign-flip experts
+have one correction and $w_t$ the weight of the tracker minus that of its
+mirror, learned from the delayed quantile losses; polar MultiQT one
+correction and $w_t=\cos\varphi_t$, learned from the coverage errors; the
+two-phase tracker two corrections and $w_t=(1-p_t,p_t)$. A circle or a
+sphere of directions only parametrizes $w_t$: the square roots of the
+probabilities of $K$ phases lie on the unit sphere in $\R^K$. What the
+weights need is information on the phase at the cutoff, from outside the
+feedback.
+
+\paragraph{The angle from a phase probability.} Polar MultiQT with the
+angle set from a probability $p_t$ known at the cutoff instead of learned,
+$\cos\varphi_t=1-2p_t$:
+\begin{equation}
+ q_t^\alpha=b_t^\alpha+\sigma_t(1-2p_t)\,u_t^\alpha,\qquad
+ u^\alpha\leftarrow u^\alpha+\eta_t(1-2p_s)\bigl(\alpha-\cov_s^\alpha\bigr)
+ \label{eq:phase-angle}
+\end{equation}
+for each row $s$ learned at week $t$, the subgradient step of the
+studentized quantile loss in $u$ (power scale, adaptive rate, as
+\texttt{phase\_power}). It is the two-phase tracker with the decline
+correction tied to minus the rise correction: both phases train one
+correction, and at $p_t=\frac12$ the forecast is the base and $u$ does not
+learn. A variant adds a slow per-level offset $c$ below the angle,
+$q_t^\alpha=b_t^\alpha+\sigma_t\bigl(c_t^\alpha+(1-2p_t)u_t^\alpha\bigr)$,
+learned at a tenth of the rate, as REF-op's slow term
+(Section~\ref{sec:reference-benchmarks}): it keeps a correction of one sign
+when $p_t$ says nothing.
+
+\paragraph{Three phases.} Flu needs more than two phases
+(Section~\ref{sec:results-flu-covid}). With probabilities
+$P_t=(P_t^{\mathrm{rise}},P_t^{\mathrm{over}},P_t^{\mathrm{tail}})$ of the
+rise (weeks up to the nearest peak), the overshoot (weeks 1 to 4 after it)
+and the tail (week 5 on), the free version learns one correction per phase,
+\begin{equation}
+ q_t^\alpha=b_t^\alpha+\sigma_t\sum_{k}P_t^k u_t^{k,\alpha},\qquad
+ u^{k,\alpha}\leftarrow u^{k,\alpha}+\eta_tP_s^k\bigl(\alpha-\cov_s^\alpha\bigr),
+ \label{eq:three-phase}
+\end{equation}
+and the signed version one correction with a fixed sign per phase,
+$w_t=P_t\cdot c$, with $c=(1,-1,1)$ (flipped only in the overshoot) or
+$c=(1,-1,-1)$ (the angle with $p_t=P_t^{\mathrm{over}}+P_t^{\mathrm{tail}}$).
+
+\paragraph{Phase probabilities from outside the feedback.} Everything is
+known at the cutoff, without hindsight:
+\begin{itemize}[leftmargin=*,itemsep=1pt]
+\item a \emph{seasonal timing prior}: the share of earlier years in which
+the same calendar week ($\pm1$) lay after its nearest peak (peaks of the
+reports known at the cutoff, \texttt{find\_peaks()}, weeks at least 26
+weeks old), pooled over the 10 states;
+\item \emph{online logistic regressions} per disease, pooled over the
+states and horizons and refitted every week on the rows labelled by then
+(the report one week after the first): label ``the count falls below the
+week before'' (falling) or ``the report falls below the base median''
+(bias). Inputs: the seasonal prior; the growth and curvature of the latest
+reports, corrected by the median revision at their age (as the corrected
+labels, Section~\ref{sec:corrected-labels}); the base's projected growth
+(median at $h=3$ against $h=0$); the horizon; and the share of
+emergency-department visits with COVID or influenza (NSSP, every version
+from Delphi's Epidata API, published at least six days before the
+cutoff): its growth, curvature and share of its maximum over 26 weeks;
+\item for three phases, a \emph{multinomial logistic regression} with the
+same inputs, the latest report as a share of the maximum of the last 16
+and the weeks since that maximum, labelled by the peaks that the reports
+known at the cutoff confirm (at least 8 weeks old), rows at least 12
+weeks old; before its first fit, $(1-p,\,p/2,\,p/2)$ with $p$ the falling
+probability.
+\end{itemize}
+These methods are experiments in \path{agent/} so far
+(\path{agent/scripts/phase_angle/}: \path{fetch_nssp.R}, \path{signals.R},
+\path{trackers.R}, \path{three_phase.R}); results in
+Section~\ref{sec:results-phase-outside}.
+
 \subsection{Revised reports as labels: corrected labels}
 \label{sec:corrected-labels}
 The update \eqref{eq:standard-update} uses the outcome only through the
@@ -1124,11 +1205,17 @@ changing the target to PIT or highest-density-region calibration would
 require a separate formulation.
 
 \paragraph{Open question: a real-time phase.} Knowing the phase is worth
-about 3 points of loss (\texttt{phase\_oracle}), but neither the base's
-forecasts nor the reports known at the cutoff predict the sign of the bias
-(Section~\ref{sec:results-phase}). Candidates: leading data streams
-(emergency-department visits, wastewater, test positivity) and the timing of
-waves in other locations or earlier seasons.
+about 3 points of loss (\texttt{phase\_oracle}), with three phases about
+5 (Section~\ref{sec:results-phase-outside}). Neither the base's forecasts
+nor the reports known at the cutoff predict the sign of the bias
+(Section~\ref{sec:results-phase}); emergency-department visits, a seasonal
+prior and revision-corrected growth see the turn 2 to 3 weeks after the
+peak, too late for the flu overshoot. Candidates that could lead the
+hospital counts: wastewater (COVID); weather, since low absolute humidity
+marks the onset of the flu season~\cite{shaman2010} and forecasts of it
+are good about a week ahead; the winter holidays, which lower flu
+transmission and delay the peak~\cite{ewing2017} and are known in
+advance; and the timing of waves in other locations.
 
 \paragraph{Idea: scores with a seasonal centre.} No positive scale can
 remove the drift of the scores (Sections~\ref{sec:sign-flip}
@@ -2747,6 +2834,16 @@ about 3 points of loss over the error-based probability. But neither the
 base's forecasts nor the reports known at the cutoff predict the sign of
 the bias (AUC about $0.5$); a real-time phase needs other data.
 [Section~\ref{sec:results-phase}, Table~\ref{tab:bias-sign}.]
+\item \textbf{Phase probabilities from outside the feedback} (experiments
+in \path{agent/}). With emergency-department visits (NSSP), a seasonal
+timing prior and revision-corrected report growth, the turn is seen 2 to 3
+weeks after the peak instead of 6. The angle, polar MultiQT with the angle
+set from the probability that the base is too high, beats the base overall
+($-0.3\%$; COVID $-0.7\%$), the first method with a real-time phase to do
+so. With the true phase, three phases (rise, overshoot, tail) raise the
+ceiling from $-1.9\%$ to $-3.5\%$; online the short flu overshoot is not
+recognized in time. [Section~\ref{sec:results-phase-outside},
+Tables~\ref{tab:phase-signals} to~\ref{tab:three-phase}.]
 \item \textbf{COVID and flu.} COVID waves are broad and symmetric, and the
 base's bias is close to a mirror image around the peak; flu waves are
 sharp, the base is far too low on the rise, too high only for two or three
@@ -3968,6 +4065,150 @@ documented for the hub forecasts~\cite{mathis2024}.
 \emph{Plot.} \path{agent/outputs/flu_covid_peaks/peak_profiles.pdf}: the
 wave shapes, and the base's bias and dispersion by week relative to the
 peak, one thin line per season or winter.
+
+\subsection{Phase probabilities from outside the feedback}
+\label{sec:results-phase-outside}
+The angle and the three phases of Section~\ref{sec:sign-flip}, with the
+phase probabilities from outside the feedback, on the CMU base, the 10
+states, all horizons and the three designs, at the adaptive rate of
+\texttt{phase\_power}. The two-phase tracker with the error-based
+probability reproduces \texttt{phase\_power} exactly, with the true phase
+\texttt{phase\_oracle}.
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+ & \multicolumn{3}{c}{COVID} & \multicolumn{3}{c}{Flu}\\
+\cmidrule(lr){2-4}\cmidrule(l){5-7}
+Probability & Phase & Bias & Week & Phase & Bias & Week\\
+\midrule
+Recent errors (\texttt{phase\_power})       & 0.57 & 0.59 & 6 & 0.67 & 0.46 & 6\\
+Seasonal timing prior                       & 0.78 & 0.59 & 1 & 0.99 & 0.63 & 7\\
+Falling counts: reports                     & 0.70 & 0.54 & 3 & 0.98 & 0.61 & 2\\
+Falling counts: reports and NSSP            & 0.71 & 0.60 & 3 & 0.98 & 0.59 & 2\\
+Base too high: reports and NSSP             & 0.63 & 0.68 & 4 & 0.51 & 0.48 & ---\\
+Phase in hindsight                          & 1    & 0.68 &   & 1    & 0.62 & \\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:phase-signals}
+\begin{center}\small Table \thetable: How well each probability predicts the
+phase (AUC for ``after the nearest peak'') and the sign of the bias (AUC
+for ``report below the base median''), and the first week after the peak in
+which its mean exceeds $\frac12$; evaluation weeks, horizons $-1$ to $3$
+(\path{agent/outputs/phase_angle/phase_signals.pdf}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{The outside signals see the turn 2 to 3 weeks after the
+peak}, the error-based probability only after 6. That is about as early
+as the data allow: the reports are a week old at the cutoff, and a turn
+shows only after a week of falling counts. The flu seasonal prior knows
+the phase well over the whole season (most weeks are far from the peak)
+but passes $\frac12$ only 7 weeks after it.
+\item \textbf{The bias model with NSSP predicts the sign of the COVID bias
+as well as the true phase does} ($0.68$); for flu no probability does
+better than the true phase ($0.62$), whose bias after the peak changes sign
+itself (Section~\ref{sec:results-flu-covid}).
+\end{itemize}
+
+\begin{center}\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{Angle} & \multicolumn{2}{c}{Angle + slow offset}
+ & \multicolumn{2}{c}{Two phases}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(l){6-7}
+Probability & Loss & CE & Loss & CE & Loss & CE\\
+\midrule
+Recent errors                         & 0.2    & $-4.7$  & 0.0    & $-16.3$ & 1.4    & $-18.6$\\
+Seasonal timing prior                 & 0.3    & 1.6     & 0.3    & $-11.4$ & 1.6    & $-17.0$\\
+Falling counts: reports               & 0.5    & 4.4     & 0.1    & $-11.4$ & 1.0    & $-15.3$\\
+Falling counts: reports and NSSP      & 0.5    & 2.6     & 0.0    & $-11.6$ & 1.0    & $-15.4$\\
+Base too high: reports and NSSP       & $-0.3$ & $-17.7$ & $-0.1$ & $-21.7$ & 1.4    & $-19.8$\\
+Phase in hindsight                    & $-0.7$ & 26.9    & $-1.5$ & 13.9    & $-1.9$ & $-8.5$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:phase-angle}
+\begin{center}\small Table \thetable: The angle~\eqref{eq:phase-angle}, the
+angle with a slow offset and the two-phase tracker with each probability:
+pooled change versus the base (\%), mean over the six disease--design
+cells. ``Two phases, recent errors'' is \texttt{phase\_power}, ``two phases,
+phase in hindsight'' \texttt{phase\_oracle}
+(\path{agent/outputs/phase_angle/summary.txt}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{With the true phase the angle suits COVID, not flu}: COVID
+$-4.6\%$ against $-1.0\%$ for two phases, flu $+3.2\%$ against $-2.7\%$. The
+mirror image holds for COVID's bias, not for flu's
+(Section~\ref{sec:results-flu-covid}).
+\item \textbf{The angle with the NSSP bias probability is the first
+method with a real-time phase that beats the base overall}: $-0.3\%$ loss
+at $-18\%$ calibration error, with the slow offset $-0.1\%$ at $-22\%$. The
+gain is COVID's ($-0.5\%$ to $-0.8\%$ in every design; flu $0.0\%$).
+\item \textbf{The falling-count probabilities, good at the phase, do not
+help the angle} ($+0.5\%$): they remove the loss after peaks ($0.0\%$) but
+lose up to them ($+1.5\%$). In the two-phase tracker every outside
+probability stays close to \texttt{phase\_power} ($+1.0\%$ to $+1.6\%$).
+\end{itemize}
+
+\begin{center}\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+ & \multicolumn{4}{c}{COVID} & \multicolumn{4}{c}{Flu}\\
+\cmidrule(lr){2-5}\cmidrule(l){6-9}
+ & overall & up to & weeks & weeks & overall & up to & weeks & weeks\\
+Phases & & peak & 1--4 & 5--8 & & peak & 1--4 & 5--8\\
+\midrule
+\multicolumn{9}{@{}l}{\emph{True phase (hindsight)}}\\
+Two phases (\texttt{phase\_oracle}) & $-1.0$ & $-4.7$ & $-2.5$ & 2.8 & $-2.7$ & $-14.6$ & 10.0 & $-3.3$\\
+Three phases, free                  & $-2.2$ & $-4.7$ & $-7.1$ & 2.8 & $-4.8$ & $-14.6$ & 1.2 & $-5.7$\\
+Three phases, signs $(1,-1,1)$      & 1.4 & $-5.7$ & $-7.8$ & 13.1 & $-2.4$ & $-7.7$ & $-5.9$ & $-3.1$\\
+Angle, signs $(1,-1,-1)$            & $-4.6$ & $-5.8$ & $-7.7$ & $-4.8$ & 3.2 & 2.3 & 2.0 & 3.6\\
+\multicolumn{9}{@{}l}{\emph{Online phase probabilities}}\\
+Two phases                          & 3.5 & 0.0 & 5.5 & 6.0 & 0.0 & $-13.2$ & 16.1 & $-4.5$\\
+Three phases, free                  & 2.7 & $-0.3$ & 2.9 & 4.5 & $-0.6$ & $-13.2$ & 15.7 & $-4.6$\\
+Angle                               & 2.9 & $-1.9$ & 7.9 & 3.0 & 1.8 & 1.1 & 0.1 & 0.0\\
+Angle, NSSP bias probability        & $-0.7$ & $-2.0$ & 1.6 & $-0.1$ & 0.0 & $-6.9$ & 7.7 & $-4.5$\\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:three-phase}
+\begin{center}\small Table \thetable: Three phases~\eqref{eq:three-phase}
+against two: change of the pooled loss versus the base (\%), mean over the
+three designs, overall, up to the peak and in weeks 1 to 4 and 5 to 8 after
+it (\path{agent/outputs/phase_angle/three_phase/summary.txt}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{With the true phase, a third phase raises the ceiling}: over
+both diseases $-3.5\%$ against $-1.9\%$ for two phases (calibration error
+$-15\%$ against $-9\%$). For flu the loss in the four weeks after the peak
+falls from $+10\%$ to $+1\%$. The best form differs by disease: flu the
+free three phases ($-4.8\%$), COVID the angle ($-4.6\%$).
+\item \textbf{Online, the third phase barely helps} ($+1.1\%$ against
+$+1.7\%$ for two phases; flu $-0.6\%$). The classifier tells the flu rise
+from the tail well ($85\%$ of the weeks right; up to the peak the online
+phases gain $13\%$, the true phase $15\%$), but it never recognizes the
+overshoot: its probability reaches only $0.30$, in weeks 2 and 3. The
+overshoot lasts about four weeks and is seen about two weeks late; in
+weeks 1 to 4 the online versions lose $16\%$, as with two phases. For COVID
+the classifier mostly confuses rise and tail ($55\%$ right).
+\item \textbf{The limit is the timing, not the number of phases.} Without
+a signal that leads the hospital counts, the best real-time choice per
+disease stays close to the base: COVID the angle with the NSSP bias
+probability ($-0.7\%$), flu the online three phases ($-0.6\%$).
+\end{itemize}
+Caveats: one evaluation period (one flu winter, 10 peaks); the inputs were
+chosen once, after the failure of the earlier model
+(Section~\ref{sec:results-phase}), and not tuned; CMU's ensemble already
+uses NSSP as a predictor; Delphi's Epidata API (V4) stopped receiving NSSP
+data on 22 September 2026, after the evaluation period.
 
 \subsection{Longer history: the \texttt{windowed\_seasonal} base}
 \label{sec:results-longer-history}
