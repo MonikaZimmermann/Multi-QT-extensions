@@ -1936,7 +1936,9 @@ overall coverage keeps its guarantee (Proposition~\ref{prop:phase-weighted});
 the choice for COVID;
 \item \texttt{phase\_hidden}: three free phases~\eqref{eq:three-phase} with the
 hidden-phase model's probabilities, learned with the probabilities as known
-when each report arrives; the choice for flu.
+when each report arrives; the choice for flu. Its prior is the NREVSS hazard
+for flu (version 2) and, since 17 November, the durations of the COVID waves
+of the EU/EEA countries for COVID (version 3, \path{erviss_covid_admissions.parquet}).
 \end{itemize}
 Both run for both diseases, so that each is compared on the other disease
 as well. Outside the pooled locations they have no inputs and no
