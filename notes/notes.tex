@@ -1222,27 +1222,33 @@ labels alone, without trackers
 distribution rather than a point correction (calibration error at age 0 in the
 evaluation period $.018$ against $.022$ for COVID, $.009$ against $.019$ for
 flu); the location's own revisions once it has 13 matured rows, before that
-those of the 10 pooled states (best or tied in the tuning and evaluation
-periods); $K=52$ rows, slightly better than 26; and $M=2$ weeks ($M=1$ leaves
+those of the 10 pooled states (best or tied in the first season and the
+evaluation period); $K=52$ rows, slightly better than 26; and $M=2$ weeks ($M=1$ leaves
 the re-run's second-youngest rows uncorrected, with calibration error $.027$
 and $.032$ against $.006$ and $.005$; $M=3$ is no better). A nowcasting model for
 $\hat p$ remains open.
 
-\paragraph{Results of the workflow.} Run of 13--14 November, every active
-method at its adaptive rate, the 10 states, horizons $-1$ to $3$, evaluation
-period, cases weighted by their weeks; the three uncorrected designs are
-identical to the earlier run (every row of
-\path{summary_scores_all_locations.csv}). Table~\ref{tab:corrected-designs}
-counts, over the 28 methods (all but the base and the hindsight oracle), how
-often the corrected design has the lower calibration error and the lower loss
-than its uncorrected design, with the median change in points of the
-change versus the base.
+\paragraph{Results of the workflow.} Run of 18 November (the code of 13--14
+November with the two methods of the phase from outside data added and the
+rate-grid mixtures and the PIT tracker paused), every method at its adaptive
+rate, the 10 states, all horizons, evaluation period, cases weighted by their
+weeks; every method shared with the run of 13--14 November has identical
+scores. Table~\ref{tab:corrected-designs} counts, over the 24 methods run (all
+but the base and the hindsight oracle), how often the corrected design has the
+lower calibration error and the lower loss than its uncorrected design, with
+the median change in points of the change versus the base, on both bases. In
+the run of 13--14 November, over 28 methods, the CMU numbers were nearly the
+same (COVID delay 0: 28 / 17, median $-34.2$ / $-0.40$; after peaks 0 / 0,
+$+7.3$ / $+2.35$).
 
 \begin{table}[ht]
 \centering\small
-\caption{Corrected against uncorrected designs: number of the 28 methods with a
-lower calibration error (CE) and a lower loss, and the median change (points of
-the \% change versus the base; negative is better).}
+\caption{Corrected against uncorrected designs: number of the 24 methods run
+with a lower calibration error (CE) and a lower loss, and the median change
+(points of the \% change versus the base; negative is better). CMU base:
+horizons $-1$ to $3$, June 2025 to September 2026; longer history: horizons
+$0$ to $3$, November 2024 to September 2026
+(Section~\ref{sec:results-longer-history}).}
 \label{tab:corrected-designs}
 \begin{tabular}{llrrrr}
 \toprule
@@ -1250,13 +1256,20 @@ the \% change versus the base; negative is better).}
 \cmidrule(lr){3-4}\cmidrule(lr){5-6}
 Disease & Design & lower CE / loss & median CE / loss & lower CE / loss & median CE / loss\\
 \midrule
-COVID & delay 0 & 28 / 17 & $-34.2$ / $-0.40$ & 0 / 0 & $+7.3$ / $+2.35$\\
- & delay 1 & 28 / 13 & $-10.5$ / $+0.02$ & 0 / 1 & $+2.3$ / $+0.75$\\
- & re-run & 27 / 23 & $-3.1$ / $-0.10$ & 0 / 3 & $+1.0$ / $+0.11$\\
-\midrule
-Flu & delay 0 & 27 / 8 & $-12.8$ / $+0.34$ & 6 / 6 & $+3.8$ / $+1.43$\\
- & delay 1 & 22 / 7 & $-3.2$ / $+0.22$ & 2 / 5 & $+3.8$ / $+0.84$\\
- & re-run & 22 / 15 & $-2.3$ / $-0.01$ & 4 / 10 & $+1.1$ / $+0.09$\\
+\multicolumn{6}{@{}l}{\emph{CMU base}}\\
+COVID & delay 0 & 24 / 15 & $-27.3$ / $-0.25$ & 0 / 0 & $+6.6$ / $+2.04$\\
+ & delay 1 & 24 / 12 & $-8.6$ / $-0.02$ & 0 / 1 & $+2.1$ / $+0.66$\\
+ & re-run & 22 / 19 & $-2.6$ / $-0.05$ & 0 / 3 & $+0.9$ / $+0.10$\\
+Flu & delay 0 & 22 / 8 & $-11.0$ / $+0.18$ & 6 / 6 & $+2.1$ / $+0.88$\\
+ & delay 1 & 17 / 7 & $-3.1$ / $+0.15$ & 2 / 5 & $+3.1$ / $+0.38$\\
+ & re-run & 17 / 12 & $-2.3$ / $+0.00$ & 4 / 8 & $+1.0$ / $+0.08$\\
+\multicolumn{6}{@{}l}{\emph{Longer history}}\\
+COVID & delay 0 & 24 / 14 & $-20.0$ / $-0.06$ & 0 / 1 & $+2.6$ / $+0.87$\\
+ & delay 1 & 21 / 7 & $-9.1$ / $+0.10$ & 0 / 1 & $+1.6$ / $+0.78$\\
+ & re-run & 21 / 17 & $-2.4$ / $-0.03$ & 0 / 1 & $+0.9$ / $+0.10$\\
+Flu & delay 0 & 24 / 13 & $-14.9$ / $-0.04$ & 7 / 2 & $+1.0$ / $+0.30$\\
+ & delay 1 & 24 / 9 & $-6.6$ / $+0.04$ & 7 / 2 & $+0.7$ / $+0.16$\\
+ & re-run & 24 / 16 & $-2.5$ / $-0.01$ & 11 / 2 & $+0.2$ / $+0.07$\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1271,24 +1284,40 @@ but the same in direction (Fixed MultiQT $-22\%$ becomes $-46\%$, REF-op $-21\%$
 becomes $-35\%$).
 \item \textbf{The re-run gains least}, as expected: it already learns the
 older rows from revised reports, so only its newest rows change. It still
-improves in most methods (COVID: lower CE in 27 and lower loss in 22 of 28).
+improves in most methods (COVID: lower CE in 22 and lower loss in 19 of 24).
 \item \textbf{After peaks the corrected labels cost}, in every design, most at
-delay 0 (COVID: higher loss in all 28 methods, median $+2.4$ points), where
+delay 0 (COVID: higher loss in all 24 methods, median $+2.0$ points), where
 the low first reports had pushed the forecasts down when the base was too
 high. This is the expected price
 (Proposition~\ref{prop:corrected-labels}(c)): the labels are calibrated for
 the latest counts, and after peaks the late reaction is the dead time of $h+1$
 weeks, not the labels.
-\item \textbf{The loss overall changes little} (medians within $\pm0.4$
-points), lower for more than half of the methods in the re-run and at COVID delay 0, slightly
-higher at delay 1 and flu delay 0.
+\item \textbf{The loss overall changes little} (medians within $\pm0.3$
+points), lower for more than half of the methods in the COVID re-run and at
+COVID delay 0 and for half in the flu re-run, slightly higher at delay 1 and
+flu delay 0.
+\item \textbf{The same on the longer history}, where the base is worse: the
+corrected labels lower the calibration error of every method at delay 0
+(COVID median $-20$ points, flu $-15$), and after peaks they cost less than
+with the CMU base (COVID delay 0 $+0.9$ points of loss).
+\item \textbf{The two methods with the phase from outside data}
+(\texttt{phase\_angle}, \texttt{phase\_hidden};
+Section~\ref{sec:results-phase-outside}) behave like the others: corrected
+labels change their loss by at most $0.4$ points overall and lower their
+calibration error at delay 0 (CMU COVID: \texttt{phase\_angle} $-1\%$ becomes
+$-16\%$, \texttt{phase\_hidden} $-1\%$ becomes $-28\%$); after peaks they cost
+up to $2.6$ points at delay 0 (\texttt{phase\_hidden}, CMU COVID) and almost
+nothing in the re-run.
 \end{itemize}
 \emph{Plots and tables.} \path{multiqt_feedback_bars_corrected.pdf} (R/06),
 \path{multiqt_peak_reasoning_tradeoff_corrected.pdf} and the per-combination
-PDFs \texttt{*corrected.pdf} (R/04);
-\path{agent/outputs/corrected_designs/comparison.txt} (every method, overall
-and after peaks) and
-\path{agent/scripts/corrected_designs/compare_after_run.R}.
+PDFs \texttt{*corrected.pdf} (R/04). The table above:
+\path{workflow_notes_tables.txt} in \path{agent/outputs/phase_angle/}, from
+\path{workflow_notes_tables.R} in \path{agent/scripts/phase_angle/}; for the
+run of 13--14 November \path{comparison.txt} in
+\path{agent/outputs/corrected_designs/} (every method, overall and after
+peaks), from \path{compare_after_run.R} in
+\path{agent/scripts/corrected_designs/}.
 
 \subsection{Questions and ideas}
 \label{sec:open-issues}
@@ -1303,12 +1332,16 @@ about 3 points of loss (\texttt{phase\_oracle}), with three phases about
 nor the reports known at the cutoff predict the sign of the bias
 (Section~\ref{sec:results-phase}); emergency-department visits, a seasonal
 prior and revision-corrected growth see the turn 2 to 3 weeks after the
-peak, too late for the flu overshoot. Candidates that could lead the
-hospital counts: wastewater (COVID); weather, since low absolute humidity
-marks the onset of the flu season~\cite{shaman2010} and forecasts of it
-are good about a week ahead; the winter holidays, which lower flu
-transmission and delay the peak~\cite{ewing2017} and are known in
-advance; and the timing of waves in other locations.
+peak, too late for the flu overshoot. Since 16--17 November the weather
+(humidity, since low absolute humidity marks the onset of the flu
+season~\cite{shaman2010}), the winter holidays, which lower flu transmission
+and delay the peak~\cite{ewing2017}, and, for COVID, the timing of the waves
+in other countries enter the phase probabilities; the two methods built on
+them are the first real-time methods to beat the base in every design:
+\texttt{phase\_angle} for both diseases on both bases, \texttt{phase\_hidden}
+for flu. Both still lose after peaks
+(Section~\ref{sec:results-phase-outside}, ``In the workflow''). Still
+unused: wastewater (COVID), for which we found no versioned data.
 
 \paragraph{Idea: scores with a seasonal centre.} No positive scale can
 remove the drift of the scores (Sections~\ref{sec:sign-flip}
@@ -1367,12 +1400,14 @@ ensemble quantiles as $b_t^\alpha$ and apply our recalibration to them.
 See the \href{https://github.com/cdcepi/FluSight-forecast-hub/blob/main/model-metadata/CMU-TimeSeries.yml}{CMU model description}
 and the pinned \href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfbcd4330aae5314fae51c5e8e5524675b5/R/ensemble_weights.R}{ensemble code}.
 
-Target dates determine the split: tuning through 31 May 2025, then
-evaluation from June 2025 through September 2026. Overall scores
+Target dates determine the split: the first season through 31 May 2025,
+learned from but not scored (it was the tuning period until 13 November;
+the setting keeps the name \texttt{tuning\_through}), then evaluation from
+June 2025 through September 2026. Overall scores
 use all available evaluation weeks; before/after-peak scores restrict
 these to the corresponding peak windows. Flu has long summer gaps in
 submitted forecasts, rather than an explicit winter-only evaluation rule.
-The flu winter 2024/25 peak belongs to tuning. Plotted target weeks after
+The flu winter 2024/25 peak belongs to the first season. Plotted target weeks after
 September 2026 are outside the evaluation period and are not scored.
 
 \paragraph{Own \texttt{windowed\_\allowbreak seasonal} forecasts: the longer-history alternative.}
@@ -1528,13 +1563,14 @@ could not see the decline. No flu peak is near the pause.
 \paragraph{Locations.}
 Every disease--location--horizon case learns independently. Detailed
 plots show the US, California, Texas, New York and Pennsylvania.
-Scores cover all 53 locations. Since 12 November 2026, tuning and every
-pooled summary, plot and check use the 10 largest states without
+Scores cover all 53 locations. Since 12 November 2026 every
+pooled summary, plot and check (and, until 13 November, the tuning) uses
+the 10 largest states without
 Florida: California, Texas, New York, Pennsylvania, Illinois, Ohio,
 Georgia, North Carolina, Michigan and New Jersey
 (\texttt{pooled\_locations}); before, they used the 52 non-US locations.
-The US is never pooled and is evaluated separately with the selected
-parameters. Forecasts are never averaged across locations.
+The US is never pooled and is evaluated separately with the same
+settings. Forecasts are never averaged across locations.
 
 
 
@@ -1825,7 +1861,7 @@ loss per $100{,}000$.
 \paragraph{All-location trade-offs.}
 Write $\mathcal L_{j,c}$ and $\mathrm{CE}_{j,c}$ for the mean quantile
 loss and calibration error of method $j$ in case $c$; $j=0$ is the
-original. A set $\mathcal C$ contains $J$ cases.
+base. A set $\mathcal C$ contains $J$ cases.
 In \path{multiqt_peak_reasoning_tradeoff.pdf}, columns are horizons
 $-1,\ldots,3$; blocks are delay 0, delay 1 and re-run, each showing
 overall, up to peak and after peak. Lower left is better. The first
@@ -1835,13 +1871,15 @@ page per disease shows individual non-US cases and method means
 \]
 These average location scores, not forecasts or pooled coverage
 indicators. The first row of \path{multiqt_error_tradeoff.pdf} uses
-the same aggregation for fixed rates. Feedback designs have separately
-selected parameters, so their differences include retuning.
+the same aggregation for fixed rates. Nothing is tuned (since 13
+November), so the designs differ only in the reports learned from.
+\path{multiqt_peak_reasoning_tradeoff_corrected.pdf} has the same pages
+for the three corrected designs (Section~\ref{sec:corrected-labels}).
 Axes vary by panel; all-location limits use the 1st--99th percentiles
 and mean points, with loss capped near four times the base. Extremes
-can be hidden or marked \texttt{>}. Original/common-weight/outer methods
-use open circles/triangles/squares or diamonds; exact forecast duplicates
-are hidden.
+can be hidden or marked \texttt{>}. The base and the common-weight and
+outer methods use open circles, triangles and squares or diamonds; exact
+forecast duplicates are hidden.
 
 \paragraph{Evaluation tree.}
 Script 06 splits pooled disease cases by feedback design, then horizon.
@@ -1870,20 +1908,21 @@ $100(\mathcal L_j/\mathcal L_0-1)$, where negative is better.
 
 \paragraph{Forecast curves.}
 Files in \path{multiqt_method_forecasts/} show levels $.1,\ldots,.9$ and
-weekly loss per $100{,}000$ at a fixed horizon; gray marks tuning,
-dotted lines peaks. Files in \path{multiqt_season_forecasts/} add coverage
+weekly loss per $100{,}000$ at a fixed horizon; gray marks the first
+season (not scored), dotted lines peaks. Files in \path{multiqt_season_forecasts/} add coverage
 and loss trajectories for selected fixed rates.
 \path{multiqt_base_forecast_paths.pdf} shows full count timelines, median
 paths around all retained peaks and three diagnostic indicators
-(Section~\ref{sec:forecast-path-indicators}). It spans tuning and evaluation;
-its flu winter 2024/25 peak is within tuning, not held-out evidence.
+(Section~\ref{sec:forecast-path-indicators}). It spans the first season and
+the evaluation; its flu winter 2024/25 peak is in the first season, not
+held-out evidence.
 Weight timelines show how each mixture combines its experts.
 Gap dates are listed in Section~\ref{sec:data-issues}.
 
 \subsection{Methods}
 \label{sec:methods}
-The methods below use the preceding data, feedback, tuning and evaluation
-conventions unless stated otherwise.
+The methods below use the preceding data, feedback, learning-rate and
+evaluation conventions unless stated otherwise.
 
 \paragraph{Methods run.} Since 13 November 2026 every tracker learns at
 the adaptive rate (Section~\ref{sec:learning-rates}), and 27 of the 53
@@ -1943,7 +1982,8 @@ of the EU/EEA countries for COVID (version 3, \path{erviss_covid_admissions.parq
 Both run for both diseases, so that each is compared on the other disease
 as well. Outside the pooled locations they have no inputs and no
 forecasts. Checked: script 05 reproduces the experiments in
-\path{agent/scripts/phase_angle/} exactly.
+\path{agent/scripts/phase_angle/} exactly. Results of the run of 18
+November: Section~\ref{sec:results-phase-outside}, ``In the workflow''.
 
 \subsubsection{Single trackers}
 \label{sec:single-trackers}
@@ -1997,7 +2037,7 @@ multiplicative, \eqref{eq:log-tracker-multiplicative}: they compare an
 additive correction with one that scales with the level
 (Section~\ref{sec:log-tracker-scale}).
 
-\paragraph{Persistent restart: \texttt{restart\_persistent}.}
+\paragraph{Persistent restart: \texttt{restart\_persistent} (not run).}
 Keep the first weekly-start expert (Section~\ref{sec:expert-combinations}).
 It learns only from forecasts made since its start, at $.03$ times the
 rolling scale, so with the replay it equals \texttt{fixed}.
@@ -2088,7 +2128,9 @@ applied. Each scale serves a tracker (\texttt{studentized\_\allowbreak power},
 \texttt{studentized\_\allowbreak spread}, at the
 adaptive rate of its scores) and four mixtures, whose rates are multiples
 of the rolling scale of the same scores
-(Table~\ref{tab:expert-combinations}). Added on 12 November 2026
+(Table~\ref{tab:expert-combinations}); of the mixtures only the recent
+weekly starts (\texttt{power\_\allowbreak restart\_\allowbreak recent},
+\texttt{spread\_\allowbreak restart\_\allowbreak recent}) are still run. Added on 12 November 2026
 (Section~\ref{sec:results-scaled}). A third scale, the $t$-PIT
 of~\cite{vst} at the forecast median, was removed on 16 November 2026:
 it exploded whenever the forecast median left the range of the recent
@@ -2102,7 +2144,8 @@ reports.
  >{\raggedright\arraybackslash}p{.23\textwidth}
  >{\raggedright\arraybackslash}p{.38\textwidth}@{}}
 \caption{Studentized methods. Scales refer to the bounded versions above.
-Initial states are specified before the first update.}
+Initial states are specified before the first update. Not run: paused since
+13 November (Section~\ref{sec:methods}).}
 \label{tab:studentized-implementations}\\
 \toprule
 Method ID & Centre and scale & Initialization and purpose\\
@@ -2118,28 +2161,28 @@ Method ID & Centre and scale & Initialization and purpose\\
 \endfoot
 \bottomrule
 \endlastfoot
-\texttt{studentized}
+\texttt{studentized} (not run)
  & $a_t^\alpha=b_t^{.5}$; common $\sigma_{t,\mathrm{med}}$
  & $\tilde u_{\mathrm{init}}^\alpha=\Phi^{-1}(\alpha)$.
    Reconstruct the distribution around the base median using recent errors.\\
-\texttt{studentized\_base}
+\texttt{studentized\_base} (not run)
  & $a_t^\alpha=b_t^{.5}$; common $\sigma_{t,\mathrm{base}}$
  &  $\tilde u_{\mathrm{init}}^\alpha=\Phi^{-1}(\alpha)$. Reconstruct the distribution from the median
    and the central width of the current base forecast.\\
-\texttt{median\_constant}
+\texttt{median\_constant} (not run)
  & $a_t^\alpha=b_t^{.5}$; common constant $\sigma$
  &  $\tilde u_{\mathrm{init}}^\alpha=\Phi^{-1}(\alpha)$; freeze $\sigma_{t,\mathrm{med}}$ at the first
    reference week after both required warmups. Separates replacing the base by its median from
    subsequently changing the scale.\\
-\texttt{studentized\_zero}
+\texttt{studentized\_zero} (not run)
  & $a_t^\alpha=b_t^{.5}$; common $\sigma_{t,\mathrm{med}}$
  & $\tilde u_{\mathrm{init}}=0$. Start all levels at the median;
-   use the rate selected for \texttt{studentized}.\\
-\texttt{median\_constant\_zero}
+   use the rate of \texttt{studentized}.\\
+\texttt{median\_constant\_zero} (not run)
  & $a_t^\alpha=b_t^{.5}$; common constant $\sigma$
  & $\tilde u_{\mathrm{init}}=0$; use the scale and rate of
    \texttt{median\_constant}.\\
-\texttt{studentized\_full}
+\texttt{studentized\_full} (not run)
  & $a_t^\alpha=b_t^\alpha$; common $\sigma_{t,\mathrm{base}}$
  & $\tilde u_{\mathrm{init}}=0$. Keep the full base and rescale its
    accumulated corrections together.\\
@@ -2160,16 +2203,16 @@ Method ID & Centre and scale & Initialization and purpose\\
 The scale of \texttt{median\_constant} is fixed within each reconstructed
 history but can change between re-runs, unlike the reference scales
 (Section~\ref{sec:tuning-initialization}).
-Zero-start variants compare initialization at the same selected rate.
+Zero-start variants compare initialization at the same rate.
 Their first active forecast may already include a feedback update.
 
 The residual-median methods also allow $t_5^{-1}(\alpha)$ initialization;
 the base-width median method always uses normal quantiles. It retains
 the median and bounded central width but imposes a symmetric normal
-shape in counts, so it need not reproduce the original forecast.
-Until a required residual scale exists, return the original full base.
+shape in counts, so it need not reproduce the base forecast.
+Until a required residual scale exists, return the full base.
 Feedback consumed while waiting is not replayed; later feedback on
-those rounds is compared with the original forecasts.
+those rounds is compared with the base forecasts.
 
 Studentization rescales the accumulated correction, rather than only
 the newest increment. Quantile-specific scales retain the
@@ -2363,7 +2406,7 @@ Square root & $\sqrt y-\sqrt{b_t^\alpha}$ & transform & D R W & \texttt{ref\_op}
 \texttt{log1p} & $\log(1+y)-\log(1+b_t^\alpha)$ & transform & D R W & \texttt{fixed\_log}, \texttt{leaky\_log}\\
 \multicolumn{5}{@{}l}{\emph{Level of the forecast}}\\
 Box-Cox on counts, $\lambda=.25,.75$ & $\psi_\lambda(y)-\psi_\lambda(b_t^\alpha)$ & transform & D R & ---\\
-Power of the median, $p=-1,.25,.5,.75,1,1.5,2$ & $(y-b_t^\alpha)/(1+b_t^{.5})^p$ & common scale & D R M W & \texttt{studentized\_\allowbreak power} ($p=.5$) and its mixtures\\
+Power of the median, $p=-1,.25,.5,.75,1,1.5,2$ & $(y-b_t^\alpha)/(1+b_t^{.5})^p$ & common scale & D R M W & \texttt{studentized\_\allowbreak power} ($p=.5$) and its weekly starts\\
 Power per level, $p=.75$ & $(y-b_t^\alpha)/(1+b_t^\alpha)^p$ & per level & D R & ---\\
 \multicolumn{5}{@{}l}{\emph{Recent errors}}\\
 Level RMS & $(y-b_t^\alpha)/\sigma_{t,\mathrm{res}}^\alpha$ & per level & D R W & \texttt{studentized\_\allowbreak level\_rms}\\
@@ -2372,8 +2415,8 @@ Median rebuild & $(y-b_t^{.5})/\sigma_{t,\mathrm{med}}-\Phi^{-1}(\alpha)$ & comm
 \multicolumn{5}{@{}l}{\emph{Spread of the forecast}}\\
 Base width & $(y-b_t^\alpha)/\sigma_{t,\mathrm{base}}$ & common scale & D R M W & \texttt{studentized\_\allowbreak full}, \texttt{studentized\_\allowbreak base} (not run)\\
 Half the base IQR & $(y-b_t^\alpha)/s_t$ & common scale & D R & ---\\
-Spread per level & $(y-b_t^\alpha)/\sigma_{t,\mathrm{spr}}^\alpha$ & per level, U-shaped & D R W & \texttt{studentized\_\allowbreak spread} and its mixtures\\
-PIT of the base & $F_{b_t}(y)-\alpha$ & transform & D R W & \texttt{studentized\_\allowbreak pit}\\
+Spread per level & $(y-b_t^\alpha)/\sigma_{t,\mathrm{spr}}^\alpha$ & per level, U-shaped & D R W & \texttt{studentized\_\allowbreak spread} and its weekly starts\\
+PIT of the base & $F_{b_t}(y)-\alpha$ & transform & D R W & \texttt{studentized\_\allowbreak pit} (not run since 17 November)\\
 \multicolumn{5}{@{}l}{\emph{Revisions of the forecast}}\\
 Revisions, every target or own target & $(y-b_t^\alpha)/\sigma_{t,\mathrm{rev}}$ & common scale & D R & \texttt{studentized\_\allowbreak revision}, removed\\
 \multicolumn{5}{@{}l}{\emph{Transforms of Uniejewski (2025)}}\\
@@ -2608,18 +2651,18 @@ variance for the score mixture.
 \toprule
 Method IDs & Weighting and bank\\
 \midrule
-\texttt{uniform} & Equal weights on 12 persistent rate experts, rates $m$ times the rolling scale.\\
-\texttt{weighted}, \texttt{shared} & Same rate bank; per-quantile weights, without/with sharing.\\
-\texttt{weighted\_common}, \texttt{shared\_common} & Same rate bank; common weights, without/with sharing.\\
+\texttt{uniform} (not run) & Equal weights on 12 persistent rate experts, rates $m$ times the rolling scale.\\
+\texttt{weighted}, \texttt{shared} (not run) & Same rate bank; per-quantile weights, without/with sharing.\\
+\texttt{weighted\_common}, \texttt{shared\_common} (not run) & Same rate bank; common weights, without/with sharing.\\
 \texttt{restart\_uniform} & Equal weights on all weekly starts so far, rate $.03$ times the rolling scale (the adaptive rate).\\
-\texttt{restart\_weighted} & Same starts; adaptive $\lambda$, sharing, per-quantile weights.\\
+\texttt{restart\_weighted} (not run) & Same starts; adaptive $\lambda$, sharing, per-quantile weights.\\
 \texttt{restart\_recent} & The eight most recent starts; adaptive $\lambda$, sharing, per-quantile weights; the oldest retires when a new copy starts.\\
 \texttt{restart\_recent\_dual} & Two copies per start, rates $.03$ and $.3$ times the rolling scale; the 16 copies of the eight most recent starts; adaptive $\lambda$, sharing, per-quantile weights.\\
-\texttt{score\_equal} & Equal weights on the declared score bank.\\
+\texttt{score\_equal} (not run) & Equal weights on the declared score bank.\\
 \texttt{score\_learned} & Same score bank; adaptive $\lambda$, sharing, per-quantile weights.\\
-\texttt{power\_uniform}, \texttt{spread\_uniform} & Equal weights on the 12 rate experts of the scaled tracker, rates $m$ times the rolling scale of its scores.\\
-\texttt{power\_weighted\_common}, \texttt{spread\_weighted\_common} & Same scaled rate bank; common weights, no sharing (as \texttt{weighted\_common}).\\
-\texttt{power\_restart\_equal}, \texttt{spread\_restart\_equal} & Equal weights on the eight most recent weekly starts of the scaled tracker, at its adaptive rate.\\
+\texttt{power\_uniform}, \texttt{spread\_uniform} (not run) & Equal weights on the 12 rate experts of the scaled tracker, rates $m$ times the rolling scale of its scores.\\
+\texttt{power\_weighted\_common}, \texttt{spread\_weighted\_common} (not run) & Same scaled rate bank; common weights, no sharing (as \texttt{weighted\_common}).\\
+\texttt{power\_restart\_equal}, \texttt{spread\_restart\_equal} (not run) & Equal weights on the eight most recent weekly starts of the scaled tracker, at its adaptive rate.\\
 \texttt{power\_restart\_recent}, \texttt{spread\_restart\_recent} & Same starts; adaptive $\lambda$, sharing, per-quantile weights (as \texttt{restart\_recent}).\\
 \texttt{leaky\_weighted} & Leak bank: Leaky MultiQT at the adaptive rate for seven leaks $\delta=0,\ldots,.5$; common weights with sharing.\\
 \texttt{power\_flip}, \texttt{level\_flip}, \texttt{width\_flip} & Sign-flip experts: the base, a studentized tracker (power scale, level RMS, base width) and its mirror; adaptive $\lambda$, sharing, per-quantile weights.\\
@@ -2627,12 +2670,14 @@ Method IDs & Weighting and bank\\
 \end{tabularx}
 \end{center}
 \refstepcounter{table}\label{tab:expert-combinations}
-\begin{center}\small Table \thetable: Current expert combinations.
+\begin{center}\small Table \thetable: Expert combinations in the code. Not run:
+paused since 13 November or, for the rate-grid mixtures, 17 November
+(Section~\ref{sec:methods}).
 \end{center}
 
 The four \texttt{\_outer} variants of \texttt{shared},
 \path{shared_common}, \path{restart_uniform},
-and \path{restart_weighted} add persistent
+and \path{restart_weighted} (not run) add persistent
 MultiQT at $.001S_0$ to their inner mixture, retaining its settings
 and learning from their own final forecasts. The rates and the fixed
 $H=8$ are described in Section~\ref{sec:learning-rates}.
@@ -2641,7 +2686,7 @@ $H=8$ are described in Section~\ref{sec:learning-rates}.
 The rate bank uses the multiples
 \[m\in\{0,.01,.015,.02,.03,.05,.075,.1,.15,.2,.3,.45\}\]
 of the rolling scale (the 90\% quantile in~\eqref{eq:adaptive-rate}); all
-experts start together and the zero-rate member is the original.
+experts start together and the zero-rate member is the base.
 The weekly-start bank adds a fresh copy of Fixed MultiQT, at the adaptive
 rate, at every retained reference week once initialization permits;
 with warmup replay, starts begin in the first round. The copy started at
@@ -2677,7 +2722,8 @@ forecast is issued, so a new color band in the weight plots alone does
 not show lower loss.
 
 \texttt{restart\_recent\_dual} starts two copies at every retained week,
-a slow one with rate $.03S_0$ and a fast one with $.3S_0$. It learns
+a slow one with rate $.03$ and a fast one with $.3$ times the rolling
+scale. It learns
 the weights of
 the 16 copies of the eight most recent starts as in
 \eqref{eq:recent-start-mixture}, with sharing; both copies of the oldest
@@ -2693,8 +2739,8 @@ and Delphi's square-root tracker; the base-width studentized methods are
 left out (Section~\ref{sec:base-width-failure}). All members except
 \texttt{sqrt\_constant} track counts; for their scores, $r=y$, projected
 as in \eqref{eq:studentized-implementation}. Fixed, leaky and
-studentized experts use separately selected rates,
-\texttt{sqrt\_constant} Delphi's constant rate, and the original does
+studentized experts learn at their adaptive rates,
+\texttt{sqrt\_constant} at Delphi's constant rate, and the base does
 not update. This compares complete procedures, not scores at a common
 rate.
 
@@ -2715,7 +2761,7 @@ Member & Score or forecast & Purpose\\
 \toprule Member & Score or forecast & Purpose\\\midrule\endhead
 \bottomrule\endfoot
 \texttt{original} & $f_{k,t}^\alpha=b_t^\alpha$ & Preserve the base as an option.\\
-\texttt{fixed} & $S_{k,t}^\alpha(y)=r-b_t^\alpha$ & Persistent additive correction; $\eta=\kappa S_0$.\\
+\texttt{fixed} & $S_{k,t}^\alpha(y)=r-b_t^\alpha$ & Persistent additive correction at the adaptive rate.\\
 \texttt{leaky} & Fixed MultiQT with leak $\delta=.1$, \eqref{eq:leaky-update} & Additive correction that fades back to the base unless feedback renews it.\\
 \texttt{studentized\_level\_rms} & $S_{k,t}^\alpha(y)=(r-b_t^\alpha)/\sigma_{t,\mathrm{res}}^\alpha$ & Keep the full base; scale each level's correction by its recent errors.\\
 \texttt{sqrt\_constant} & $\chi(y)-\chi(b_t^\alpha)$, \eqref{eq:sqrt-constant-update} & Correction on the square-root scale, between additive and level-proportional.\\
@@ -2725,7 +2771,7 @@ Leaky changes the state update rather than defining a new static
 residual score.
 
 \subparagraph{Equal and learned score mixtures.}
-\texttt{score\_equal} averages the declared experts. For
+\texttt{score\_equal} (not run) averages the declared experts. For
 \texttt{score\_learned}, learn one vector per quantile level using
 the normalized losses, adaptive rate and sharing above, then repair
 crossings by isotonic projection.
@@ -2734,14 +2780,14 @@ crossings by isotonic projection.
 
 \subsubsection{Reference benchmarks}
 \label{sec:reference-benchmarks}
-The references are the original forecast, a hindsight control and two
+The references are the base forecast, a hindsight control and two
 production configurations of Delphi~\cite{delphi-calibration}.
 
-\paragraph{Original forecast: \texttt{original}.}
+\paragraph{Base forecast: \texttt{original}.}
 Return $q_t=b_t$ without recalibration or learning. This is the reference
 for the reported loss changes and reductions.
 
-\paragraph{Target oracle: \texttt{oracle\_target}.}
+\paragraph{Target oracle: \texttt{oracle\_target} (not run since 13 November).}
 This hindsight control returns
 \begin{equation}
  q_t^{\mathrm{oracle}}=
@@ -2845,8 +2891,14 @@ methods of Section~\ref{sec:methods}: CMU--TimeSeries submissions as the
 base, every tracker at the adaptive rate and nothing tuned
 (Section~\ref{sec:learning-rates}), learning from the first week of
 November 2024 on, evaluation from June 2025 through September 2026,
-scored against the latest counts. Methods that are no longer run are
-quoted from the run of 12 November (tuned rates) where noted. Unless stated otherwise,
+scored against the latest counts. The run of 18 November (on the server,
+both bases) adds \texttt{phase\_angle} and \texttt{phase\_hidden}
+(Section~\ref{sec:results-phase-outside}, ``In the workflow''); every method
+it shares with the run of 13 November has identical scores, so the numbers
+below hold for both. Methods that are no longer run are
+quoted from the run of 12 November (tuned rates) where noted; the rate-grid
+mixtures and the PIT tracker, paused since 17 November, from the run of 13
+November. Unless stated otherwise,
 a number is the change of a pooled mean relative to the base, in percent:
 of the quantile loss per $100{,}000$ (``loss'') or of the calibration
 error (CE). Pooled means weight every location--horizon case equally
@@ -2874,20 +2926,25 @@ and 10--14).
 by side) and \path{multiqt_evaluation_tree.pdf} (the ten best per page),
 script 06: per disease the pooled page (pp.~1 and 7) and the five
 locations (pp.~2--6 and 8--12). The method groups of the bar plot are
-those of the forecast pages.
+those of the forecast pages. The same pages:
+\path{multiqt_feedback_bars_corrected.pdf} (each design next to its
+corrected version), \path{multiqt_evaluation_tree_bias.pdf} (bias and
+dispersion below the loss panels) and, from script 04,
+\path{multiqt_peak_reasoning_tradeoff_corrected.pdf}.
 \item \path{multiqt_method_forecasts/} (script 04), one file per disease,
 horizon and design: eleven pages per location, one per method group
 (``Single trackers'', ``Log1p tracker'', ``Leak chosen online'',
-``Rate-grid experts'', ``Weekly starts: immediate admission'',
-``Score-based experts'', ``Studentized full base'', ``Power scale'',
-``Spread scale'', ``Sign-flip experts'', ``Two-phase trackers''); US
+``Weekly starts: immediate admission'', ``Score-based experts'',
+``Studentized full base'', ``Power scale'', ``Spread scale'',
+``Sign-flip experts'', ``Two-phase trackers'', ``Phase from outside
+data''; since 17 November no ``Rate-grid experts''); US
 pp.~1--11, California 12--22, Texas 23--33, New York 34--44, Pennsylvania
 45--55.
 \item \path{multiqt_weight_timelines/} (script 04), one file per disease,
-horizon and design: ten pages per location in the same order (US pp.~1--10,
-California 11--20, and so on): rate-grid weights, score experts, weekly
-starts, two-rate weekly starts, the leak bank, the sign-flip experts, then
-the rate grid and the weekly starts of the power and spread scales.
+horizon and design: seven pages per location (US pp.~1--7, California
+8--14, and so on): score experts, weekly starts, two-rate weekly starts,
+the leak bank, the sign-flip experts, then the weekly starts of the power
+and of the spread scale (the rate-grid weights are no longer drawn).
 \end{itemize}
 The bar plot and the tree
 show the loss reduction, $100(1-\text{pooled loss}/\text{pooled base
@@ -2926,6 +2983,13 @@ pp.~1--3.]
 $7\%$ too low, and calibrates least; at the adaptive rate the designs
 differ less in loss than in calibration. [Section~\ref{sec:results-feedback};
 \path{multiqt_feedback_bars.pdf}, pp.~1 and 7.]
+\item \textbf{Corrected labels} (the three designs learning from plausible
+final counts instead of the reports) lower the calibration error of nearly
+every method, most at delay 0 (COVID median $-27$ points over the 24 methods
+run), with the overall loss almost unchanged; after peaks they cost, most at
+delay 0 (COVID $+2.0$ points). [Section~\ref{sec:corrected-labels},
+Table~\ref{tab:corrected-designs};
+\path{multiqt_feedback_bars_corrected.pdf}, pp.~1 and 7.]
 \item \textbf{The leak chosen online} is no better than Delphi's fixed
 leak: \texttt{leaky\_select} $+3.1\%$, \texttt{leaky\_weighted} $+2.1\%$
 against $+2.2\%$; the learned weights stay close to uniform over the
@@ -2953,8 +3017,8 @@ and~\ref{tab:mixture-vs-fixed}.]
 $1.4\%$ to $1.6\%$ at $16\%$ to $20\%$ less calibration error, about half
 the loss of their trackers; the mirror gains as a shrinkage towards the
 base, its weight does not rise after peaks. The phase in hindsight
-(\texttt{phase\_oracle}) is the only method that beats the base overall in
-every cell ($-1.9\%$; up to peaks $-9.7\%$): knowing the phase is worth
+(\texttt{phase\_oracle}) is the only one of these methods that beats the
+base overall in every cell ($-1.9\%$; up to peaks $-9.7\%$): knowing the phase is worth
 about 3 points of loss over the error-based probability. But neither the
 base's forecasts nor the reports known at the cutoff predict the sign of
 the bias (AUC about $0.5$); a real-time phase needs other data.
@@ -2973,6 +3037,19 @@ hidden-phase model with a prior from eight seasons of flu test positivity comes
 close to the true phase for flu ($-4.5\%$ against $-5.6\%$).
 [Section~\ref{sec:results-phase-outside},
 Tables~\ref{tab:phase-signals} to~\ref{tab:hidden-phase}.]
+\item \textbf{The phase from outside data in the workflow} (run of 18
+November, per design, all six designs). On the CMU base \texttt{phase\_angle}
+is the best real-time method in every design for both diseases (COVID
+$-0.5\%$ to $-0.8\%$, flu $-1.4\%$ to $-1.8\%$), \texttt{phase\_hidden} the
+second for flu ($-0.7\%$ to $-1.1\%$) but above the base for COVID; on the
+longer history \texttt{phase\_hidden} gains $4.2\%$ to $5.1\%$ for flu, close
+to \texttt{phase\_oracle}, and \texttt{phase\_angle} $1.6\%$ to $1.9\%$ for
+COVID. The corrected labels change their loss by at most $0.4$ points. Both
+gain up to the peaks (CMU flu $-10\%$ to $-15\%$) and lose after them (CMU flu
+$+5\%$ to $+10\%$, like \texttt{phase\_oracle}). [Section~\ref{sec:results-phase-outside},
+Tables~\ref{tab:phase-workflow} and~\ref{tab:phase-workflow-peaks};
+\path{multiqt_feedback_bars.pdf} and \path{multiqt_feedback_bars_corrected.pdf},
+group ``Phase from outside data''.]
 \item \textbf{COVID and flu.} COVID waves are broad and symmetric, and the
 base's bias is close to a mirror image around the peak; flu waves are
 sharp, the base is far too low on the rise, too high only for two or three
@@ -3088,14 +3165,18 @@ COVID and $-22\%$, $-29\%$, $-42\%$ for flu. Leaky MultiQT: $+1.6\%$,
 $+1.3\%$, $+0.9\%$ loss (COVID) and $+2.9\%$ to $+3.5\%$ (flu); CE $+12\%$,
 $-4\%$, $-5\%$ (COVID) and $-15\%$, $-20\%$, $-27\%$ (flu). Delay 0, which
 learns the low first reports, calibrates worst, the re-run best, as at
-equal rates.
+equal rates. With the corrected labels most of delay 0's disadvantage goes
+(Fixed MultiQT, COVID: $+54\%$ becomes $+0\%$; over the 24 methods run the
+median COVID calibration error falls by 27 points; Section~\ref{sec:corrected-labels},
+Table~\ref{tab:corrected-designs}).
 
 \emph{Plots.} At equal rates: \path{multiqt_phase_rate_tradeoffs.pdf},
 pp.~1--3, and the rows of \path{multiqt_error_tradeoff.pdf}, p.~1. At the
 adaptive rate: \path{multiqt_feedback_bars.pdf} (every method, the three
 designs side by side, with the tree's values and axes; pooled on pp.~1
-and 7) and the first split of \path{multiqt_evaluation_tree.pdf} (pp.~1
-and 7).
+and 7), \path{multiqt_feedback_bars_corrected.pdf} (each design next to its
+corrected version, same pages) and the first split of
+\path{multiqt_evaluation_tree.pdf} (pp.~1 and 7).
 
 \subsection{Single trackers: additive, leaky, log1p and Delphi's}
 \label{sec:results-trackers}
@@ -3164,7 +3245,7 @@ losses barely separate the leaks.
 \path{multiqt_peak_reasoning_tradeoff.pdf}, pp.~2 and 9 (means over the
 10 pooled states by design, window and horizon); the forecasts on the
 first three pages of each location in \path{multiqt_method_forecasts/};
-the leak-bank weights on the fifth page of each location in
+the leak-bank weights on the fourth page of each location in
 \path{multiqt_weight_timelines/}.
 
 \subsection{Studentized methods}
@@ -3209,8 +3290,9 @@ $37\%$.
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Studentized full
 base'', ``Power scale'' and ``Spread scale'' (pooled: pp.~1 and 7);
 \path{multiqt_peak_reasoning_tradeoff.pdf}, pp.~2 and 9; the forecasts on
-these pages of \path{multiqt_method_forecasts/} (pages 7 to 9 of each
-location's eleven).
+these pages of \path{multiqt_method_forecasts/} (pages 6 to 8 of each
+location's eleven). \texttt{studentized\_pit} is not run since 17
+November; its numbers are from the run of 13 November.
 
 \subsubsection{Why the base-width scale fails after peaks}
 \label{sec:base-width-failure}
@@ -3682,7 +3764,7 @@ regular runs since 13 November.
 \cmidrule(lr){2-4}\cmidrule(l){5-6}
 Mixture & overall & up to peak & after peak & overall & after peak\\
 \midrule
-\multicolumn{6}{@{}l}{\emph{Rate grid, 12 multiples $m\le.45$ of the rolling scale}}\\
+\multicolumn{6}{@{}l}{\emph{Rate grid, 12 multiples $m\le.45$ of the rolling scale (not run since 17 November)}}\\
 \texttt{uniform}          & 17.7 & 12.0   & 12.1 & $-11.2$ & $-5.6$\\
 \texttt{weighted}         & 9.7  & $-0.8$ & 12.2 & $-14.2$ & 0.8\\
 \texttt{weighted\_common} & 4.8  & $-0.4$ & 6.0  & $-13.4$ & $-2.6$\\
@@ -3836,18 +3918,17 @@ Script: \path{agent/scripts/mixture_vs_fixed_bootstrap_adaptive.R}
 (outputs in \path{agent/outputs/mixture_vs_fixed_bootstrap_adaptive/}).
 
 \emph{Plots.} Performance: \path{multiqt_feedback_bars.pdf}, groups
-``Rate-grid experts'', ``Weekly starts: immediate admission'' and
-``Score-based experts'' (pooled: pp.~1 and 7). Weights:
-\path{multiqt_weight_timelines/}, per disease, horizon and design: the
-rate grid on pp.~1, 11, 21, 31 and 41 (columns ``Equal weights'' and
-``Learned, no sharing''; the rows ``All levels'' show the version with
-common weights), the score experts on pp.~2, 12, 22, 32 and 42, the weekly
-starts on pp.~3, 13, 23, 33 and 43 (\texttt{restart\_recent} in the column
+``Weekly starts: immediate admission'' and ``Score-based experts''
+(pooled: pp.~1 and 7); the rate-grid mixtures, not run since 17 November,
+are no longer plotted (their pages are in the plots committed before 17
+November). Weights: \path{multiqt_weight_timelines/}, per disease, horizon
+and design: the score experts on pp.~1, 8, 15, 22 and 29, the weekly
+starts on pp.~2, 9, 16, 23 and 30 (\texttt{restart\_recent} in the column
 ``Most recent starts: learned + sharing'') and the two-rate weekly starts
-on pp.~4, 14, 24, 34 and 44. Their forecasts: the pages ``Rate-grid
-experts'', ``Weekly starts: immediate admission'' and ``Score-based
-experts'' of \path{multiqt_method_forecasts/} (the fourth to sixth of each
-location's eleven). The weights quoted above summarize COVID, $h=2$, delay
+on pp.~3, 10, 17, 24 and 31. Their forecasts: the pages ``Weekly starts:
+immediate admission'' and ``Score-based experts'' of
+\path{multiqt_method_forecasts/} (the fourth and fifth of each location's
+eleven). The weights quoted above summarize COVID, $h=2$, delay
 0 (\path{covid_horizon2_delay0.pdf}) over the evaluation weeks; they are not
 plotted. Neither are Tables~\ref{tab:mixture-vs-fixed}
 and~\ref{tab:mixture-vs-fixed-after}
@@ -3861,7 +3942,8 @@ The power and spread scales
 the adaptive rate of its scores and two mixtures: the rate grid with
 learned common weights and the eight most recent weekly starts with
 learned weights (Table~\ref{tab:expert-combinations}); the equal-weight
-variants are no longer run.
+variants are no longer run, the rate grids not since 17 November (their
+numbers below are from the run of 13 November).
 
 \begin{center}\small
 \setlength{\tabcolsep}{3.5pt}
@@ -3913,10 +3995,10 @@ after the peak (Section~\ref{sec:base-width-failure}).
 scale on the log scale; after peaks the spread scale loses more.
 \end{itemize}
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Power scale''
-and ``Spread scale'' (pooled: pp.~1 and 7); the forecasts on pages 8 and 9
+and ``Spread scale'' (pooled: pp.~1 and 7); the forecasts on pages 7 and 8
 of each location's eleven in \path{multiqt_method_forecasts/}; the weights
-on pages 7 to 10 of each location's ten in \path{multiqt_weight_timelines/}
-(rate grid and weekly starts per scale).
+of the weekly starts per scale on pages 6 and 7 of each location's seven in
+\path{multiqt_weight_timelines/}.
 
 \subsection{Sign-flip experts and two-phase trackers}
 \label{sec:results-phase}
@@ -3971,8 +4053,9 @@ calibration ($+5.1\%$ against $+7.4\%$): the probability, learned from
 errors that are $h+1$ weeks old or more, turns too late.
 \item \textbf{Knowing the phase is worth about 3 points.}
 \texttt{phase\_oracle}, the same tracker with the phase in hindsight, is
-the only method that beats the base overall in every disease and design
-($-0.7\%$ to $-2.8\%$) and in most cases (COVID $54\%$, flu $77\%$), most
+the only method of this run that beats the base overall in every disease
+and design ($-0.7\%$ to $-2.8\%$; since 18 November \texttt{phase\_angle}
+does too, Section~\ref{sec:results-phase-outside}) and in most cases (COVID $54\%$, flu $77\%$), most
 of it up to peaks ($-9.7\%$; flu $-14\%$ to $-16\%$). Its calibration gain
 is smaller, and for COVID at delay 0 its calibration error grows
 ($+41\%$): two thresholds, each learned on a few weeks per wave, are
@@ -4092,9 +4175,9 @@ The numbers come from the scripts \path{polar_tracker.R} and
 
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, groups ``Sign-flip
 experts'' and ``Two-phase trackers'' (pooled: pp.~1 and 7); the forecasts
-on pages 10 and 11 of each location's eleven in
+on pages 9 and 10 of each location's eleven in
 \path{multiqt_method_forecasts/}; the weights of the sign-flip experts on
-the sixth page of each location in \path{multiqt_weight_timelines/}.
+the fifth page of each location in \path{multiqt_weight_timelines/}.
 
 \subsection{COVID and flu around their peaks}
 \label{sec:results-flu-covid}
@@ -4449,10 +4532,149 @@ with the logistic bias probability stays better for COVID ($-2.6\%$, with
 the holidays alone $-4.1\%$): for COVID the sign of the bias matters more
 than the phase.
 \end{itemize}
-A practical choice per disease, so far: flu, the hidden-phase model with
-three free phases; COVID, the angle with the bias probability with the
-holidays (and NSSP on the CMU base). Both are experiments in \path{agent/},
-evaluated on the same weeks their inputs were designed on.
+A practical choice per disease, from these experiments: flu, the
+hidden-phase model with three free phases; COVID, the angle with the bias
+probability with the holidays (and NSSP on the CMU base). Both were
+evaluated on the same weeks their inputs were designed on; since 17
+November they run in the workflow (next paragraph).
+
+\paragraph{In the workflow (run of 18 November).} Script 04 runs the two
+choices as \texttt{phase\_angle} (the angle with a slow offset and the bias
+probability from all inputs) and \texttt{phase\_hidden} (three free phases
+with the hidden-phase model's probabilities, the NREVSS prior for flu and the
+European prior for COVID, updated weights), Section~\ref{sec:methods}, with
+the inputs of script 05. Both run for both diseases, on both bases and in all
+six feedback designs, the corrected ones included
+(Section~\ref{sec:corrected-labels}). Checked against the experiments on the
+uncorrected designs: \texttt{phase\_hidden} reproduces them exactly
+(Table~\ref{tab:hidden-phase} gives version 3 with the weights as issued,
+$+1.7\%$ on the CMU base, against $+0.8\%$ here with the updated weights),
+\texttt{phase\_angle} within $0.006$ in the mean loss of a case (its
+probability has one term more than the closest experiment).
+Tables~\ref{tab:phase-workflow} and~\ref{tab:phase-workflow-peaks} give each
+design separately, every design next to its corrected version.
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+ & & \multicolumn{2}{c}{Delay 0} & \multicolumn{2}{c}{Delay 1} & \multicolumn{2}{c}{Re-run}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-8}
+Disease & Method & reports & corrected & reports & corrected & reports & corrected\\
+\midrule
+\multicolumn{8}{@{}l}{\emph{CMU base}}\\
+COVID & \texttt{phase\_angle} & $-0.7$ / $-1$ & $-0.8$ / $-16$ & $-0.6$ / $-12$ & $-0.6$ / $-18$ & $-0.5$ / $-19$ & $-0.5$ / $-19$ \\
+ & \texttt{phase\_hidden} & 0.3 / 0 & 0.6 / $-28$ & 1.0 / $-24$ & 1.2 / $-29$ & 1.2 / $-28$ & 1.2 / $-28$ \\
+ & \texttt{phase\_oracle} & $-1.2$ / 41 & $-2.1$ / 0 & $-1.2$ / 12 & $-1.2$ / $-3$ & $-0.7$ / $-3$ & $-0.8$ / $-5$ \\
+Flu & \texttt{phase\_angle} & $-1.6$ / $-26$ & $-1.4$ / $-30$ & $-1.8$ / $-33$ & $-1.7$ / $-32$ & $-1.5$ / $-32$ & $-1.4$ / $-32$ \\
+ & \texttt{phase\_hidden} & $-1.1$ / $-32$ & $-0.7$ / $-30$ & $-1.0$ / $-30$ & $-0.7$ / $-27$ & $-0.9$ / $-33$ & $-0.8$ / $-31$ \\
+ & \texttt{phase\_oracle} & $-2.8$ / $-30$ & $-2.7$ / $-36$ & $-2.5$ / $-34$ & $-2.3$ / $-32$ & $-2.8$ / $-36$ & $-2.7$ / $-34$ \\
+\multicolumn{8}{@{}l}{\emph{Longer history}}\\
+COVID & \texttt{phase\_angle} & $-1.8$ / $-17$ & $-1.9$ / $-24$ & $-1.6$ / $-26$ & $-1.7$ / $-29$ & $-1.9$ / $-32$ & $-1.9$ / $-33$ \\
+ & \texttt{phase\_hidden} & $-0.7$ / $-26$ & $-0.3$ / $-37$ & $-0.3$ / $-39$ & 0.1 / $-41$ & $-0.5$ / $-47$ & $-0.5$ / $-48$ \\
+ & \texttt{phase\_oracle} & $-0.3$ / 24 & $-1.0$ / $-5$ & 0.1 / $-3$ & $-0.1$ / $-21$ & $-0.8$ / $-26$ & $-0.9$ / $-31$ \\
+Flu & \texttt{phase\_angle} & $-1.9$ / $-52$ & $-2.0$ / $-67$ & $-1.9$ / $-64$ & $-1.9$ / $-70$ & $-2.0$ / $-70$ & $-2.0$ / $-71$ \\
+ & \texttt{phase\_hidden} & $-4.3$ / $-65$ & $-4.4$ / $-72$ & $-4.2$ / $-73$ & $-4.2$ / $-74$ & $-5.1$ / $-77$ & $-5.1$ / $-78$ \\
+ & \texttt{phase\_oracle} & $-5.2$ / $-50$ & $-5.5$ / $-68$ & $-5.0$ / $-63$ & $-5.0$ / $-69$ & $-5.8$ / $-68$ & $-5.9$ / $-70$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:phase-workflow}
+\begin{center}\small Table \thetable: The phase from outside data in the
+workflow (run of 18 November): change of the pooled loss / calibration error
+versus each base (\%), every design separately (``reports'': learning from
+the reports; ``corrected'': from the corrected labels). CMU base: horizons
+$-1$ to $3$, June 2025 to September 2026; longer history: horizons $0$ to
+$3$, November 2024 to September 2026; \texttt{phase\_oracle}: the phase in
+hindsight (\path{workflow_by_design.txt} in \path{agent/outputs/phase_angle/}).
+\end{center}
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+ & & \multicolumn{2}{c}{Delay 0} & \multicolumn{2}{c}{Delay 1} & \multicolumn{2}{c}{Re-run}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-8}
+Disease & Method & reports & corrected & reports & corrected & reports & corrected\\
+\midrule
+\multicolumn{8}{@{}l}{\emph{CMU base}}\\
+COVID & \texttt{phase\_angle} & $-1.0$ / 0.7 & $-3.6$ / 1.8 & $-2.5$ / 1.7 & $-3.4$ / 2.0 & $-4.6$ / 2.3 & $-4.6$ / 2.3 \\
+ & \texttt{phase\_hidden} & $-2.9$ / 2.4 & $-7.4$ / 5.0 & $-4.1$ / 4.4 & $-5.6$ / 5.2 & $-6.2$ / 5.1 & $-6.8$ / 5.2 \\
+ & \texttt{phase\_oracle} & $-1.5$ / $-2.6$ & $-7.6$ / 0.0 & $-5.0$ / 0.5 & $-7.5$ / 1.4 & $-7.6$ / 3.1 & $-8.3$ / 3.1 \\
+Flu & \texttt{phase\_angle} & $-9.7$ / 5.7 & $-10.7$ / 6.5 & $-10.0$ / 5.2 & $-10.3$ / 5.6 & $-11.4$ / 7.2 & $-11.4$ / 7.3 \\
+ & \texttt{phase\_hidden} & $-12.4$ / 8.4 & $-13.6$ / 9.3 & $-12.6$ / 7.6 & $-13.0$ / 8.0 & $-14.4$ / 10.3 & $-14.5$ / 10.4 \\
+ & \texttt{phase\_oracle} & $-13.7$ / 5.8 & $-14.9$ / 6.5 & $-14.4$ / 6.9 & $-14.8$ / 7.3 & $-15.8$ / 8.0 & $-15.9$ / 8.1 \\
+\multicolumn{8}{@{}l}{\emph{Longer history}}\\
+COVID & \texttt{phase\_angle} & 1.7 / 0.5 & 1.3 / 0.6 & 1.7 / 0.4 & 1.3 / 0.5 & 0.6 / 0.9 & 0.6 / 0.9 \\
+ & \texttt{phase\_hidden} & $-1.9$ / 4.6 & $-2.8$ / 5.9 & $-2.3$ / 5.3 & $-3.0$ / 6.3 & $-2.2$ / 5.4 & $-2.4$ / 5.5 \\
+ & \texttt{phase\_oracle} & 2.7 / 0.0 & 1.3 / 0.3 & 2.1 / 2.1 & 1.0 / 2.2 & 0.9 / $-1.0$ & 0.6 / $-1.1$ \\
+Flu & \texttt{phase\_angle} & $-3.4$ / 1.7 & $-3.8$ / 1.9 & $-3.3$ / 1.4 & $-3.5$ / 1.5 & $-3.9$ / 2.1 & $-4.0$ / 2.2 \\
+ & \texttt{phase\_hidden} & $-9.2$ / 0.4 & $-9.8$ / 0.6 & $-9.2$ / 0.1 & $-9.3$ / 0.2 & $-9.6$ / 0.4 & $-9.7$ / 0.4 \\
+ & \texttt{phase\_oracle} & $-10.9$ / $-0.4$ & $-11.5$ / $-0.3$ & $-11.0$ / $-0.3$ & $-11.1$ / $-0.3$ & $-12.2$ / 0.0 & $-12.3$ / 0.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:phase-workflow-peaks}
+\begin{center}\small Table \thetable: As Table~\ref{tab:phase-workflow}:
+change of the pooled loss versus each base (\%) up to the peaks / after the
+peaks.
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{On the CMU base \texttt{phase\_angle} is the best real-time
+method in every design, for both diseases}: COVID $-0.5\%$ to $-0.8\%$, flu
+$-1.4\%$ to $-1.8\%$, against $-0.1\%$ to $-0.3\%$ for the best other COVID
+method (\texttt{restart\_recent}, \texttt{power\_restart\_recent}) and
+$-0.2\%$ to $-0.4\%$ for flu (\texttt{sqrt\_constant}). It also lowers the
+calibration error in every cell. For flu \texttt{phase\_hidden} comes second
+($-0.7\%$ to $-1.1\%$); for COVID it stays above the base ($+0.3\%$ to
+$+1.2\%$), as in the experiments.
+\item \textbf{On the longer history \texttt{phase\_hidden} is best for flu in
+every design} ($-4.2\%$ to $-5.1\%$, calibration error $-65\%$ to $-78\%$),
+within about a point of \texttt{phase\_oracle}, and about twice the next method
+(\texttt{sqrt\_constant}, $-2.0\%$ to $-2.4\%$). For COVID
+\texttt{phase\_angle} gains $1.6\%$ to $1.9\%$ in every design; it is best in
+three of the six, while the spread-scale tracker
+\texttt{studentized\_spread} is better at delay 0 ($-3.2\%$, corrected
+$-2.3\%$) and delay 1 ($-1.7\%$).
+\item \textbf{The corrected labels hardly change the loss} of the two
+methods (at most $0.4$ points) but lower their calibration error where the
+reports were most biased: delay 0 on the CMU base for COVID
+(\texttt{phase\_angle} $-1\%$ becomes $-16\%$, \texttt{phase\_hidden} $0\%$
+becomes $-28\%$), and on the longer history for both diseases. The
+\texttt{phase\_oracle}'s COVID calibration error at delay 0, $+41\%$, falls
+to $0\%$. In the re-run the corrected labels change almost nothing.
+\item \textbf{The gain comes before the peaks; after them both lose.} Up to
+the peaks \texttt{phase\_hidden} gains nearly what the true phase gains (CMU
+flu $-12\%$ to $-15\%$, \texttt{phase\_oracle} $-14\%$ to $-16\%$,
+\texttt{phase\_angle} $-10\%$ to $-11\%$); after the peaks both lose (CMU flu $+5\%$ to $+10\%$), and so
+does \texttt{phase\_oracle} ($+6\%$ to $+8\%$): with this tracker even the
+true phase does not repair the weeks after a flu peak. With the corrected
+labels the loss after peaks grows a little, most at delay 0 (CMU COVID
+\texttt{phase\_hidden} $+2.4\%$ becomes $+5.0\%$), as for every method
+(Section~\ref{sec:corrected-labels}). Only on the longer history, for flu,
+does \texttt{phase\_hidden} keep the after-peak loss near the base
+($+0.1\%$ to $+0.6\%$).
+\item \textbf{Bias.} Both methods remove the base's average bias for flu
+(CMU: $-0.07$ to between $-0.03$ and $+0.02$) but not its sign change at the
+peaks: pooled over the uncorrected designs, the CMU COVID bias after the
+peaks stays $+0.17$ (base $+0.17$, \texttt{phase\_oracle} $+0.13$), and after
+the flu peaks it turns positive ($+0.03$ and $+0.04$ against the base's
+$-0.02$).
+\end{itemize}
+\emph{Plots.} The group ``Phase from outside data'' of
+\path{multiqt_feedback_bars.pdf} and of
+\path{multiqt_feedback_bars_corrected.pdf} (pooled: pp.~1 and 7, both bases); the forecasts on the eleventh
+page of each location in \path{multiqt_method_forecasts/} (none for the US,
+which is not a pooled location). R/06's tree picks its ten methods by the
+after-peak loss, so its CMU flu pages show neither method and its
+longer-history COVID pages not \texttt{phase\_hidden}. Tables:
+\path{workflow_by_design.txt} and \path{workflow_notes_tables.txt} (cases
+weighted by their weeks) in \path{agent/outputs/phase_angle/}, from the
+scripts \path{workflow_by_design.R}, \path{workflow_notes_tables.R} and
+\path{workflow_latex_rows.R} in \path{agent/scripts/phase_angle/}.
 
 \paragraph{Bias and dispersion in the tree} (\path{multiqt_evaluation_tree_bias.pdf},
 run of 16 November). Pooled over the 10 states, the base's bias is $-0.19$ up to
@@ -4469,7 +4691,9 @@ $+0.13$ against $+0.17$).
 The same workflow on our own \texttt{windowed\_seasonal} forecasts
 (Section~\ref{sec:data-preparation}), run on 15--16 November 2026
 (scripts 01, 04, 06, 02 and 07 with \texttt{MULTIQT\_BASE\_MODEL=windowed\_seasonal},
-outputs in \path{output/windowed_seasonal/}): every method of
+outputs in \path{output/windowed_seasonal/}) and again on 18 November with
+\texttt{phase\_angle} and \texttt{phase\_hidden} (scripts 05, 04 and 06; the
+other methods unchanged): every method of
 Section~\ref{sec:methods} at its adaptive rate, the same designs and
 pooling, horizons $0$ to $3$. The trackers learn from October 2023 on,
 the 2023/24 season from HHS reports, and carry their state across the
@@ -4519,6 +4743,9 @@ Method & windowed & CMU & windowed & CMU & windowed / CMU\\
 \texttt{phase\_power}      & 0.8 / $-11$ & 2.1 / 1   & $-1.9$ / $-64$ & 0.7 / $-38$ & 7.5 / $-0.2$\\
 \texttt{phase\_oracle} (hindsight) & $-0.3$ / $-2$ & $-1.0$ / 17 & $-5.4$ / $-61$ & $-2.7$ / $-34$ & 1.9 / $-4.7$\\
 \texttt{polar}             & 9.9 / 6   & 6.1 / 9   & 1.9 / $-53$  & 4.3 / $-30$  & 15.9 / 1.9\\
+\addlinespace
+\texttt{phase\_angle}      & $-1.8$ / $-25$ & $-0.6$ / $-11$ & $-1.9$ / $-62$ & $-1.6$ / $-30$ & 1.3 / $-2.7$\\
+\texttt{phase\_hidden}     & $-0.5$ / $-37$ & 0.8 / $-17$ & $-4.5$ / $-72$ & $-1.0$ / $-32$ & $-2.1$ / $-4.4$\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -4528,6 +4755,9 @@ error versus each run's own base (\%), mean over the three designs; the
 last column the loss up to the COVID peaks. Windowed: evaluation November
 2024 to September 2026, horizons $0$ to $3$; CMU: June 2025 to September
 2026, horizons $-1$ to $3$ (\path{agent/scripts/windowed_vs_cmu.R}).
+\texttt{studentized\_pit}, not run since 17 November, from the run of 16
+November; the phase methods from the run of 18 November
+(Table~\ref{tab:phase-workflow} gives every design).
 \end{center}
 
 \begin{itemize}[leftmargin=*,itemsep=3pt]
@@ -4540,7 +4770,7 @@ emergency-department visits (NSSP).
 Delphi's square-root tracker ($-2.2\%$ loss, $-64\%$ CE), the two-phase
 tracker ($-1.9\%$, $-64\%$), REF-op and the power scale gain loss and
 remove most of the calibration error; for COVID the PIT tracker
-($-4.4\%$), the log1p tracker and Delphi's square-root tracker. The
+($-4.4\%$; not run since 17 November), the log1p tracker and Delphi's square-root tracker. The
 calibration gains are larger than with the CMU base, often about twice:
 a worse base leaves more to correct. The corrected forecasts stay well above the CMU
 base's loss.
@@ -4557,7 +4787,10 @@ $7.2\%$ after the 2024/25 peaks instead of $1.8\%$
 of the season before; a COVID wave does not.
 \item \textbf{The phase is worth more for flu with this base}:
 \texttt{phase\_oracle} $-5.4\%$ against $-2.7\%$ with CMU's, and the
-error-based two-phase tracker already gains ($-1.9\%$).
+error-based two-phase tracker already gains ($-1.9\%$). With the phase from
+outside data, \texttt{phase\_hidden} recovers most of it ($-4.5\%$, $-72\%$
+calibration error); for COVID \texttt{phase\_angle} gains $1.8\%$, against $0.6\%$ with
+CMU's base (Section~\ref{sec:results-phase-outside}, ``In the workflow'').
 \end{itemize}
 What two winters make possible: a seasonal timing prior and a seasonal
 centre (Section~\ref{sec:open-issues}) need earlier seasons to learn
