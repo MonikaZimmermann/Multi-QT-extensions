@@ -1793,7 +1793,9 @@ paused_methods <- c(
   "score_equal",                                                         # Score bank.
   # 17 November 2026: the rate-grid mixtures and the PIT tracker.
   "uniform", "weighted", "weighted_common", "power_weighted_common", "spread_weighted_common",
-  "studentized_pit")
+  "studentized_pit",
+  # 19 November 2026: the score bank and the slow + fast weekly starts (close to the base).
+  "score_learned", "restart_recent_dual")
 active_methods <- setdiff(method_names, paused_methods)
 # The method families of 04's plots (forecast pages, trade-off colours); their methods are
 # also the candidates of 06's tree.
