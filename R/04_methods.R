@@ -228,8 +228,12 @@ plot_title <- function(run) paste(run$case$disease, "| horizon", run$case$horizo
   if (transform == "log1p") "log1p(counts) updates" else "raw-count updates",
   "| feedback", feedback_label(run$case$feedback_delay, run$case$feedback_revised,
     isTRUE(run$case$feedback_corrected)))
-# Plots leave out a method whose identical twin is drawn in the same plot.
+# Plots leave out a method without forecasts here (phase_angle and phase_hidden outside the
+# pooled locations; two such methods count as twins) and a method whose identical twin is
+# drawn in the same plot.
+has_forecasts <- function(run, method) any(is.finite(run$predictions[[method]]))
 shown_methods <- function(run, methods) {
+  methods <- Filter(function(method) has_forecasts(run, method), methods)
   twins <- run$duplicate_of[names(run$duplicate_of) %in% methods]
   setdiff(methods, names(twins)[twins %in% methods])
 }
@@ -257,6 +261,10 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
   truth_label <- score_truth_label(settings$score_target, run$case$feedback_delay)
   truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
   method_names <- shown_methods(run, method_groups[[group_name]])
+  # No page for a group whose own methods have no forecasts here (phase_angle and
+  # phase_hidden at the US and other locations outside the pooled ones).
+  own <- names(home_group)[home_group == group_name]
+  if (!any(vapply(own, has_forecasts, logical(1), run = run))) next
   layout(rbind(blocks, 2L * length(plot_levels) + 1L), heights = c(rep(c(2, 1), 3), .45))
   par(oma = c(1.5, 0, 4, 0), mgp = c(2.4, .6, 0), cex = .85)
   dates <- run$case$target_date

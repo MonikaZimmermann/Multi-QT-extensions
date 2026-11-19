@@ -1870,15 +1870,19 @@ method_short_labels <- c(method_short_labels, unlist(lapply(names(scale_titles),
       "_restart_equal", "_restart_recent")))))))
 # Colours of 04's trade-off plots and 06's tree: a method takes the colour family of the
 # first group of method_groups that lists it, one shade per method; common-weight and outer
-# variants share their method's shade. Every method group needs a palette: methods of a
-# group without one get no colour and are not drawn.
-group_palettes <- c("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
+# variants share their method's shade. Every method group needs a palette (an hcl.colors()
+# palette or one colour per method): methods of a group without one get no colour and are
+# not drawn. The phase methods from outside data in amber and violet, hues no other method
+# has: in shades of one palette they could not be told apart from each other and from the
+# phase oracle drawn with them.
+group_palettes <- list("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Rate-grid experts" = "Oranges",
   "Weekly starts: immediate admission" = "Greens 3", "Score-based experts" = "Purples 3",
   "Studentized median" = "Burg",
   "Studentized full base" = "BluGrn", "Power scale" = "Peach",
   "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
-  "Two-phase trackers" = "Dark Mint", "Phase from outside data" = "Teal")
+  "Two-phase trackers" = "Dark Mint",
+  "Phase from outside data" = c(phase_angle = "#E69F00", phase_hidden = "#7815C4"))
 home_group <- local({
   home <- character()
   for (group in names(method_groups)) for (method in method_groups[[group]])
@@ -1892,7 +1896,9 @@ tradeoff_colours <- local({
     members <- home_group == group
     bases <- unique(base_method[members])
     # Sequential palettes run dark to light; drop the two lightest shades.
-    shades <- hcl.colors(length(bases) + 2L, group_palettes[[group]])[seq_along(bases)]
+    palette <- group_palettes[[group]]
+    shades <- if (is.null(names(palette)))
+      hcl.colors(length(bases) + 2L, palette)[seq_along(bases)] else palette[bases]
     colours[names(home_group)[members]] <- shades[match(base_method[members], bases)]
   }
   colours
