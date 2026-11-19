@@ -1395,7 +1395,8 @@ models use recent hospital admissions, sometimes with emergency-department
 data; linear-trend models extrapolate recent changes, and climatological
 models use patterns from earlier years. The ensemble takes a weighted
 average of the component forecasts at each quantile level. Components
-and weights can vary by date, location and horizon. We use these archived
+and weights can vary by date, location and horizon, and the components differ
+between the diseases (Section~\ref{sec:results-flu-covid}). We use these archived
 ensemble quantiles as $b_t^\alpha$ and apply our recalibration to them.
 See the \href{https://github.com/cdcepi/FluSight-forecast-hub/blob/main/model-metadata/CMU-TimeSeries.yml}{CMU model description}
 and the pinned \href{https://github.com/cmu-delphi/delphi-hub-forecasting/blob/9abebcfbcd4330aae5314fae51c5e8e5524675b5/R/ensemble_weights.R}{ensemble code}.
@@ -4255,6 +4256,34 @@ plots from 16 November on, lowers the COVID calibration error after peaks
 from $0.184$ to $0.138$ and is the only method that does not lose there.
 The bias tree (\path{multiqt_evaluation_tree_bias.pdf}) shows the sign of
 the miss directly (\path{agent/scripts/flu_covid_bars.R}).
+\item \textbf{The two bases are built differently.} CMU describes both as
+quantile autoregressions on lagged hospital admissions per capita, fitted
+jointly over the states, but trained on different data (the model
+descriptions in the
+\href{https://github.com/cdcepi/FluSight-forecast-hub/blob/main/model-metadata/CMU-TimeSeries.yml}{flu}
+and the
+\href{https://github.com/CDCgov/covid19-forecast-hub/blob/main/model-metadata/CMU-TimeSeries.yml}{COVID}
+hub, retrieved 19 November 2026): for flu on a window of 7 weeks around
+the forecast date \emph{in all past seasons}, with historical FluSurv-NET
+and ILI data, whitened, added as training examples, and averaged with a
+climatological and a linear model (each with about a sixth of the
+autoregression's weight); for COVID on \emph{the most recent 21 days} of
+data. Delphi's production code (the commit pinned by script 00) agrees in
+substance: the submitted ensemble of both diseases is a weighted mix of
+autoregressive models (plain, with NSSP, revision-aware); the flu models
+train with ILI+ and FluSurv-NET rows of earlier seasons (scaled to
+hospitalizations with the burden estimates of 2011 to 2020) in a seasonal
+window, the COVID models on the NHSN admissions alone, and the plain COVID
+model, two fifths of the weight, has no seasonal window. Our reading, not
+tested: a model trained on the last three weeks extrapolates the current
+trend, so it lags each turn of a wave and is too low on the rise and about
+as much too high after the peak, the mirror image above; a model trained on
+the same weeks of earlier seasons forecasts the growth usual for the time of
+year, too little for a season that rises faster, and it does not see the
+turn either. The descriptions are those of today; the components and
+weights may have changed during the evaluation period. Our own
+\texttt{windowed\_seasonal} base (script 00) is the plain flu and COVID
+model of this code, with the same flu augmentation.
 \item \textbf{Possible reasons} (from the literature on the two diseases;
 not tested here). Influenza has a strong seasonal driver: low absolute
 humidity marks the onset of the winter epidemics in the United
@@ -4857,6 +4886,83 @@ $+9\%$).
 methods in California and Texas is not the one in New York and
 Pennsylvania. The US, as the sum of the states, resembles New York and
 Pennsylvania for COVID.
+\end{itemize}
+\paragraph{Before and after the peaks, state by state.}
+Table~\ref{tab:locations-phase} gives, for each of the 10 pooled states, the
+base's bias up to and after the peaks and the loss change of four methods in
+the two windows (run of 18 November; mean over the horizons and the three
+uncorrected designs).
+
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3.2pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}lrrrrrrrrrr@{}}
+\toprule
+ & \multicolumn{2}{c}{Bias of the base} & \multicolumn{2}{c}{\texttt{fixed}}
+ & \multicolumn{2}{c}{\texttt{phase\_oracle}} & \multicolumn{2}{c}{\texttt{phase\_angle}}
+ & \multicolumn{2}{c}{\texttt{phase\_hidden}}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}\cmidrule(l){10-11}
+State & up to & after & up to & after & up to & after & up to & after & up to & after\\
+\midrule
+\multicolumn{11}{@{}l}{\emph{COVID}}\\
+California & $-0.35$ & 0.17 & $-7.6$ & 16.9 & $-14.0$ & 4.7 & $-5.3$ & 4.3 & $-9.5$ & 4.7 \\
+Texas & $-0.20$ & 0.15 & $-10.7$ & 12.7 & $-6.7$ & $-1.0$ & $-6.6$ & 3.5 & $-2.6$ & 6.8 \\
+New York & $-0.10$ & 0.19 & 8.8 & 2.0 & 3.9 & 3.4 & 2.3 & 1.3 & $-2.2$ & 1.7 \\
+Pennsylvania & $-0.15$ & 0.21 & 4.7 & 6.4 & $-7.5$ & $-3.4$ & $-0.4$ & 0.4 & $-7.1$ & 3.7 \\
+Illinois & $-0.23$ & 0.16 & 7.8 & 5.9 & $-9.7$ & 0.1 & 1.5 & 1.1 & $-4.6$ & 4.0 \\
+Ohio & $-0.21$ & 0.20 & 1.7 & 6.4 & $-13.6$ & $-2.0$ & $-4.4$ & 1.1 & $-6.4$ & 5.0 \\
+Georgia & $-0.16$ & 0.09 & $-9.6$ & 16.5 & 1.6 & 1.0 & $-6.7$ & 2.6 & 0.0 & 4.1 \\
+North Carolina & $-0.21$ & 0.20 & $-5.5$ & 12.7 & $-8.7$ & 4.3 & $-5.3$ & 5.1 & $-5.5$ & 8.9 \\
+Michigan & $-0.18$ & 0.01 & 14.7 & 4.4 & 14.8 & 9.5 & $-1.1$ & $-0.3$ & $-2.3$ & 4.8 \\
+New Jersey & $-0.10$ & 0.25 & 20.6 & $-1.6$ & $-2.8$ & $-6.6$ & 0.3 & $-0.3$ & 1.5 & $-1.5$ \\
+\multicolumn{11}{@{}l}{\emph{Flu}}\\
+California & $-0.15$ & 0.01 & $-4.2$ & 14.4 & $-15.7$ & 21.1 & $-12.1$ & 10.4 & $-13.1$ & 20.6 \\
+Texas & $-0.14$ & $-0.08$ & $-1.8$ & $-0.9$ & $-7.1$ & 5.0 & $-4.5$ & 1.7 & $-7.1$ & 2.5 \\
+New York & $-0.31$ & $-0.01$ & $-2.0$ & 4.6 & $-15.2$ & $-1.6$ & $-6.9$ & 1.7 & $-14.3$ & 3.8 \\
+Pennsylvania & $-0.24$ & 0.00 & $-5.0$ & 6.1 & $-18.8$ & 23.6 & $-19.6$ & 16.1 & $-16.7$ & 16.3 \\
+Illinois & $-0.24$ & $-0.06$ & $-3.3$ & 1.5 & $-14.2$ & 3.2 & $-10.1$ & 2.9 & $-12.5$ & 6.5 \\
+Ohio & $-0.26$ & $-0.02$ & $-7.0$ & 3.7 & $-15.6$ & 1.1 & $-12.5$ & 6.0 & $-14.9$ & 11.6 \\
+Georgia & $-0.27$ & $-0.08$ & $-1.7$ & $-1.2$ & $-10.7$ & 1.9 & $-4.4$ & $-0.5$ & $-10.2$ & 2.6 \\
+North Carolina & $-0.29$ & $-0.01$ & $-1.8$ & 1.2 & $-11.4$ & 4.6 & $-7.1$ & 4.8 & $-10.5$ & 6.7 \\
+Michigan & $-0.22$ & $-0.03$ & 2.1 & 4.0 & $-10.9$ & 8.0 & $-12.3$ & 6.0 & $-8.4$ & 6.6 \\
+New Jersey & $-0.29$ & 0.04 & $-4.7$ & 9.1 & $-20.2$ & 7.7 & $-10.9$ & 13.5 & $-17.1$ & 20.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\refstepcounter{table}\label{tab:locations-phase}
+\begin{center}\small Table \thetable: The 10 pooled states up to the peaks
+(weeks $-7$ to 0) and after them (weeks 1 to 8): the base's bias (mean
+coverage minus $\alpha$; negative: too low) and the loss change versus the
+base (\%) (\path{agent/scripts/summary_state_phase.R}).
+\end{center}
+
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{The base changes sign in every state.} Up to the peaks it is
+too low in all 10 states for both diseases (COVID $-0.10$ to $-0.35$, flu
+$-0.14$ to $-0.31$); after them it is too high in all 10 for COVID ($+0.01$
+to $+0.25$) and about right on average for flu ($-0.08$ to $+0.04$; too high
+in weeks 2 and 3, too low in the tail, Section~\ref{sec:results-flu-covid}).
+\item \textbf{The trackers do not respond alike.} Up to the COVID peaks
+Fixed MultiQT gains in 4 states (California, Texas, Georgia, North
+Carolina: $-5.5\%$ to $-10.7\%$) and loses in six (New Jersey $+20.6\%$,
+Michigan $+14.7\%$, New York $+8.8\%$); after them it loses in 9. Our
+reading, not tested: where the base's overshoot after a peak is larger than
+its undershoot before it (New Jersey $+0.25$ and $-0.10$, New York $+0.19$
+and $-0.10$, Pennsylvania $+0.21$ and $-0.15$), the tracker enters the next
+rise with the downward correction learned in the decline; where the
+undershoot dominates (California, Texas, Georgia) the correction of the
+rise wins. Illinois and Michigan do not fit.
+\item \textbf{With the phase} the rise gains in more states: up to the COVID
+peaks \texttt{phase\_oracle} gains in 7 states, \texttt{phase\_angle} in 7
+and \texttt{phase\_hidden} in 8, but after them only in 4, 2 and 1. For flu
+the three gain up to the peak in every state and after it in at most one;
+the losses after flu peaks are largest in California, Pennsylvania and New
+Jersey (\texttt{phase\_oracle} $+21\%$, $+24\%$, $+8\%$;
+\texttt{phase\_hidden} $+21\%$, $+16\%$, $+20\%$).
+\item Hence the gain before and the loss after the peak are the same story
+in every state, but their size depends on the state's waves: a single
+correction cannot serve both phases, and the pooled numbers average states
+that behave in opposite ways.
 \end{itemize}
 \emph{Plots.} \path{multiqt_feedback_bars.pdf}, pp.~2--6 (COVID) and 8--12
 (flu), every method per location; the location pages of
