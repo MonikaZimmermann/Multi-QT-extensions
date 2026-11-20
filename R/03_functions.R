@@ -790,9 +790,14 @@ power_sigma <- function(case, p = .5) (1 + case$base[, match(.5, case$alpha)])^p
 # median. Matrix [week x level] (multiqt() then uses the weighted projection).
 spread_sigma <- function(case, lambda = .4) {
   B <- case$base
-  s <- pmax(1, (B[, match(.75, case$alpha)] - B[, match(.25, case$alpha)]) / 2)
+  s <- half_iqr_sigma(case)
   s * (1 + abs(B - B[, match(.5, case$alpha)]) / s)^(1 - lambda)
 }
+# half_iqr_sigma(): half the forecast's interquartile range, s_t = (b_t^.75 - b_t^.25) / 2,
+# at least one count, one scale per week (spread_sigma() at lambda = 1). Since 20 November
+# 2026 the scale of width_flip's tracker (the base width before).
+half_iqr_sigma <- function(case)
+  pmax(1, (case$base[, match(.75, case$alpha)] - case$base[, match(.25, case$alpha)]) / 2)
 # A scale in counts comparable with S0: divided by its median over the S0 rows (reference)
 # and multiplied by S0, so a rate m in units of the scale acts like m * S0 in a typical week
 # (the rate grid and the restart rate carry over). Each week first stays within a factor
@@ -1202,28 +1207,61 @@ revision_sigma <- function(case, type = "cutoff", floor = 1e-6, transform = "ide
 # stays within a factor `guard` of the median of its values so far (it binds only where a
 # scale explodes). The scales of the base width, the recent errors and
 # the revisions keep the bounds sigma_bounds * S0 of their methods. origin: where the idea
-# came from; methods: the methods that use it.
-score_candidates <- data.frame(id = c("identity", "sqrt", "log1p", "boxcox_25", "boxcox_75",
-  "power_m100", "power_25", "power_50", "power_75", "power_100", "power_150", "power_200",
-  "power_level_75", "level_rms", "median_rms", "base_width", "half_iqr", "spread", "pit",
-  "revisions_cutoff", "revisions_target", "window_asinh", "window_asinh_median",
-  "window_boxcox_median", "window_mlog_median", "centred_asinh", "centred_mlog"),
-  label = c("Identity", "Square root", "log1p", "Box-Cox 0.25 on counts",
-    "Box-Cox 0.75 on counts", "(1 + median)^-1", "(1 + median)^0.25", "(1 + median)^0.5",
-    "(1 + median)^0.75", "1 + median", "(1 + median)^1.5", "(1 + median)^2",
-    "(1 + b)^0.75 per level", "Level RMS of recent errors", "Median rebuild, recent errors",
-    "Base width", "Half the base IQR", "Spread per level",
-    "PIT of the base", "Revisions, every target", "Revisions, own target",
-    "asinh, window, exact", "asinh, window, at the median", "Box-Cox 0, window, at the median",
-    "Mirror log 0.3, window, at the median", "asinh, centred, exact",
-    "Mirror log 1/3, centred, exact"),
-  origin = c(rep("Trackers in use", 3), rep("Level of the forecast", 10),
-    rep("Recent errors", 2), rep("Spread of the forecast", 4),
-    rep("Revisions of the forecast", 2), rep("Uniejewski (2025)", 6)),
-  methods = c("fixed, leaky", "ref_op, sqrt_constant", "fixed_log, leaky_log", "", "", "", "",
-    "studentized_power", "", "", "", "", "", "studentized_level_rms", "studentized",
-    "studentized_full, studentized_base", "", "studentized_spread", "studentized_pit", "",
-    "", "", "", "", "", "", ""))
+# came from; kind: transform, common scale (one per week) or per-level scale; methods: the
+# methods that use it (some paused). The spread scale runs over five lambdas; lambda = 1 is
+# half the base IQR (since 20 November 2026).
+candidate_row <- function(id, label, origin, kind, methods = "")
+  data.frame(id = id, label = label, origin = origin, kind = kind, methods = methods)
+score_candidates <- rbind(
+  candidate_row("identity", "Identity", "Trackers in use", "transform", "fixed, leaky"),
+  candidate_row("sqrt", "Square root", "Trackers in use", "transform", "ref_op, sqrt_constant"),
+  candidate_row("log1p", "log1p", "Trackers in use", "transform", "fixed_log, leaky_log"),
+  candidate_row("boxcox_25", "Box-Cox 0.25 on counts", "Level of the forecast", "transform"),
+  candidate_row("boxcox_75", "Box-Cox 0.75 on counts", "Level of the forecast", "transform"),
+  candidate_row("power_m100", "(1 + median)^-1", "Level of the forecast", "common scale"),
+  candidate_row("power_25", "(1 + median)^0.25", "Level of the forecast", "common scale"),
+  candidate_row("power_50", "(1 + median)^0.5", "Level of the forecast", "common scale",
+    "studentized_power"),
+  candidate_row("power_75", "(1 + median)^0.75", "Level of the forecast", "common scale"),
+  candidate_row("power_100", "1 + median", "Level of the forecast", "common scale"),
+  candidate_row("power_150", "(1 + median)^1.5", "Level of the forecast", "common scale"),
+  candidate_row("power_200", "(1 + median)^2", "Level of the forecast", "common scale"),
+  candidate_row("power_level_75", "(1 + b)^0.75 per level", "Level of the forecast",
+    "per-level scale"),
+  candidate_row("level_rms", "Level RMS of recent errors", "Recent errors", "per-level scale",
+    "studentized_level_rms, level_flip"),
+  candidate_row("median_rms", "Median rebuild, recent errors", "Recent errors", "common scale",
+    "studentized"),
+  candidate_row("base_width", "Base width", "Spread of the forecast", "common scale",
+    "studentized_full, studentized_base"),
+  candidate_row("spread_0", "Spread per level, \u03bb = 0", "Spread of the forecast",
+    "per-level scale"),
+  candidate_row("spread_20", "Spread per level, \u03bb = 0.2", "Spread of the forecast",
+    "per-level scale"),
+  candidate_row("spread", "Spread per level, \u03bb = 0.4", "Spread of the forecast",
+    "per-level scale", "studentized_spread"),
+  candidate_row("spread_60", "Spread per level, \u03bb = 0.6", "Spread of the forecast",
+    "per-level scale"),
+  candidate_row("spread_80", "Spread per level, \u03bb = 0.8", "Spread of the forecast",
+    "per-level scale"),
+  candidate_row("half_iqr", "Half the base IQR (\u03bb = 1)", "Spread of the forecast",
+    "common scale", "width_flip"),
+  candidate_row("pit", "PIT of the base", "Spread of the forecast", "transform",
+    "studentized_pit"),
+  candidate_row("revisions_cutoff", "Revisions, every target", "Revisions of the forecast",
+    "common scale"),
+  candidate_row("revisions_target", "Revisions, own target", "Revisions of the forecast",
+    "common scale"),
+  candidate_row("window_asinh", "asinh, window, exact", "Uniejewski (2025)", "transform"),
+  candidate_row("window_asinh_median", "asinh, window, at the median", "Uniejewski (2025)",
+    "common scale"),
+  candidate_row("window_boxcox_median", "Box-Cox 0, window, at the median",
+    "Uniejewski (2025)", "common scale"),
+  candidate_row("window_mlog_median", "Mirror log 0.3, window, at the median",
+    "Uniejewski (2025)", "common scale"),
+  candidate_row("centred_asinh", "asinh, centred, exact", "Uniejewski (2025)", "transform"),
+  candidate_row("centred_mlog", "Mirror log 1/3, centred, exact", "Uniejewski (2025)",
+    "transform"))
 
 # Transforms T(z) of Uniejewski (2025), their inverse and derivative: the parametrized asinh
 # (slope c at the origin), the symmetric Box-Cox and the mirror log.
@@ -1274,7 +1312,7 @@ candidate_scores <- function(case, s0, params = method_parameters(), guard = 20,
   m_w <- vapply(reports, function(x) if (length(x)) median(x) else NA_real_, numeric(1))
   s_w <- vapply(reports, function(x) if (length(x)) max(1, median(abs(x - median(x)))) else
     NA_real_, numeric(1))
-  s_c <- pmax(1, (B[, match(.75, a)] - B[, match(.25, a)]) / 2)   # Half the base IQR.
+  s_c <- half_iqr_sigma(case)
   # Standardized transform T((x - centre_t) / spread_t) as a score.
   standardized <- function(tr, centre, spread) transform(
     function(x, t) tr$f((x - centre[t]) / spread[t]),
@@ -1299,7 +1337,9 @@ candidate_scores <- function(case, s0, params = method_parameters(), guard = 20,
     base_width = scaled(bound(median_sigma(case, "base", floor = 1e-6, transform = "identity",
       levels = params$median_base_levels)$scale)),
     half_iqr = scaled(s_c),
+    spread_0 = scaled(spread_sigma(case, 0)), spread_20 = scaled(spread_sigma(case, .2)),
     spread = scaled(spread_sigma(case, params$spread_lambda)),
+    spread_60 = scaled(spread_sigma(case, .6)), spread_80 = scaled(spread_sigma(case, .8)),
     pit = list(kind = "pit"),
     revisions_cutoff = scaled(bound(revision_sigma(case, "cutoff")$scale)),
     revisions_target = scaled(bound(revision_sigma(case, "target")$scale)),
@@ -1795,7 +1835,9 @@ paused_methods <- c(
   "uniform", "weighted", "weighted_common", "power_weighted_common", "spread_weighted_common",
   "studentized_pit",
   # 19 November 2026: the score bank and the slow + fast weekly starts (close to the base).
-  "score_learned", "restart_recent_dual")
+  "score_learned", "restart_recent_dual",
+  # 20 November 2026: the level RMS of recent errors, its tracker and its sign-flip experts.
+  "studentized_level_rms", "level_flip")
 active_methods <- setdiff(method_names, paused_methods)
 # The method families of 04's plots (forecast pages, trade-off colours); their methods are
 # also the candidates of 06's tree.
@@ -1835,7 +1877,7 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   leaky_weighted = "Leaky MultiQT, leak bank with learned weights",
   polar = "Polar MultiQT (shared angle)",
   power_flip = "Sign-flip experts: power scale", level_flip = "Sign-flip experts: level RMS",
-  width_flip = "Sign-flip experts: base width",
+  width_flip = "Sign-flip experts: half the base IQR",
   phase_power = "Two-phase power scale (decline probability)",
   phase_angle = "Angle + slow offset (bias probability, outside data)",
   phase_hidden = "Hidden-phase model (three phases, outside data)",
@@ -2073,8 +2115,12 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     case$feedback_observed, case$feedback_by_week, case$alpha,
     rate_of(unit(tracker_score(case, transform, scales))), warmup_weeks, transform,
     sigma = scales, feedback_samples = case$feedback_samples) / count_scale
-  if (want("studentized_full", "width_flip"))
+  if (want("studentized_full"))
     predictions$studentized_full <- full(base_sigma$scale)
+  # The tracker of width_flip: half the base IQR (half_iqr_sigma()), bounded like the base
+  # width; a helper, not issued.
+  if (want("width_flip"))
+    predictions$studentized_iqr <- full(bound(half_iqr_sigma(case)))
   # The residual scales exist once median_min_rows residuals are released, as for the median.
   if (want("studentized_level_rms", "level_flip") || scored)
     predictions$studentized_level_rms <- full(bound(level_residual_sigma(case,
@@ -2222,9 +2268,9 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # mirror, the base minus the tracker's correction (flip_bank()), with learned weights per
   # level and sharing. The bias of the base changes sign at a peak; the mirror issues the
   # learned correction with the other sign, and the weights move to it when it starts to
-  # lose less. Trackers: the power scale, the level RMS and the base width.
+  # lose less. Trackers: the power scale, the level RMS (paused) and half the base IQR.
   flips <- c(power_flip = "studentized_power", level_flip = "studentized_level_rms",
-    width_flip = "studentized_full")
+    width_flip = "studentized_iqr")
   for (method in intersect(names(flips), methods))
     mixtures[[method]] <- mix(method, weigh(method, flip_bank(base,
       predictions[[flips[[method]]]], case)))
@@ -2277,7 +2323,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     predictions[[method]] <- adjust(predictions[[outer_inner[[method]]]] * count_scale,
       par(method, "outer_multiplier") * s0$scale, s0$warmup_weeks)
   # Only the methods asked for (and the score bank's members); helpers computed for another
-  # method (e.g. the base-width tracker of width_flip) are not issued.
+  # method (e.g. the half-IQR tracker of width_flip) are not issued.
   predictions <- predictions[intersect(method_names, union(c("original", methods),
     if (scored) score_experts))]
   # expert_forecasts: the experts each mixture weighs [week x expert x level] in counts /

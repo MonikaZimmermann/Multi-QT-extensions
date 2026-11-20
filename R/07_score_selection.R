@@ -15,7 +15,7 @@
 #   up to and after the peak: each score's alpha-quantile in the weeks up to the peak and
 #     in the weeks after it (does the threshold change sign?);
 #   MultiQT on each candidate's score at the adaptive rate (as the methods of R/04).
-# Also draws each candidate's scores over time (multiqt_score_stationarity/).
+# Also draws the scores of the candidates in `shown` over time (multiqt_score_stationarity/).
 # Run from the project root after R/01_data_overview.R: Rscript R/07_score_selection.R
 source("R/03_functions.R")
 
@@ -38,14 +38,16 @@ dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(figure_dir, "multiqt_score_stationarity"), recursive = TRUE,
   showWarnings = FALSE)
 candidates <- score_candidates
-origin_colours <- c("Trackers in use" = "black", "Level of the forecast" = "#d95f02",
-  "Recent errors" = "#7570b3", "Spread of the forecast" = "#1b9e77",
-  "Revisions of the forecast" = "#66a61e", "Uniejewski (2025)" = "#a6761d")
-candidate_colours <- setNames(origin_colours[candidates$origin], candidates$id)
 labels <- setNames(candidates$label, candidates$id)
-# The candidates of the peak-aligned pages and of the scores over time.
-shown <- c("identity", "sqrt", "log1p", "power_50", "power_75", "level_rms", "base_width",
-  "spread", "pit", "revisions_target", "window_asinh")
+# The candidates of the scores over time (20 November 2026), one row each: the
+# powers of the forecast median, the spread scale over lambda (1: half the base IQR) and the
+# level RMS, then the transforms and the revisions (notes, "Scores and scales tested").
+shown <- c("power_m100", "power_25", "power_50", "power_75", "power_100", "power_150",
+  "power_200", "spread_0", "spread_20", "spread", "spread_60", "spread_80", "half_iqr",
+  "level_rms", "identity", "sqrt", "log1p", "pit", "revisions_target", "window_asinh")
+# Below each panel title: transform, common scale (one per week) or per-level scale.
+kinds <- setNames(candidates$kind, candidates$id)
+mark_kind <- function(id) mtext(kinds[[id]], side = 3, line = .15, cex = .6, col = "gray35")
 levels_shown <- c(.1, .5, .9)
 phase_window <- list(before = (1L - settings$weeks_before_peak):0L,
   after = seq_len(settings$weeks_after_peak))
@@ -54,8 +56,10 @@ level_colours <- c("#0072B2", "black", "#D55E00")
 # 2. THE THREE DIAGNOSTICS OF ONE CASE ------------------------------------------
 # Drift ratio of a score matrix [week x level]: drift and noise are the mean over the windows
 # of drift_window consecutive weeks and over the levels of |coverage - alpha| of the hindsight
-# threshold, with the weeks in their order and permuted.
-drift_ratio <- function(S, alpha) {
+# threshold, with the weeks in their order and permuted. orders: the permuted orders [week x
+# permutation], the same for every candidate of a case (its drift ratio then does not depend
+# on the other candidates, and candidates are compared on the same permutations).
+drift_ratio <- function(S, alpha, orders) {
   n <- nrow(S)
   if (n < 2L * drift_window) return(NA_real_)
   u <- vapply(seq_along(alpha), function(j) quantile(S[, j], alpha[j], type = 1,
@@ -67,8 +71,7 @@ drift_ratio <- function(S, alpha) {
       sums[seq_len(n - drift_window + 1L), , drop = FALSE]) / drift_window
     mean(abs(sweep(rolling, 2, alpha)))
   }
-  windowed(covered) / mean(replicate(permutations,
-    windowed(covered[sample.int(n), , drop = FALSE])))
+  windowed(covered) / mean(apply(orders, 2, function(o) windowed(covered[o, , drop = FALSE])))
 }
 # The scores of the reports of a case under one candidate (rows in release order).
 scores_of <- function(candidate, case) {
@@ -141,11 +144,12 @@ evaluate_case <- function(disease, location, horizon) {
       finite <- function(x) apply(is.finite(x), 1, all)
       keep <- is.finite(y) & Reduce(`&`, lapply(S[names(S) != "revisions_target"], finite))
       if (horizon < max(settings$horizons)) keep <- keep & finite(S$revisions_target)
+      orders <- replicate(permutations, sample.int(sum(keep)))
       for (id in names(S)) {
         x <- S[[id]][keep, , drop = FALSE]
         ok <- all(is.finite(x))
         rows$drift[[id]] <- data.frame(disease, location, horizon, candidate = id,
-          weeks = sum(keep), ratio = if (ok) drift_ratio(x, alpha) else NA_real_)
+          weeks = sum(keep), ratio = if (ok) drift_ratio(x, alpha, orders) else NA_real_)
         if (!ok || sum(keep) < 2L * drift_window) next
         u <- vapply(seq_along(alpha), function(j) quantile(x[, j], alpha[j], type = 1,
           names = FALSE), numeric(1))
@@ -238,7 +242,7 @@ short <- aggregate(ratio ~ disease + candidate, drift[drift$horizon < max(settin
   mean)
 drift_summary$ratio_short_horizons <- short$ratio[match(paste(drift_summary$disease,
   drift_summary$candidate), paste(short$disease, short$candidate))]
-drift_summary <- merge(candidates[c("id", "label", "origin", "methods")], drift_summary,
+drift_summary <- merge(candidates[c("id", "label", "origin", "kind", "methods")], drift_summary,
   by.x = "id", by.y = "candidate")
 drift_summary <- drift_summary[order(drift_summary$disease, drift_summary$ratio), ]
 write.csv(drift_summary, file.path(result_dir, "drift.csv"), row.names = FALSE)
@@ -298,170 +302,7 @@ for (variant in unique(pooled_running$variant)) {
 }
 sink()
 
-# 4. PLOTS: multiqt_score_selection.pdf ----------------------------------------
-cairo_pdf(file.path(figure_dir, "multiqt_score_selection.pdf"), width = 16, height = 11,
-  onefile = TRUE, family = "DejaVu Sans")
-# Page 1: the drift ratio of every candidate, both diseases; the bar spans the middle half of
-# the cases.
-order_ids <- with(aggregate(ratio ~ id, drift_summary, mean), id[order(ratio)])
-par(mfrow = c(1, 2), mar = c(4.5, 16, 3, 1), oma = c(4, 0, 3, 0))
-for (d in diseases) {
-  x <- drift_summary[drift_summary$disease == d, ]
-  x <- x[match(rev(order_ids), x$id), ]
-  spread <- t(vapply(x$id, function(id) quantile(drift$ratio[drift$disease == d &
-    drift$candidate == id], c(.25, .75), na.rm = TRUE), numeric(2)))
-  plot(x$ratio, seq_len(nrow(x)), xlim = range(1, spread, na.rm = TRUE), yaxt = "n",
-    pch = 16, col = candidate_colours[x$id], xlab = "Drift ratio (1: no drift beyond chance)",
-    ylab = "", main = disease_names[[d]])
-  segments(spread[, 1], seq_len(nrow(x)), spread[, 2], seq_len(nrow(x)),
-    col = adjustcolor(candidate_colours[x$id], .5), lwd = 3)
-  axis(2, at = seq_len(nrow(x)), labels = labels[x$id], las = 1, cex.axis = .8)
-  abline(v = x$ratio[x$id == "identity"], col = "gray60", lty = 2)
-}
-legend_origins <- function() {
-  par(fig = c(0, 1, 0, 1), oma = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), new = TRUE)
-  plot.new()
-  legend("bottom", names(origin_colours), col = origin_colours, pch = 16, horiz = TRUE,
-    bty = "n", cex = .9, inset = .01)
-}
-mtext(paste("Drift of the hindsight constant threshold of each score: the",
-  pooled_label(length(settings$pooled_locations), settings), "and horizons",
-  paste(range(settings$horizons), collapse = " to ")), outer = TRUE, font = 2, cex = 1.2)
-mtext(paste("Dot: mean over the cases; bar: their middle half; dashed: the identity score.",
-  "Every score of a case on the same weeks; own-target revisions only below the longest horizon."),
-  side = 1, outer = TRUE, line = 1, cex = .8)
-legend_origins()
-# Page 2: the drift ratio against the power p of the forecast median, (1 + b^.5)^p.
-powers <- c(power_m100 = -1, identity = 0, power_25 = .25, power_50 = .5, power_75 = .75,
-  power_100 = 1, power_150 = 1.5, power_200 = 2)
-references <- c("log1p", "sqrt", "level_rms", "base_width", "spread", "pit", "window_asinh")
-par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 12), oma = c(4, 0, 3, 0), xpd = FALSE)
-for (d in diseases) {
-  x <- drift_summary[drift_summary$disease == d, ]
-  ratio <- x$ratio[match(names(powers), x$id)]
-  reference <- x$ratio[match(references, x$id)]
-  plot(powers, ratio, type = "o", pch = 16, col = origin_colours[["Level of the forecast"]],
-    lwd = 2, ylim = range(ratio, reference, na.rm = TRUE), xlab = "Power p of (1 + b^0.5)^p",
-    ylab = "Drift ratio", main = disease_names[[d]])
-  abline(h = reference, col = candidate_colours[references], lty = 3)
-  axis(4, at = reference, labels = labels[references], las = 1, cex.axis = .7, tick = FALSE,
-    line = -.5)
-}
-mtext("Drift ratio of the scale (1 + b^0.5)^p against p (p = 0: the identity); dotted: other scores",
-  outer = TRUE, font = 2, cex = 1.2)
-# Pages 3-4: coverage by week relative to the peak, hindsight threshold and running quantile.
-for (d in diseases) {
-  par(mfrow = c(3, 4), mar = c(3.8, 4, 3, 1), oma = c(4, 0, 3, 0), xpd = FALSE)
-  for (id in shown) {
-    x <- peak_coverage[peak_coverage$disease == d & peak_coverage$candidate == id, ]
-    drifts <- peak_drift$drift[peak_drift$disease == d & peak_drift$candidate == id]
-    plot(range(weeks_relative), c(0, 1), type = "n", xlab = "Week relative to the peak",
-      ylab = "Coverage", main = sprintf("%s\n(drift %s)", labels[[id]],
-        paste(sprintf("%.3f", drifts), collapse = " / ")), cex.main = .9)
-    abline(v = .5, col = "gray70", lty = 3)
-    for (j in seq_along(levels_shown)) {
-      abline(h = levels_shown[j], col = level_colours[j], lty = 3)
-      for (threshold in c("hindsight constant", "running quantile")) {
-        z <- x[x$alpha == levels_shown[j] & x$threshold == threshold, ]
-        z <- z[order(z$week), ]
-        lines(z$week, z$covered, col = level_colours[j], lwd = 1.6,
-          lty = if (threshold == "hindsight constant") 1 else 2)
-      }
-    }
-  }
-  mtext(paste0(disease_names[[d]], ": coverage by week relative to the peak, the ",
-    pooled_label(length(settings$pooled_locations), settings), ", horizons ",
-    paste(range(settings$horizons), collapse = " to ")), outer = TRUE, font = 2, cex = 1.2)
-  mtext(paste("Levels 0.1 (blue), 0.5 (black), 0.9 (red); dotted: the target. Solid: the",
-    "hindsight constant threshold (all weeks); dashed: the running quantile (evaluation weeks,",
-    "delay 0).\nDrift: mean |coverage - alpha| over the weeks and levels, solid / dashed."),
-    side = 1, outer = TRUE, line = 2, cex = .8)
-}
-# Pages 5-6: the running quantile, loss change against CE change, overall and after peaks.
-for (phase in c("overall", "after")) {
-  par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3, 1), oma = c(4, 0, 3, 0), xpd = FALSE)
-  for (d in diseases) for (design in c("delay 0", "delay 1")) {
-    x <- pooled_running[pooled_running$variant == "all past scores" &
-      pooled_running$disease == d & pooled_running$design == design &
-      pooled_running$phase == phase, ]
-    plot(x$loss_change, x$ce_change, pch = 16, col = candidate_colours[x$candidate],
-      xlab = "Loss change versus the base (%)", ylab = "CE change versus the base (%)",
-      main = paste0(disease_names[[d]], ", ", design), xlim = extendrange(x$loss_change, f = .3),
-      ylim = extendrange(x$ce_change, f = .1))
-    abline(h = 0, v = 0, col = "gray75", lty = 2)
-    text(x$loss_change, x$ce_change, labels[x$candidate], pos = 4, cex = .6,
-      col = candidate_colours[x$candidate])
-  }
-  mtext(paste0("Running quantile of each score's past values, ", c(overall = "overall",
-    after = paste("after peaks (weeks 1 to", settings$weeks_after_peak, ")"))[[phase]],
-    ": change versus the base, the ", pooled_label(length(settings$pooled_locations),
-      settings)), outer = TRUE, font = 2, cex = 1.2)
-  mtext(paste("Each week the threshold is the empirical alpha-quantile of all scores reported",
-    "before the cutoff; no rate. Evaluation weeks. Lower left is better."), side = 1,
-    outer = TRUE, line = 1, cex = .8)
-  legend_origins()
-}
-# Pages 7-8: each score's alpha-quantile up to the peak (filled) and after it (open), in
-# units of its median |score|, at three levels; a change of sign is a bias that flips.
-for (d in diseases) {
-  par(mfrow = c(1, 3), mar = c(4.5, if (TRUE) 15 else 4, 3, 1), oma = c(4, 0, 3, 0))
-  x <- phase_quantiles[phase_quantiles$disease == d, ]
-  ids <- rev(order_ids)
-  for (j in seq_along(levels_shown)) {
-    z <- x[abs(x$alpha - levels_shown[j]) < 1e-9, ]
-    z <- z[match(ids, z$candidate), ]
-    plot(c(z$before, z$after), rep(seq_along(ids), 2), type = "n", yaxt = "n",
-      xlab = "alpha-quantile of the score / median |score|", ylab = "",
-      main = paste("Level", levels_shown[j]))
-    abline(v = 0, col = "gray50", lty = 2)
-    segments(z$before, seq_along(ids), z$after, seq_along(ids),
-      col = adjustcolor(candidate_colours[ids], .5))
-    points(z$before, seq_along(ids), pch = 16, col = candidate_colours[ids])
-    points(z$after, seq_along(ids), pch = 1, col = candidate_colours[ids])
-    axis(2, at = seq_along(ids), labels = if (j == 1L) labels[ids] else FALSE, las = 1,
-      cex.axis = .75)
-  }
-  mtext(paste0(disease_names[[d]], ": the score's quantile up to the peak (filled, weeks ",
-    min(phase_window$before), " to 0) and after it (open, weeks 1 to ",
-    max(phase_window$after), "), mean over the ",
-    pooled_label(length(settings$pooled_locations), settings), " and horizons"), outer = TRUE,
-    font = 2, cex = 1.1)
-  mtext(paste("A threshold that is positive up to the peak and negative after it: the base",
-    "forecasts too low on the rise and too high in the decline, whatever the scale."),
-    side = 1, outer = TRUE, line = 1, cex = .8)
-  legend_origins()
-}
-# Pages 9-12: MultiQT on every score at the adaptive rate, and the running quantile of the
-# scores of the same phase only (phase from the peaks in hindsight), overall and after peaks.
-for (variant in c("MultiQT", "same phase (hindsight)")) for (phase in c("overall", "after")) {
-  par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3, 1), oma = c(4, 0, 3, 0), xpd = FALSE)
-  for (d in diseases) for (design in c("delay 0", "delay 1")) {
-    x <- pooled_running[pooled_running$variant == variant & pooled_running$disease == d &
-      pooled_running$design == design & pooled_running$phase == phase, ]
-    plot(x$loss_change, x$ce_change, pch = 16, col = candidate_colours[x$candidate],
-      xlab = "Loss change versus the base (%)", ylab = "CE change versus the base (%)",
-      main = paste0(disease_names[[d]], ", ", design), xlim = extendrange(x$loss_change, f = .3),
-      ylim = extendrange(x$ce_change, f = .1))
-    abline(h = 0, v = 0, col = "gray75", lty = 2)
-    text(x$loss_change, x$ce_change, labels[x$candidate], pos = 4, cex = .6,
-      col = candidate_colours[x$candidate])
-  }
-  mtext(paste0(if (variant == "MultiQT") "MultiQT on each score at the adaptive rate" else
-    "Running quantile of the past scores of the same phase (phase in hindsight)", ", ",
-    c(overall = "overall", after = paste("after peaks (weeks 1 to",
-      settings$weeks_after_peak, ")"))[[phase]], ": change versus the base, the ",
-    pooled_label(length(settings$pooled_locations), settings)), outer = TRUE, font = 2,
-    cex = 1.1)
-  mtext(if (variant == "MultiQT") paste("Thresholds start at 0 and learn at .03 times the",
-    "rolling 90% quantile of the score's absolute values (last 20 learned rows). Evaluation weeks.")
-    else paste("Each week the alpha-quantile of the past scores of rows in the same phase as",
-      "the target week (rise or decline, from the peaks in hindsight). Evaluation weeks."),
-    side = 1, outer = TRUE, line = 1, cex = .8)
-  legend_origins()
-}
-invisible(dev.off())
-
-# 5. SCORES OVER TIME: multiqt_score_stationarity/ -------------------------------
+# 4. SCORES OVER TIME: multiqt_score_stationarity/ -------------------------------
 # For the shown candidates and three levels: the scores of the latest counts divided by one
 # constant per case (the median |score| over its weeks and levels), so the panels share an
 # axis. A quantile-stable score keeps its level's quantile, the ideal threshold of a
@@ -486,9 +327,9 @@ for (d in diseases) for (horizon in settings$horizons) {
   index <- which(cases$disease == d & cases$horizon == horizon)
   path <- file.path(figure_dir, "multiqt_score_stationarity", paste0(d, "_horizon", horizon,
     ".pdf"))
-  cairo_pdf(path, width = 16, height = 11, family = "DejaVu Sans", onefile = TRUE)
+  cairo_pdf(path, width = 22, height = 11, family = "DejaVu Sans", onefile = TRUE)
   panel_layout <- function() {
-    layout(matrix(1:15, 3, 5, byrow = TRUE))
+    layout(matrix(1:21, 3, 7, byrow = TRUE))
     par(oma = c(3.5, 0, 3.5, 0), mar = c(4, 4.2, 3, 1), mgp = c(2.4, .7, 0), cex = .8)
   }
   legend_panel <- function() {
@@ -515,11 +356,13 @@ for (d in diseases) for (horizon in settings$horizons) {
     if (!any(is.finite(paths))) {                # Own-target revisions, longest horizon.
       plot.new()
       title(main = labels[[id]])
+      mark_kind(id)
       text(.5, .5, "Not defined at this horizon", col = "gray40")
       next
     }
     plot(NA, xlim = range(score_weeks), ylim = range(-1.5, 1.5, paths, na.rm = TRUE),
       xlab = "Week relative to the peak", ylab = "Score / median |score|", main = labels[[id]])
+    mark_kind(id)
     abline(h = 0, col = "gray65", lty = 2)
     abline(v = .5, col = "gray40", lty = 3)
     matlines(score_weeks, paths, col = level_colours, lty = 1, lwd = 2)
@@ -530,7 +373,8 @@ for (d in diseases) for (horizon in settings$horizons) {
   mtext(paste("Each line: the level's quantile of the normalized scores over the pooled",
     "locations and peaks in that week, the threshold a tracker at that level would need;",
     "flat = quantile-stable.\nScores divided by their case's median |score| (all weeks and",
-    "levels). Dotted: between the peak week and the week after."), side = 1, outer = TRUE,
+    "levels). Dotted: between the peak week and the week after. Below each title: the kind",
+    "of score."), side = 1, outer = TRUE,
     line = 2, cex = .75)
   # One page per plotted location: the normalized scores over time.
   for (i in index[match(settings$location_ids, cases$location[index])]) {
@@ -543,6 +387,7 @@ for (d in diseases) for (horizon in settings$horizons) {
       if (!any(is.finite(values))) {             # Own-target revisions, longest horizon.
         plot.new()
         title(main = labels[[id]])
+        mark_kind(id)
         text(.5, .5, "Not defined at this horizon", col = "gray40")
         next
       }
@@ -550,6 +395,7 @@ for (d in diseases) for (horizon in settings$horizons) {
       broken <- break_gaps(dates, pmin(pmax(values, -limit), limit))
       plot(NA, xlim = range(dates), ylim = c(-limit, limit), xaxt = "n", xaxs = "i",
         xlab = "Target date", ylab = "Score / median |score|", main = labels[[id]])
+      mark_kind(id)
       mark_time(case)
       abline(h = 0, col = "gray65", lty = 2)
       matlines(broken$dates, broken[[2]], col = level_colours, lty = 1, lwd = 1.2)
@@ -560,7 +406,8 @@ for (d in diseases) for (horizon in settings$horizons) {
     mtext(paste("Score of the latest count relative to the base quantile of each level,",
       "divided by the case's median |score|; beyond the axis: at its edge.\nDotted lines:",
       "peaks (local maxima of the latest counts). Gray: first season. Scales from reports:",
-      "feedback delay 0."), side = 1, outer = TRUE, line = 2, cex = .75)
+      "feedback delay 0. Below each title: the kind of score."), side = 1, outer = TRUE,
+      line = 2, cex = .75)
   }
   invisible(dev.off())
 }

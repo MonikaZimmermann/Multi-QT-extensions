@@ -185,7 +185,7 @@ method_labels <- function(p) {
       H_of("power_flip"), ")"),
     level_flip = paste0("Sign-flip experts: base, level-RMS tracker, mirror (",
       H_of("level_flip"), ")"),
-    width_flip = paste0("Sign-flip experts: base, base-width tracker, mirror (",
+    width_flip = paste0("Sign-flip experts: base, half-IQR tracker, mirror (",
       H_of("width_flip"), ")"),
     phase_power = paste0("Two-phase power scale (decline probability from the last ",
       p$phase_rows, " errors)"),
