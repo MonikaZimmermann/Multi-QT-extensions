@@ -442,105 +442,105 @@ $u^\star$ and fluctuates around it. Coverage then holds round by round, not
 only on average: $P(\cov_t=1\mid\mathcal I_t)=F_t(\tilde u_t)\approx
 \alpha+f_t(u^\star)(\tilde u_t-u^\star)$.
 
-\paragraph{Why the fluctuation is of order $\sqrt\eta$.} Write
-$e_t=\tilde u_t-u^\star$ for the error of the threshold and
-$\xi_t=\cov_t-F_t(\tilde u_t)$ for the surprise in the coverage, a
-martingale difference with conditional variance
-$F_t(\tilde u_t)\{1-F_t(\tilde u_t)\}\approx\alpha(1-\alpha)$. Near the
-root $F_t(\tilde u_t)\approx\alpha+fe_t$, and the update becomes
-\begin{equation}
- e_{t+1}=e_t-\eta\bigl(F_t(\tilde u_t)-\alpha\bigr)-\eta\xi_t
- \approx(1-\eta f)\,e_t-\eta\xi_t,
- \label{eq:threshold-ar}
-\end{equation}
-an autoregression with coefficient $1-\eta f$ and innovations of standard
-deviation $\eta\sqrt{\alpha(1-\alpha)}$. Its stationary variance is
-\begin{equation}
- \operatorname{Var}(e_t)\approx\frac{\eta^2\alpha(1-\alpha)}{1-(1-\eta f)^2}
- =\frac{\eta\,\alpha(1-\alpha)}{f\,(2-\eta f)}
- \approx\frac{\eta\,\alpha(1-\alpha)}{2f}.
- \label{eq:threshold-variance}
-\end{equation}
-Each step has size $\eta\alpha$ or $\eta(1-\alpha)$ and a random sign, and
-the pull towards $u^\star$ removes the share $\eta f$ of the error per
-round, so the threshold remembers about $1/(\eta f)$ rounds; a random walk
-of $1/(\eta f)$ steps of size $\eta$ spreads by
-$\eta/\sqrt{\eta f}=\sqrt{\eta/f}$. In coverage the error is $fe_t$, with
-standard deviation $\sqrt{\eta f\alpha(1-\alpha)/2}$: calibrated on
-average, the coverage of a given round differs from $\alpha$ by an amount
-that shrinks only like $\sqrt\eta$. This is the stationary behaviour of
-constant-step stochastic approximation: the iterates form a Markov chain
-whose stationary distribution concentrates at the root with a spread of
-order $\sqrt\eta$~\cite{kushner-yin,dieuleveut}.
+% \paragraph{Why the fluctuation is of order $\sqrt\eta$.} Write
+% $e_t=\tilde u_t-u^\star$ for the error of the threshold and
+% $\xi_t=\cov_t-F_t(\tilde u_t)$ for the surprise in the coverage, a
+% martingale difference with conditional variance
+% $F_t(\tilde u_t)\{1-F_t(\tilde u_t)\}\approx\alpha(1-\alpha)$. Near the
+% root $F_t(\tilde u_t)\approx\alpha+fe_t$, and the update becomes
+% \begin{equation}
+%  e_{t+1}=e_t-\eta\bigl(F_t(\tilde u_t)-\alpha\bigr)-\eta\xi_t
+%  \approx(1-\eta f)\,e_t-\eta\xi_t,
+%  \label{eq:threshold-ar}
+% \end{equation}
+% an autoregression with coefficient $1-\eta f$ and innovations of standard
+% deviation $\eta\sqrt{\alpha(1-\alpha)}$. Its stationary variance is
+% \begin{equation}
+%  \operatorname{Var}(e_t)\approx\frac{\eta^2\alpha(1-\alpha)}{1-(1-\eta f)^2}
+%  =\frac{\eta\,\alpha(1-\alpha)}{f\,(2-\eta f)}
+%  \approx\frac{\eta\,\alpha(1-\alpha)}{2f}.
+%  \label{eq:threshold-variance}
+% \end{equation}
+% Each step has size $\eta\alpha$ or $\eta(1-\alpha)$ and a random sign, and
+% the pull towards $u^\star$ removes the share $\eta f$ of the error per
+% round, so the threshold remembers about $1/(\eta f)$ rounds; a random walk
+% of $1/(\eta f)$ steps of size $\eta$ spreads by
+% $\eta/\sqrt{\eta f}=\sqrt{\eta/f}$. In coverage the error is $fe_t$, with
+% standard deviation $\sqrt{\eta f\alpha(1-\alpha)/2}$: calibrated on
+% average, the coverage of a given round differs from $\alpha$ by an amount
+% that shrinks only like $\sqrt\eta$. This is the stationary behaviour of
+% constant-step stochastic approximation: the iterates form a Markov chain
+% whose stationary distribution concentrates at the root with a spread of
+% order $\sqrt\eta$~\cite{kushner-yin,dieuleveut}.
 
-\paragraph{A moving quantile.} Without quantile stability the tracker
-chases a moving root. With $e_t=\tilde u_t-u_t^\star$ and the move of the
-root $\Delta_t=u_{t+1}^\star-u_t^\star$, \eqref{eq:threshold-ar} gives to
-first order
-\begin{equation}
- \mathbb E[e_{t+1}\mid\mathcal I_t]\approx(1-\eta f)\,e_t-\Delta_t.
- \label{eq:tracking-lag}
-\end{equation}
-A root that moves by $\Delta$ per round leaves the threshold behind by
-$\Delta/(\eta f)$, a coverage error of about $|\Delta|/\eta$, while the
-noise~\eqref{eq:threshold-variance} grows like $\sqrt\eta$. The mean squared
-error of the threshold, $\eta\alpha(1-\alpha)/(2f)+\Delta^2/(\eta f)^2$, is
-smallest at
-\[
- \eta^\star=\Bigl(\frac{4\Delta^2}{f\,\alpha(1-\alpha)}\Bigr)^{1/3}:
-\]
-the rate trades lag against noise, as in the rate grid of
-Section~\ref{sec:results-fixed-rates}; the best rate grows with the drift
-and depends on the density $f$ of the score, so on its scale. This
-lag--noise trade-off of constant steps is classical in adaptive
-filtering~\cite{widrow-lms,benveniste}; for the step size of adaptive
-conformal inference Zaffran et al.~\cite{agaci} and Gibbs and
-Cand\`es~\cite{dtaci} combine several step sizes by expert weighting, as
-our rate-grid mixtures did (paused, Table~\ref{tab:methods-paused}). A scale $\sigma_t$ that keeps $u_t^\star$
-constant sets $\Delta=0$, removes the lag and lets the rate be small; this
-is what the choice of scale is for. A rate proportional to the spread of
-the recent errors, $\eta_t\propto1/f$ like Delphi's adaptive
-rate~\eqref{eq:ref-op-rates}, keeps both terms proportional to that spread:
-the same trade-off at every level of incidence, but no adaptation to the
-drift $\Delta$.
+% \paragraph{A moving quantile.} Without quantile stability the tracker
+% chases a moving root. With $e_t=\tilde u_t-u_t^\star$ and the move of the
+% root $\Delta_t=u_{t+1}^\star-u_t^\star$, \eqref{eq:threshold-ar} gives to
+% first order
+% \begin{equation}
+%  \mathbb E[e_{t+1}\mid\mathcal I_t]\approx(1-\eta f)\,e_t-\Delta_t.
+%  \label{eq:tracking-lag}
+% \end{equation}
+% A root that moves by $\Delta$ per round leaves the threshold behind by
+% $\Delta/(\eta f)$, a coverage error of about $|\Delta|/\eta$, while the
+% noise~\eqref{eq:threshold-variance} grows like $\sqrt\eta$. The mean squared
+% error of the threshold, $\eta\alpha(1-\alpha)/(2f)+\Delta^2/(\eta f)^2$, is
+% smallest at
+% \[
+%  \eta^\star=\Bigl(\frac{4\Delta^2}{f\,\alpha(1-\alpha)}\Bigr)^{1/3}:
+% \]
+% the rate trades lag against noise, as in the rate grid of
+% Section~\ref{sec:results-fixed-rates}; the best rate grows with the drift
+% and depends on the density $f$ of the score, so on its scale. This
+% lag--noise trade-off of constant steps is classical in adaptive
+% filtering~\cite{widrow-lms,benveniste}; for the step size of adaptive
+% conformal inference Zaffran et al.~\cite{agaci} and Gibbs and
+% Cand\`es~\cite{dtaci} combine several step sizes by expert weighting, as
+% our rate-grid mixtures did (paused, Table~\ref{tab:methods-paused}). A scale $\sigma_t$ that keeps $u_t^\star$
+% constant sets $\Delta=0$, removes the lag and lets the rate be small; this
+% is what the choice of scale is for. A rate proportional to the spread of
+% the recent errors, $\eta_t\propto1/f$ like Delphi's adaptive
+% rate~\eqref{eq:ref-op-rates}, keeps both terms proportional to that spread:
+% the same trade-off at every level of incidence, but no adaptation to the
+% drift $\Delta$.
 
-\paragraph{What the drift ratio tests.} Under quantile stability, the hits
-of the constant threshold, $\cov_t^\star=\ind\{r_t\le u^\star\}$, satisfy
-$\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$: $\cov_t^\star-\alpha$ is
-a martingale difference sequence, uncorrelated over time with conditional
-variance $\alpha(1-\alpha)$, so its window averages vary as much as those
-of independent draws, or of the same hits in permuted order. The drift
-ratio of Section~\ref{sec:score-stationarity}, with the hindsight
-$\alpha$-quantile in place of $u^\star$, is then close to one. A moving
-root and misses that come in runs both break
-$\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$ and raise it. This is the
-conditional-coverage hypothesis of hit-sequence backtests
-(Christoffersen~\cite{christoffersen}; the dynamic quantile test of Engle
-and Manganelli~\cite{caviar}).
+% \paragraph{What the drift ratio tests.} Under quantile stability, the hits
+% of the constant threshold, $\cov_t^\star=\ind\{r_t\le u^\star\}$, satisfy
+% $\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$: $\cov_t^\star-\alpha$ is
+% a martingale difference sequence, uncorrelated over time with conditional
+% variance $\alpha(1-\alpha)$, so its window averages vary as much as those
+% of independent draws, or of the same hits in permuted order. The drift
+% ratio of Section~\ref{sec:score-stationarity}, with the hindsight
+% $\alpha$-quantile in place of $u^\star$, is then close to one. A moving
+% root and misses that come in runs both break
+% $\mathbb E[\cov_t^\star\mid\mathcal I_t]=\alpha$ and raise it. This is the
+% conditional-coverage hypothesis of hit-sequence backtests
+% (Christoffersen~\cite{christoffersen}; the dynamic quantile test of Engle
+% and Manganelli~\cite{caviar}).
 
-\paragraph{Why MultiQT is still needed.} Quantile stability makes the
-target constant, not known. The base is calibrated at level $\alpha$ only
-if $u^\star=0$ ($r_t\le0$ exactly when $y_t\le b_t^\alpha$); its
-miscalibration is the unknown $u^\star$, which has to be learned from the
-reports as they arrive. Under quantile stability the natural estimator is
-the empirical $\alpha$-quantile of all past scores, which the tracker
-approaches with decreasing steps; a static recalibration
-$q_t^\alpha=b_t^\alpha+\sigma_t\hat u^\star$, as in split conformal
-prediction with normalized scores~\cite{lei-conformal}, would then be
-enough. A constant rate gives up some of that efficiency in exchange for
-following the drift the scale leaves behind, and its guarantee
-(Section~\ref{sec:notation}) needs no stability at all; the projection also
-keeps the levels ordered. A good scale thus turns the tracker's task from
-tracking a moving target into estimating a constant, and the tracker
-remains the safeguard where the scale falls short.
+% \paragraph{Why MultiQT is still needed.} Quantile stability makes the
+% target constant, not known. The base is calibrated at level $\alpha$ only
+% if $u^\star=0$ ($r_t\le0$ exactly when $y_t\le b_t^\alpha$); its
+% miscalibration is the unknown $u^\star$, which has to be learned from the
+% reports as they arrive. Under quantile stability the natural estimator is
+% the empirical $\alpha$-quantile of all past scores, which the tracker
+% approaches with decreasing steps; a static recalibration
+% $q_t^\alpha=b_t^\alpha+\sigma_t\hat u^\star$, as in split conformal
+% prediction with normalized scores~\cite{lei-conformal}, would then be
+% enough. A constant rate gives up some of that efficiency in exchange for
+% following the drift the scale leaves behind, and its guarantee
+% (Section~\ref{sec:notation}) needs no stability at all; the projection also
+% keeps the levels ordered. A good scale thus turns the tracker's task from
+% tracking a moving target into estimating a constant, and the tracker
+% remains the safeguard where the scale falls short.
 
-\paragraph{Relation to the literature.} Each piece of this subsection is
-standard: the stochastic approximation of a
-quantile~\cite{robbins-monro,tierney}, the $\sqrt\eta$ noise and the
-$\Delta/\eta$ lag of constant steps~\cite{widrow-lms,benveniste,kushner-yin},
-and the hit-sequence tests~\cite{christoffersen,caviar}. As far as we know,
-using quantile stability as the criterion for choosing the score of the
-tracker (Section~\ref{sec:score-stationarity}) is the only addition.
+% \paragraph{Relation to the literature.} Each piece of this subsection is
+% standard: the stochastic approximation of a
+% quantile~\cite{robbins-monro,tierney}, the $\sqrt\eta$ noise and the
+% $\Delta/\eta$ lag of constant steps~\cite{widrow-lms,benveniste,kushner-yin},
+% and the hit-sequence tests~\cite{christoffersen,caviar}. As far as we know,
+% using quantile stability as the criterion for choosing the score of the
+% tracker (Section~\ref{sec:score-stationarity}) is the only addition.
 
 \subsection{The leak as a ridge penalty}
 \label{sec:leak-ridge}
@@ -880,18 +880,9 @@ large for it.
 \label{sec:phase-predictors}
 There are two prediction tasks here. \texttt{phase\_angle} asks whether
 the reported outcome will fall below the base median; \texttt{phase\_hidden}
-asks where the target week lies in the epidemic cycle. Neither model
-learns the size of the quantile correction. Script 05
-(\path{R/05_phase_probabilities.R}) supplies their probabilities, and
-the trackers of~\eqref{eq:phase-angle} and~\eqref{eq:three-phase} learn
-the corrections from coverage errors. Both trackers use the power scale
-(Section~\ref{sec:methods}, ``Phase from outside data'').
-The bar-plot names are ``Angle + slow offset (bias probability, outside
-data)'' and ``Hidden-phase model (three phases, outside data)'',
-respectively.
+asks where the target week lies in the epidemic cycle.
 
-This separation addresses two observations, rather than assuming a phase
-model is intrinsically needed. The error-based selectors turned too late,
+This separation addresses two observations. The error-based selectors turned too late,
 while the forecast-based predictors tested did not reliably predict the
 change of bias. For flu, even the two-phase oracle left a large loss just
 after peaks, and the bias became negative again in the tail: one decline
@@ -901,40 +892,72 @@ Section~\ref{sec:results-phase-outside}. Extra signals can make the
 decision respond to information available now, although the labels used
 to train the predictors still arrive later.
 
-\paragraph{Inputs and their timing.} The bias model uses the following
-features, constructed for each forecast cutoff and target week. The
-hidden model uses the subsets specified below for its transitions and
-observations.
-\begin{itemize}[leftmargin=*,itemsep=1pt]
-\item \emph{Reports and the base}: recent growth and curvature of
-\(\log(1+\text{reported count})\), with recent reports corrected by their
-typical revision at that age, and the base's projected growth from
-horizon 0 to horizon 3 on the same log scale.
-\item \emph{Seasonal timing}: the share of earlier weeks in the same
-calendar week ($\pm1$) that lay after their nearest peak, pooled over the
-10 states, using peaks of the reports known at the cutoff and history at
-least 26 weeks old. The bias regression uses its log odds.
-\item \emph{NSSP}: the share of emergency-department visits with COVID or
-influenza, its log growth and curvature, and its fraction of the maximum
-over 26 weeks. The replay uses versions published at least six days
-before the cutoff.
-\item \emph{Holidays}: the fraction of the target week in the winter
-break (22 December to 3 January), the three weeks after the break, and
-Thanksgiving week.
-\item \emph{Humidity}: specific humidity averaged over three large
-cities per state with population weights, its mean over the preceding
-14 days, its anomaly against 2014--2023, and the change predicted by the
-7-day weather forecast issued at the cutoff. Historical observations
-come from ERA5 reanalysis; forecasts are archived as issued since January
-2024.
-\item \emph{Onset}: whether the latest report is at least 1.5 times the
-minimum of the last 20 weeks, and, if so, how the elapsed time from that
-minimum to the target compares with the durations of earlier rises.
+\paragraph{Exact covariates of the bias model.}
+The design below uses the variable names from script 05. For row $s$,
+write $h_s$ for its numeric horizon. For $j=1,2,3$, let $L_{s,j}$ be
+the $j$th most recent log-transformed report, $\log(1+y)$, after the
+age-specific revision adjustment. Let $E_{s,j}$ be the log of the
+$j$th most recent available NSSP visit share. The exact design
+vector (including its intercept) is
+\begin{align*}
+ x_s=\big(&1,\ \mathtt{season}_s,\ \mathtt{g1}_s,\ \mathtt{curv}_s,
+ \ \mathtt{base\_growth}_s,\ h_s,\\
+ &h_s\mathtt{g1}_s,\ h_s\mathtt{curv}_s,
+ \ \mathtt{ng1}_s,\ \mathtt{ncurv}_s,\ \mathtt{nratio}_s,\\
+ &h_s\mathtt{ng1}_s,\ h_s\mathtt{ncurv}_s,
+ \ \mathtt{hol\_break}_s,\ \mathtt{hol\_post}_s,\ \mathtt{hol\_thanks}_s,\\
+ &\mathtt{hum\_level}_s,\ \mathtt{hum\_anom}_s,\ \mathtt{hum\_fc}_s,
+ \ \mathtt{onset}_s,\ \mathtt{rising}_s\big)^\top.
+\end{align*}
+Thus there are \emph{20 slopes and one intercept}, with no state effects,
+no other interactions, and no spline terms. The definitions are:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+\item $\mathtt{g1}_s=L_{s,1}-L_{s,2}$ and
+$\mathtt{curv}_s=L_{s,1}-2L_{s,2}+L_{s,3}$.
+$\mathtt{base\_growth}_s$ is the horizon-3 base median minus the
+horizon-0 base median \emph{on the $\log(1+\cdot)$ scale}, for the same
+reference week.
+\item $\mathtt{ng1}_s=E_{s,1}-E_{s,2}$,
+$\mathtt{ncurv}_s=E_{s,1}-2E_{s,2}+E_{s,3}$, and
+$\mathtt{nratio}_s$ is the latest NSSP share divided by its maximum over
+the last 26 reports. All three are missing if fewer than 26 NSSP reports
+are available. Only NSSP versions with publication date plus six days
+no later than the cutoff are used.
+\item $\mathtt{season}_s=\operatorname{logit}(\operatorname{clip}_{[.02,.98]}(a_s))$,
+where $a_s$ is the share of historical weeks in the target calendar week
+($\pm1$) lying after their nearest peak. History is pooled over the 10
+states, uses reports known at the cutoff, and ends 26 weeks before it;
+$a_s=1/2$ with fewer than 10 eligible observations.
+\item $\mathtt{hol\_break}_s$ is the fraction of the seven target days
+in 22 December--3 January; $\mathtt{hol\_post}_s$ indicates a target
+week end 1--21 days after 3 January; $\mathtt{hol\_thanks}_s$ indicates
+a target week end 0--6 days after the fourth Thursday of November.
+\item $\mathtt{hum\_level}_s$ is mean specific humidity during the 14
+days preceding the cutoff; $\mathtt{hum\_anom}_s$ subtracts the
+2014--2023 climatological mean for those days;
+$\mathtt{hum\_fc}_s$ is mean humidity forecast for the next seven days
+minus $\mathtt{hum\_level}_s$, set to zero if a complete seven-day
+forecast is unavailable. State humidity averages three cities with
+population weights. Historical observations are ERA5 reanalysis;
+archived forecasts start in January 2024.
+\item Let $m_s$ be the minimum of the last 20 reported counts,
+$d_s$ its date, and $e_s$ the weeks from $d_s$ to the forecast target.
+Then $\mathtt{rising}_s=\ind\{\text{latest report}\ge1.5\max(m_s,1)\}$.
+For historical rise durations $D_1,\ldots,D_J$, constructed from peaks
+at least 26 weeks old,
+\[
+ \mathtt{onset}_s=
+ \begin{cases}
+ \operatorname{logit}\!\left(\operatorname{clip}_{[.02,.98]}
+ \left(\dfrac{\sum_{j=1}^{J}\ind\{D_j<e_s\}+.5}{J+1}\right)\right),
+   &\mathtt{rising}_s=1,\ J\ge5,\\
+ 0,&\text{otherwise}.
+ \end{cases}
+\]
 \end{itemize}
-These are predictive inputs, not a claim that each causes a change in the
-base's bias. Their usefulness varies: the holiday inputs helped most
-consistently in the experiments, while other inputs helped only in some
-settings (Section~\ref{sec:results-phase-outside}).
+Each input is saved at the historical row's forecast cutoff; later
+training uses that saved input, not its subsequently revised value.
+The hidden model uses the different subsets and formulas below.
 
 \paragraph{Bias probability: what is fitted.}
 \label{sec:bias-probability-model}
@@ -965,8 +988,14 @@ logistic regression,
 Clipping restricts the fitted probability to $[.02,.98]$. Before there
 are 40 complete training rows with both labels, or when prediction inputs
 are missing, the probability stays at $1/2$. There is one fitted model per
-disease, not one per quantile or location; the current row's inputs and
-horizon make its prediction specific to that forecast. ``Online'' here
+disease and base, with coefficients pooled over states and horizons;
+the current row's state-specific inputs and horizon determine its
+probability. Predictions are not averaged across states. This is complete
+pooling of the feature--bias relationship, without a state intercept;
+the correction trackers remain separate for each state and horizon.
+Complete pooling shares information but assumes that the same features
+have the same effects across these states. Its adequacy has not been
+established by a state-specific calibration or partial-pooling comparison. ``Online'' here
 means weekly refitting using labels available by then. It does not mean
 that the logistic coefficients are updated by the quantile tracker's
 coverage error. The fitted relationship is applied to current features,
@@ -1018,10 +1047,7 @@ $(P_t^{\mathrm{rise}},P_t^{\mathrm{over}},P_t^{\mathrm{tail}})$ for the
 target week. The labels are defined relative to a peak: rise through the
 peak, overshoot in weeks 1 to 4, and tail from week 5 until the next rise.
 These are timing categories, not a requirement that every rise week has
-positive growth or every overshoot week has an overforecast. The three
-corrections in~\eqref{eq:three-phase} are free signed states: the pattern
-positive--negative--positive motivates the model for flu but is not
-imposed on its corrections.
+positive growth or every overshoot week has an overforecast.
 
 A single week of falling counts can belong to either overshoot or tail.
 The previous weeks and the time elapsed since a likely peak help separate
@@ -1035,8 +1061,7 @@ the internal hidden state. For flu its possible values are
 Rise can remain rise or enter $\mathrm{over}_1$; the four overshoot states
 advance one per week into tail; tail can remain tail or enter the next
 rise. Their four probabilities are summed to obtain the reported
-overshoot probability. \emph{Four weeks is a fixed modelling choice},
-not a learned duration. The uncertainty is about when the phase starts.
+overshoot probability. \emph{Four weeks is a fixed modelling choice}. The uncertainty is about when the phase starts.
 
 \paragraph{Transition probabilities: the historical starting expectation.}
 A transition hazard is the conditional probability of leaving a phase
@@ -1046,12 +1071,41 @@ test positivity in the pooled states (nine have data), in seasons
 2014/15--2019/20, 2022/23 and 2023/24. Each historical week before a peak
 is a row at risk; the peak week is the event. The predictors are a natural
 cubic spline in season week (four degrees of freedom), the three holiday
-features, and humidity level and anomaly. The timing is shifted by the
+features, and humidity level and anomaly. Explicitly, for a historical week $w$ at risk,
+\begin{align*}
+ E_w&\sim\operatorname{Bernoulli}(h_w),\\
+ \operatorname{logit}(h_w)&=\gamma_0+
+ \sum_{r=1}^4\gamma_r\mathcal B_r(\mathrm{sw}_w)
+ +\gamma_{\rm break}H_{w,\rm break}+\gamma_{\rm post}H_{w,\rm post}\\
+ &\quad+\gamma_{\rm thanks}H_{w,\rm thanks}
+ +\gamma_{\rm level}M_w+\gamma_{\rm anom}A_w.
+\end{align*}
+Here $E_w=1$ at the positivity peak, $\mathrm{sw}_w$ is the number of
+weeks since 1 August, and $\mathcal B_1,\ldots,\mathcal B_4$ are the
+four columns of \texttt{splines::ns(sw, df=4)}. $M_w$ is mean humidity
+over the 14 days ending in that week and $A_w$ its climatological anomaly.
+The holiday definitions are as above, evaluated for that week. This is
+an unpenalized logistic fit with ten coefficients, using weeks with
+$\mathrm{sw}_w\ge8$. It has no report-growth, NSSP, horizon or state
+coefficient. At prediction, the fitted hazard is clipped to $[.002,.95]$;
+before season week 8 it is $.002$. The timing is shifted by the
 median lag of hospital-admission peaks behind positivity peaks estimated
-in 2022/23 and 2023/24. The tail-to-rise hazard is a separate empirical
+in 2022/23 and 2023/24 (one week in the saved run). The tail-to-rise hazard is a separate empirical
 calendar-week hazard learned from historical midpoints between peaks;
-the model does not know the future peak's actual midpoint. For future
-weeks, humidity uses the weather forecast for a week, then climatology.
+the model does not know the future peak's actual midpoint. More precisely,
+let $e_j$ count historical midpoints in season week $j$, and $r_j$ count
+historical weeks at risk from peak plus five weeks through the midpoint.
+With $J_w$ the season weeks within one week of $w$, wrapping over 53 weeks,
+\[
+ h_{\rm mid}(w)=\begin{cases}
+ .5,&r_w=0,\\
+ \operatorname{clip}_{[.005,.95]}
+ \left(\dfrac{\sum_{j\in J_w}e_j}{\max(\sum_{j\in J_w}r_j,1)}\right),
+ &r_w>0.
+ \end{cases}
+\]
+For future weeks, humidity uses the weather forecast for a week, then
+climatology.
 
 For COVID, the prior is based on durations instead of a fixed winter
 calendar: historical EU/EEA hospitalization waves from ECDC ERVISS provide
@@ -1059,8 +1113,20 @@ the lengths of rises and tails, using waves whose peaks are at least 26
 weeks before the cutoff. The chance of transition depends on elapsed
 weeks in the current rise or tail. Internally the model therefore keeps
 rise and tail states for durations 1 to 40, plus the four overshoot weeks;
-the duration counter stays at 40 if the phase continues. These extra
-states are summed into the same three output probabilities. The
+the duration counter stays at 40 if the phase continues. For either
+rise or tail, let $e_d$ count historical durations equal to $d$ and
+$r_d=\sum_{j=d}^{40}e_j$ count those still at risk. Durations are first
+clipped to $[1,40]$. With $J_d=\{\max(1,d-1),\ldots,\min(40,d+1)\}$,
+\[
+ h(d)=\begin{cases}
+ .3,&\sum_{j\in J_d}r_j<3,\\
+ \operatorname{clip}_{[.01,.6]}
+   \left(\dfrac{\sum_{j\in J_d}e_j}{\sum_{j\in J_d}r_j}\right),
+   &\text{otherwise}.
+ \end{cases}
+\]
+There are no regression covariates in this COVID duration hazard.
+These extra states are summed into the same three output probabilities. The
 European data supply historical duration information, not a signal from
 the current European wave predicting the current US peak.
 
@@ -1076,7 +1142,11 @@ revision before growth is computed. For coarse phase $k$, the model is
 \]
 where $H_{w,\mathrm{break}}$ and $H_{w,\mathrm{post}}$ are the winter-break
 and post-break features. The means and variances differ by phase; each
-holiday shift is shared across phases within a channel. They are fitted
+holiday shift is shared across phases within a channel. Each of the two
+mean regressions therefore has five coefficients (three phase means and
+two holiday shifts), plus three phase-specific residual standard
+deviations; there is no horizon, humidity, state effect or extra global
+intercept in this observation model. They are fitted
 at each cutoff on older weeks pooled over the 10 states, labelled from
 peaks that can already be identified: the peaks are at least eight weeks
 old and the training weeks at least twelve weeks old. A channel needs
@@ -3625,7 +3695,28 @@ better than the true phase ($0.62$), whose bias after the peak changes sign
 itself (Section~\ref{sec:results-flu-covid}).
 \end{itemize}
 
-\paragraph{How the two methods were chosen.}
+\paragraph{How the two methods were chosen: exploratory development.}
+These were sequential experiments, not models specified before an
+untouched test. The workflow was: inspect delayed sign-flip and
+phase-selector failures; use hindsight phases to compare correction
+forms; compare logistic targets (falling counts versus base too high);
+add holiday, humidity, onset and NSSP input groups; then test a hidden
+model with phase persistence, revised phase assignments, and alternative
+historical hazards. The scripts record further input ablations on
+16--17 November and the European COVID duration prior on 17 November.
+The final implementation retains the all-input bias model; it is not a
+formula demonstrated to be optimal by an independent selection exercise.
+
+Two levels of data use must be distinguished. Each weekly coefficient
+fit uses only labels available at that cutoff. However, the choice of
+prediction target, covariates, correction form and hidden-state structure
+was informed by performance on the main evaluation weeks. The latter
+creates selection bias even if every individual replay respects the
+feedback delay. The quoted gains are therefore development results.
+The block bootstrap below conditions on the selected method; it does
+not account for this model search or restore an untouched-test
+interpretation~\cite{cawley-selection}. The observations that motivated
+the successive experiments were:
 \begin{itemize}[leftmargin=*,itemsep=3pt]
 \item \textbf{The form.} With the true phase, the angle~\eqref{eq:phase-angle}
 suits COVID and not flu (COVID $-4.6\%$ against $-1.0\%$ for two phases,
@@ -3641,7 +3732,7 @@ Logistic three phases never recognized the flu overshoot online (its
 probability reached $0.30$, in weeks 2 and 3).
 \item \textbf{The inputs.} The holidays carry the gain most consistently:
 leaving them out cost $0.5$ to $2.9$ points in three of the four
-base--disease pairs, and with the holidays alone the angle gained $4.1\%$
+base--disease pairs, and with holidays added to the reports/base/season/horizon inputs the angle gained $4.1\%$
 for COVID and $2.3\%$ for flu on the longer history (block bootstrap over
 the evaluation weeks: the COVID gain below the base in $98\%$ of 2000
 draws, 95\% interval $-9.3\%$ to $-0.3\%$; on the CMU base, with one flu
@@ -3658,13 +3749,155 @@ recognizes the phase better (AUC $0.71$ and $0.69$ against $0.67$ and
 $0.62$), but the angle with the bias probability stays better: for COVID
 the sign of the bias matters more than the phase.
 \end{itemize}
-Hence \texttt{phase\_angle} for COVID and \texttt{phase\_hidden} for flu;
-both run for both diseases. Caveats: the inputs were chosen once, after the
-failure of the forecast-based probability (Section~\ref{sec:results-phase}),
-and evaluated on the weeks they were designed on, the CMU base with one flu
-winter (10 peaks); CMU's ensemble already uses NSSP as a predictor; Delphi's
-Epidata API (V4) stopped receiving NSSP data on 22 September 2026, after the
-evaluation period.
+These experiments motivated trying \texttt{phase\_angle} for COVID and
+\texttt{phase\_hidden} for flu; both run for both diseases. They do not
+establish that these are the best probability models or that all their
+inputs are required. The CMU evaluation contains only one flu winter
+(10 state peaks); CMU's ensemble already uses NSSP as a predictor.
+Delphi's Epidata API (V4) stopped receiving NSSP data on 22 September
+2026, after the evaluation period.
+
+\paragraph{Sample sizes and numerical stability (audit of 20 November).}
+The 40-row rule is a minimum for attempting a fit, not the sample size
+of every fit. Replaying the exact production formula on the archived
+feature rows reproduces all 18,400 saved bias probabilities exactly
+(maximum absolute difference zero). A row is one state--horizon--forecast
+combination. Across cutoffs issuing at least one unfilled evaluation
+forecast, the complete, labelled training rows are:
+\begin{center}\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+Base & Disease & Rows, first--last fit & Median rows & Target weeks, first--last\\
+\midrule
+CMU & COVID & 1,000--4,160 & 2,460 & 24--90\\
+CMU & Flu & 1,100--2,550 & 1,800 & 25--59\\
+Windowed seasonal & COVID & 60--3,500 & 1,700 & 3--89\\
+Windowed seasonal & Flu & 60--3,500 & 1,700 & 3--89\\
+\bottomrule
+\end{tabular}
+\end{center}
+This excludes cutoffs with no fitted regression: on the longer history,
+the first 160 evaluation forecasts per disease use $p=1/2$.
+The first fit in each of the four series has 60 rows from only three
+target weeks (30 state--target pairs). Repeated horizons and correlated
+state epidemics mean that neither 60 nor the later row totals count
+independent epidemic experiences. Requiring the NSSP features also
+excludes the entire 2023/24 tuning season from the full regression;
+complete feature rows start only in November 2024.
+
+There are actual numerical problems, not only a small-sample concern.
+Among the 93 longer-history evaluation cutoffs with fitted regressions,
+COVID has one nonconverged fit and 13 rank-deficient fits; flu has two
+nonconverged fits and 16 rank-deficient fits. These categories can
+overlap. All CMU evaluation fits converge and have full rank, although
+earlier CMU fits have problems too. Across the 3,820 evaluation
+predictions per disease on the longer history, 525 COVID probabilities
+and 596 flu probabilities require clipping to $[.02,.98]$. The current
+code suppresses fitting warnings and uses these predictions; clipping
+limits the angle but does not regularize or identify the coefficients.
+
+The \emph{separate} flu peak-hazard regression has 1,307 at-risk weekly
+rows, 63 peak events and 10 nominal coefficients. Its saved summary also
+signals instability: the intercept is about $-8{,}116$ with a standard
+error about $137{,}468$, and several spline coefficients have similarly
+large uncertainty. This warrants a regularized refit and a separation
+check, rather than interpretation of the reported coefficient tests.
+Convergence alone would not establish reliable prediction.
+
+\paragraph{What the ablations establish about the inputs.}
+There is no validated ranking of individual inputs. The experiments
+compare groups of inputs after refitting the complete prediction and
+correction procedure; the correlated predictors and horizon interactions
+also prevent reading importance directly from coefficient magnitudes.
+For example, the following changes in overall quantile loss use the
+\emph{angle without the slow offset}, averaged over the three original
+feedback designs (negative is better):
+\begin{center}\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Bias-model inputs & CMU COVID & CMU flu & Longer COVID & Longer flu\\
+\midrule
+Core & $+0.3\%$ & $-0.3\%$ & $-1.1\%$ & $-1.6\%$\\
+Core + holidays & $+0.2\%$ & $-0.9\%$ & $-4.1\%$ & $-2.3\%$\\
+Core + holidays/humidity/onset & $+0.5\%$ & $-2.0\%$ & $-2.6\%$ & $-2.3\%$\\
+Core + holidays/humidity/onset/NSSP & $-1.2\%$ & $-2.1\%$ & $-1.2\%$ & $-1.1\%$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Here ``core'' means reports/base/season/horizon, including horizon
+interactions with report growth and curvature. The last experimental variant has the
+horizon--NSSP-growth interaction but omits the horizon--NSSP-curvature
+interaction present in the production formula. It is therefore a nearby
+variant, not an exact ablation of the deployed model. These are the
+\path{angle_variants/summary.txt} results under the two bases in
+\path{agent/outputs/phase_angle/}.
+
+The simpler holiday addition matches or beats the richer inputs on the
+longer history, whereas NSSP helps CMU COVID. Adding NSSP also changes
+which historical rows are complete, so these comparisons combine a
+feature effect with a training-history effect. A matched-history
+comparison would be needed to isolate the former. The longer-history
+COVID bias AUC rises from $0.657$ for reports/base plus holidays to
+$0.682$ for the full experimental input set, yet its quantile-loss gain
+falls from $4.1\%$ to $1.2\%$. Better discrimination of the binary label
+does not ensure better probability calibration or lower corrected
+quantile loss. These observations support testing simpler models; they
+do not establish a new winner on unseen seasons.
+
+\paragraph{Simpler and regularized alternatives: proposed, not yet run.}
+Keep the correction rule fixed while comparing a small, prespecified
+set of probability models. A useful reduced logistic design is
+\[
+ x_s^{\rm small}=(1,\mathtt{season}_s,\mathtt{g1}_s,
+ \mathtt{base\_growth}_s,h_s,\mathtt{hol\_break}_s,
+ \mathtt{hol\_post}_s,\mathtt{hol\_thanks}_s)^\top.
+\]
+This has eight coefficients; omitting the seasonal prior gives an even
+simpler seven-coefficient alternative. A regularized comparison should
+also include the \emph{same full formula}, to separate simplification
+from shrinkage. With covariates standardized using training rows only,
+fit ridge logistic regression by
+\[
+ \widehat\beta_t^{(\lambda)}\in\argmin_\beta
+ \left[\frac{1}{|\mathcal D_t|}\sum_{s\in\mathcal D_t}
+ \{\log(1+e^{x_s^\top\beta})-B_sx_s^\top\beta\}
+ +\frac{\lambda}{2}\sum_{j=1}^{p}\beta_j^2\right],
+ \qquad\lambda>0,
+\]
+leaving the intercept unpenalized. This shrinks weak or poorly identified
+slopes, including when columns are correlated or the labels separate.
+Ridge and elastic-net logistic estimation are described by
+Friedman, Hastie and Tibshirani~\cite{friedman-glmnet}.
+
+A small binomial GAM is another candidate, for example
+\[
+ \operatorname{logit}(p_s)=\beta_0+f_{\rm cyc}(\mathrm{week}_s)
+   +f_g(\mathtt{g1}_s)+\beta_b\mathtt{base\_growth}_s+\beta_hh_s
+   +\delta^\top H_s+a_{\ell(s)},
+ \qquad a_\ell\sim N(0,\tau_a^2),
+\]
+where $H_s$ is the vector of three holiday inputs and $\ell(s)$ the state.
+Here a low-rank cyclic seasonal smooth replaces the empirical seasonal
+prior; a low-rank growth smooth permits nonlinearity. The optional random
+state intercept provides partial pooling, rather than ten separate
+regressions. Smoothness and shrinkage need penalties, with small basis
+sizes; REML and term-shrinkage options are described in the
+\texttt{mgcv} documentation~\cite{wood-gam-selection}. A flexible GAM
+with all current inputs is not justified by these data. The flu hazard
+already contains an unpenalized fixed-degree spline; it too could use a
+penalized smooth, starting with season week alone.
+
+Choose penalty and model complexity using earlier rolling validation
+blocks with labels available by each fit, and keep all states and
+horizons for a target week together. Standardization must also be fitted
+inside each training block. Report probability log loss, Brier score
+and calibration, alongside the downstream quantile loss and coverage,
+and inspect results by state. Ordinary random row splits are
+inappropriate for these repeated, serially dependent observations.
+The already inspected evaluation seasons remain development data;
+a new held-out period is needed for a clean confirmation. Penalization
+addresses coefficient fitting, not the selection bias from choosing
+methods after inspecting their evaluation results.
 
 \paragraph{In the workflow (run of 18 November).} Script 04 runs both
 methods (Section~\ref{sec:methods}) with the inputs of script 05 for both
@@ -4293,6 +4526,25 @@ Osbert Bastani, Varun Gupta, Christopher Jung, Georgy Noarov, Ramya
 Ramalingam and Aaron Roth.
 \emph{Practical Adversarial Multivalid Conformal Prediction}.
 Advances in Neural Information Processing Systems 35, 2022.
+
+\bibitem{cawley-selection}
+Gavin C. Cawley and Nicola L. C. Talbot.
+\emph{On Over-fitting in Model Selection and Subsequent Selection Bias
+in Performance Evaluation}.
+Journal of Machine Learning Research 11:2079--2107, 2010.
+\href{https://jmlr.org/papers/v11/cawley10a.html}{JMLR}.
+
+\bibitem{friedman-glmnet}
+Jerome Friedman, Trevor Hastie and Rob Tibshirani.
+\emph{Regularization Paths for Generalized Linear Models via Coordinate Descent}.
+Journal of Statistical Software 33(1):1--22, 2010.
+\href{https://www.jstatsoft.org/article/view/v033i01}{JSS}.
+
+\bibitem{wood-gam-selection}
+Simon N. Wood.
+\emph{Generalized Additive Model Selection}.
+\texttt{mgcv} documentation, accessed 20 November 2026.
+\href{https://stat.ethz.ch/R-manual/R-patched/library/mgcv/html/gam.selection.html}{R documentation}.
 
 \end{thebibliography}
 
