@@ -11,7 +11,8 @@
 # dispersion (are the intervals too wide or too narrow?).
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
-# multiqt_feedback_bars.pdf: every method under each feedback design, side by side, and
+# multiqt_feedback_bars.pdf: every method under each feedback design, side by side (with
+# three diagnostic controls of phase_angle below it, not ranked), and
 # multiqt_feedback_bars_corrected.pdf: each design next to its corrected version. The tree and
 # multiqt_feedback_bars.pdf use the three designs without corrected labels.
 # Order of the workflow: 00 -> 01 -> 02 / 04 -> 06.
@@ -23,6 +24,14 @@ prepared <- read_prepared(settings)       # The base model's prepared data and o
 scores <- read.csv(file.path(settings$output_dir, "results", "peak_reasoning",
   "summary_scores_all_locations.csv"),
   colClasses = c(location = "character"))
+# The diagnostic controls of phase_angle (diagnostic_groups in R/03): scored by R/04 for its
+# forecast pages, never candidates or rows of the tree. Three of them are rows of the
+# feedback bars (section 4), below phase_angle, with these labels.
+bar_controls <- c(angle_slow_only = "Control: slow offset only (0.1x rate)",
+  angle_abs = "Control: no reversals (|1 - 2p_t|)",
+  angle_rate_only = "Control: probability-dependent rate only")
+scores <- scores[!scores$method %in% setdiff(unlist(diagnostic_groups),
+  c(unlist(method_groups), names(bar_controls))), ]
 # Scores and prepared data of another feedback protocol (R/03_functions.R) are not combined.
 check_feedback_protocol(scores$feedback_protocol, "summary_scores_all_locations.csv",
   "Rscript R/04_methods.R")
@@ -126,6 +135,11 @@ signed_columns <- c("coverage_error", "bias", "dispersion")
 original <- scores[scores$method == "original", c(case_columns, "loss", signed_columns)]
 names(original)[-seq_along(case_columns)] <- paste0("original_", c("loss", signed_columns))
 all_designs <- merge(scores[scores$method != "original", ], original, by = case_columns)
+# The feedback bars (section 4) also draw the controls (none in an older R/04 table); the
+# tree does not.
+bar_designs <- all_designs
+bar_controls <- bar_controls[names(bar_controls) %in% bar_designs$method]
+all_designs <- all_designs[!all_designs$method %in% names(bar_controls), ]
 scores <- all_designs[!all_designs$feedback_corrected, ]
 feedback_levels <- intersect(all_levels, scores$feedback)
 split_values <- list(feedback = feedback_levels, horizon = sort(unique(scores$horizon)))
@@ -461,18 +475,29 @@ for (lower in names(lower_panels)) {
 # one axis per page, up to 1.15 times the 95th percentile of the absolute reductions (a
 # bar beyond it ends in "<" or ">"), and the share of cases with a smaller loss than the
 # base to the right; coverage-error panels on one axis from 0, dashed: the base. Colours:
-# tradeoff_colours (R/03), lighter for the later designs.
-bar_methods <- intersect(unique(unlist(method_groups)), c(tree_candidates, reference_methods))
+# tradeoff_colours (R/03), lighter for the later designs. Below phase_angle, the controls
+# of bar_controls (section 1), in their colours of 04's forecast pages (diagnostic_colours).
+bar_methods <- c(intersect(unique(unlist(method_groups)), c(tree_candidates, reference_methods)),
+  names(bar_controls))
+bar_colours <- tradeoff_colours
+bar_colours[names(bar_controls)] <- diagnostic_colours[names(bar_controls)]
+bar_labels <- method_short_labels
+bar_labels[names(bar_controls)] <- bar_controls
+bar_scores <- bar_designs[!bar_designs$feedback_corrected, ]
 design_tint <- setNames(c(1, .55, .25), feedback_levels)   # Share of the method colour.
 tint <- function(colour, share) colorRampPalette(c("white", colour))(101)[1 + round(100 * share)]
 # Rows of a page: the methods by group, a header row before each group.
 bar_rows <- do.call(rbind, lapply(names(method_groups), function(group) {
   members <- intersect(bar_methods, names(home_group)[home_group == group])
+  if ("phase_angle" %in% members) members <- append(members, names(bar_controls),
+    match("phase_angle", members))
   if (length(members)) data.frame(method = c(NA, members), group = group)
 }))
+# Footnote lines below the bars (four; five with the controls), 1.2 lines apart.
+bar_notes_oma <- if (length(bar_controls)) 7.8 else 6.6
 # levels, tints: the designs drawn and their shares of the method colour; outlined: designs
 # drawn with a black outline (the corrected ones).
-draw_bar_page <- function(disease, location, data = scores, levels = feedback_levels,
+draw_bar_page <- function(disease, location, data = bar_scores, levels = feedback_levels,
                           tints = design_tint, outlined = rep(FALSE, length(levels))) {
   rows <- data[data$disease == disease, ]
   rows <- if (is.na(location)) pooled_rows(rows, settings) else rows[rows$location == location, ]
@@ -495,13 +520,13 @@ draw_bar_page <- function(disease, location, data = scores, levels = feedback_le
   bar_y <- function(r, d) y_top[r] - n_slot + d
   layout(matrix(seq_len(2L * length(phases) + 2L), 1),
     widths = c(3.1, rep(c(2.5, 2.1), each = length(phases)), .1))
-  par(oma = c(5.4, .5, 4.4, .5))
+  par(oma = c(bar_notes_oma, .5, 4.4, .5))
   # Method labels.
   par(mar = c(2.2, 0, 2.2, 0))
   plot(NA, xlim = c(0, 1), ylim = ylim, xaxs = "i", yaxs = "i", axes = FALSE, xlab = "", ylab = "")
   for (r in seq_len(nrow(bar_rows))) if (is.na(bar_rows$method[r])) {
     text(0, y_top[r] - .3, bar_rows$group[r], adj = c(0, .5), font = 2, cex = .9)
-  } else text(.99, y_top[r] - n_slot / 2, method_short_labels[bar_rows$method[r]],
+  } else text(.99, y_top[r] - n_slot / 2, bar_labels[bar_rows$method[r]],
     adj = c(1, .5), cex = .8)
   draw_bars <- function(phase, value) {
     loss <- value == "reduction"
@@ -521,9 +546,9 @@ draw_bar_page <- function(disease, location, data = scores, levels = feedback_le
       y <- bar_y(r, d)
       x <- s[[value]]
       shown <- min(max(x, limits[1]), limits[2])
-      fill <- tint(tradeoff_colours[[method]], tints[[d]])
+      fill <- tint(bar_colours[[method]], tints[[d]])
       rect(0, y - .42, shown, y + .42, border = if (outlined[d]) "black" else
-        tradeoff_colours[[method]], lwd = if (outlined[d]) 1.1 else .6, col = fill)
+        bar_colours[[method]], lwd = if (outlined[d]) 1.1 else .6, col = fill)
       if (method %in% reference_methods) hatch_bars(0, y, shown, TRUE,
         if (tints[[d]] > .5) "white" else "black", .42)
       if (x > limits[2] || x < limits[1]) text(shown, y, if (x > limits[2]) ">" else "<",
@@ -557,15 +582,21 @@ draw_bar_page <- function(disease, location, data = scores, levels = feedback_le
       "below the base's (at least ", min_cases, " cases). Coverage error: mean over the levels ",
       "of |coverage - alpha|, weighted by the weeks; dashed: the base."),
     paste("Top to bottom within a method: feedback", paste(levels, collapse = ", "),
-      if (any(outlined)) "(black outline: corrected labels)." else "(darker to lighter).",
-      "Every tracker learns at the adaptive rate (no tuning).",
+      if (any(outlined)) "(black outline: corrected labels)." else "(darker to lighter)."),
+    paste("Every tracker learns at the adaptive rate (no tuning).",
       if (any(bar_methods %in% reference_methods))
-        "Hatched: the phase in hindsight (phase_oracle), a reference, not a method.")),
-    side = 1, outer = TRUE, line = c(1.2, 2.4, 3.6), cex = .8)
+        "Hatched: the phase in hindsight (phase_oracle), a reference, not a method."),
+    if (length(bar_controls)) paste("Control rows below Angle + slow offset: diagnostics of",
+      "phase_angle, not methods, never ranked. Slow offset only: p_t fixed at 1/2. No reversals:",
+      "multiplier |1 - 2p_t|. Rate only: one tracker at {0.1 + (1 - 2p_t)^2} x rate, no",
+      "multiplier at issuance.")),
+    side = 1, outer = TRUE, line = 1.2 * seq_len(4L + (length(bar_controls) > 0)), cex = .8)
 }
+# Page height: the rows, the titles and the footnote lines (.2 inch per margin line).
+bar_height <- function(n_levels) .125 * (sum(ifelse(is.na(bar_rows$method), 1.4,
+  n_levels + 1L))) + 2.4 + .2 * (bar_notes_oma - 5.4)
 cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars.pdf"), width = 18.5,
-  height = .125 * (sum(ifelse(is.na(bar_rows$method), 1.4, length(feedback_levels) + 1L))) + 2.4,
-  onefile = TRUE, family = "DejaVu Sans")
+  height = bar_height(length(feedback_levels)), onefile = TRUE, family = "DejaVu Sans")
 for (p in seq_len(nrow(pages))) draw_bar_page(pages$disease[p], pages$location[p])
 dev.off()
 # Each design next to its corrected version (notes, "Revised reports as labels: corrected
@@ -575,9 +606,8 @@ if (any(all_designs$feedback_corrected)) {
   corrected <- corrected_levels %in% all_designs$feedback[all_designs$feedback_corrected]
   uncorrected <- sub(", corrected$", "", corrected_levels)
   cairo_pdf(file.path(figure_dir, "multiqt_feedback_bars_corrected.pdf"), width = 18.5,
-    height = .125 * (sum(ifelse(is.na(bar_rows$method), 1.4, length(corrected_levels) + 1L))) +
-      2.4, onefile = TRUE, family = "DejaVu Sans")
+    height = bar_height(length(corrected_levels)), onefile = TRUE, family = "DejaVu Sans")
   for (p in seq_len(nrow(pages))) draw_bar_page(pages$disease[p], pages$location[p],
-    all_designs, corrected_levels, design_tint[uncorrected], corrected)
+    bar_designs, corrected_levels, design_tint[uncorrected], corrected)
   dev.off()
 }

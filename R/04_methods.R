@@ -193,6 +193,15 @@ method_labels <- function(p) {
     phase_angle = paste0("Angle + slow offset (", p$phase_slow, "), probability that the base is ",
       "too high (R/05)"),
     phase_hidden = "Hidden-phase model: three free phases, updated weights (R/05)",
+    # The controls of phase_angle (angle_controls in R/03): same power scale, adaptive rate and
+    # warmup; each learns from its own issued forecasts.
+    setNames(paste0("Power MultiQT (", p$angle_control_rates, "\u00d7 rate",
+      ifelse(names(p$angle_control_rates) == "angle_slow_only", "; slow only = p fixed at 1/2",
+        ""), ")"), names(p$angle_control_rates)),
+    angle_abs = paste0("Angle magnitude + slow offset (", p$phase_slow,
+      "; |1 - 2p| in forecast and update: no reversals)"),
+    angle_rate_only = paste0("Power MultiQT (probability-dependent rate only: {", p$phase_slow,
+      " + (1 - 2p_t)\u00b2} \u00d7 rate at learning, no multiplier at issuance)"),
     # The expert banks of the scaled trackers (scaled_methods in R/03), rates in multiples of
     # the rolling scale of their scores: the rate grid and the most recent weekly starts.
     unlist(lapply(names(scale_titles), function(scale) setNames(paste0(scale_titles[[scale]], ": ",
@@ -206,6 +215,9 @@ method_labels <- function(p) {
 # Colours as in the trade-off plots and 06's tree (tradeoff_colours in R/03); the original
 # in gray, as the scoring target is drawn in black.
 colours <- replace(tradeoff_colours, "original", "gray40")
+# The diagnostic pages (diagnostic_groups in R/03): the controls of phase_angle in their own
+# colours and line types (not on the trade-off pages or in 06's tree).
+colours <- c(colours, diagnostic_colours[setdiff(names(diagnostic_colours), names(colours))])
 # Lines as the symbols of the trade-off plots: common weights across quantile levels dashed
 # (triangles), + outer MultiQT dotted (squares), common weights + outer dot-dashed (diamonds).
 common <- setNames(grepl("_common", names(method_short_labels)), names(method_short_labels))
@@ -256,15 +268,28 @@ for (b in seq_along(plot_levels)) {
   r <- (b - 1L) %/% 3L
   blocks[2L * r + 1:2, (b - 1L) %% 3L + 1L] <- c(2L * b - 1L, 2L * b)
 }
+# The diagnostic groups (diagnostic_groups in R/03: phase_angle and its controls) follow the
+# method groups; their methods keep their identity when forecasts coincide: a method identical
+# to another (duplicate_of) is drawn and its legend entry names both.
+page_groups <- c(method_groups, diagnostic_groups)
 draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name in
-  names(method_groups)) {
+  names(page_groups)) {
   truth_label <- score_truth_label(settings$score_target, run$case$feedback_delay)
   truth_legend <- paste0(toupper(substr(truth_label, 1, 1)), substring(truth_label, 2))
-  method_names <- shown_methods(run, method_groups[[group_name]])
+  diagnostic <- group_name %in% names(diagnostic_groups)
+  method_names <- if (diagnostic) Filter(function(method) has_forecasts(run, method),
+    page_groups[[group_name]]) else shown_methods(run, page_groups[[group_name]])
   # No page for a group whose own methods have no forecasts here (phase_angle and
   # phase_hidden at the US and other locations outside the pooled ones).
-  own <- names(home_group)[home_group == group_name]
+  own <- if (diagnostic) setdiff(page_groups[[group_name]], "original") else
+    names(home_group)[home_group == group_name]
   if (!any(vapply(own, has_forecasts, logical(1), run = run))) next
+  lty_of <- if (diagnostic) replace(line_types, names(diagnostic_line_types),
+    diagnostic_line_types) else line_types
+  legend_labels <- labels[method_names]
+  if (diagnostic) for (method in intersect(names(run$duplicate_of), method_names))
+    legend_labels[method] <- paste0(legend_labels[method], " (identical to ",
+      method_short_labels[[run$duplicate_of[[method]]]], ")")
   layout(rbind(blocks, 2L * length(plot_levels) + 1L), heights = c(rep(c(2, 1), 3), .45))
   par(oma = c(1.5, 0, 4, 0), mgp = c(2.4, .6, 0), cex = .85)
   dates <- run$case$target_date
@@ -280,7 +305,7 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
       main = paste("alpha =", level))
     mark_time(run$case)
     for (method in method_names) lines(broken$dates, broken[[2]][, method], col = colours[method],
-      lty = line_types[method], lwd = 1.3)
+      lty = lty_of[method], lwd = 1.3)
     lines(broken$dates, broken[[3]], col = "black", lwd = .7)
     points(dates, run$truth, pch = 16, cex = .45)
     par(mar = c(2.6, 4.6, .7, 1))
@@ -289,14 +314,15 @@ draw_forecast_pages <- function(runs, labels) for (run in runs) for (group_name 
     axis.Date(1, at = ticks, format = "%b %Y", cex.axis = .85)
     mark_time(run$case)
     for (method in method_names) lines(broken$dates, broken[[4]][, method], col = colours[method],
-      lty = line_types[method], lwd = 1.1)
+      lty = lty_of[method], lwd = 1.1)
   }
   par(mar = c(0, 0, 0, 0))
   plot.new()
   # Column-wise widths, so long labels fit; trailing spaces keep a gap between columns.
-  legend("center", paste0(c(truth_legend, labels[method_names]), "    "),
-    col = c("black", colours[method_names]), lty = c(NA, line_types[method_names]),
-    pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = 4, bty = "n", text.width = NA)
+  legend("center", paste0(c(truth_legend, legend_labels), "    "),
+    col = c("black", colours[method_names]), lty = c(NA, lty_of[method_names]),
+    pch = c(16, rep(NA, length(method_names))), lwd = 2, ncol = if (diagnostic) 3 else 4,
+    bty = "n", text.width = NA)
   mtext(paste(plot_title(run), "|", group_name), side = 3, outer = TRUE, line = 2, font = 2, cex = 1.15)
   mtext(paste("Issued alpha-quantile forecasts and their weekly quantile loss in", score_units,
     "against the", truth_label, "| Vertical dotted lines: peaks | Gray: first season (not scored)"),
@@ -519,7 +545,8 @@ blank_cell <- function(title, label, first_column) {
   if (nzchar(title)) title(main = title)
   if (first_column) mtext(label, side = 2, line = 2, cex = .9)
 }
-draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_pages)) {
+draw_weight_pages <- function(runs) for (run in runs) {
+  for (page in names(weight_pages)) {
   columns <- weight_pages[[page]]
   columns <- columns[columns$method %in% names(run$weights), ]
   if (!nrow(columns)) next
@@ -599,6 +626,103 @@ draw_weight_pages <- function(runs) for (run in runs) for (page in names(weight_
     "forecast, filled with the latest earlier", base_label, "forecast of the same target week."),
     side = 1, outer = TRUE,
     line = 3.8, cex = .8)
+  }
+  draw_component_page(run)
+}
+
+# Angle + slow offset: probability and contributions, after a location's weight pages (the
+# issued components of phase_angle, phase_weighted_multiqt(diagnostics = TRUE) in R/03). Top:
+# p_t and 1 - 2p_t, the probability of each issue week and its multiplier. Per level 0.1-0.9
+# the signed additive corrections in the plotted units: the slow offset sigma_t c_t, the angle
+# contribution sigma_t (1 - 2 p_t) u_t, their sum before the ordering projection, the issued
+# correction q_t - b_t and the ordering adjustment (issued minus the sum; drawn where nonzero,
+# attributed to neither). They are not mixture weights: they need not sum to one, and u_t is
+# signed, so a positive multiplier does not mean a positive correction. Below alpha = 0.2, 0.5
+# and 0.8: the base, the issued forecast and the scoring target. Re-run: every week from that
+# week's replay (rerun_methods()). No page without phase inputs (the US).
+component_colours <- c(slow = "#0072B2", angle = "#E69F00", sum = "black", issued = "gray60",
+  adjustment = "#C0392B")
+component_inches <- c(probability = 2.1, multiplier = 2.1, level = 4.3, forecast = 3.5,
+  key = 1.3)
+draw_component_page <- function(run, method = "phase_angle") {
+  d <- run$diagnostics[[method]]
+  if (is.null(d) || !isTRUE(d$available)) return(invisible(NULL))
+  dates <- run$case$target_date
+  ticks <- date_ticks(dates)
+  p <- as.numeric(d$p)
+  m <- 1 - 2 * p
+  slow <- matrix(d$components[, "shared", ], length(dates))
+  angle <- matrix(d$components[, "flip", ], length(dates))
+  total <- slow + angle
+  base <- matrix(d$base, length(dates))
+  issued <- matrix(d$issued, length(dates))
+  correction <- issued - base
+  adjustment <- matrix(d$adjustment, length(dates))
+  adjustment[!is.finite(adjustment) | abs(adjustment) < 1e-9] <- NA
+  broken <- break_gaps(dates, p, m, slow, angle, total, correction, adjustment, base, issued,
+    run$truth)
+  b <- broken$dates
+  heights <- component_inches[c("probability", "multiplier", rep("level", 3), "forecast", "key")]
+  ids <- rbind(1, 2, matrix(3:11, 3, byrow = TRUE), 12:14, 15, 16)
+  layout(ids, heights = c(lcm(2.54 * heights), 1))
+  par(oma = c(4.8, .8, 5.2, .8), mgp = c(2.2, .5, 0), cex = .9)
+  time_panel <- function(ylim, ylab, main = "", axis_dates = FALSE, margin_bottom = .6) {
+    par(mar = c(if (axis_dates) 2.3 else margin_bottom, 5, if (nzchar(main)) 1.6 else .6, .8))
+    plot(dates, rep(NA, length(dates)), ylim = ylim, xaxt = "n", xlab = "", ylab = ylab,
+      main = main, las = 1, cex.axis = .8)
+    mark_time(run$case)
+    if (axis_dates) axis.Date(1, at = ticks, format = "%b %Y", cex.axis = .8)
+  }
+  time_panel(0:1, "p_t (probability\nbase too high)")
+  abline(h = .5, col = "gray40", lty = 2)
+  lines(b, broken[[2]], col = colours[["phase_angle"]], lwd = 1.4)
+  points(dates, p, pch = 16, cex = .35, col = colours[["phase_angle"]])
+  time_panel(c(-1, 1), "1 - 2p_t\n(angle multiplier)", axis_dates = TRUE)
+  abline(h = 0, col = "gray40", lty = 2)
+  lines(b, broken[[3]], col = colours[["phase_angle"]], lwd = 1.4)
+  for (k in seq_along(plot_levels)) {
+    j <- match(plot_levels[k], run$case$alpha)
+    ylim <- range(0, slow[, j], angle[, j], total[, j], correction[, j], adjustment[, j],
+      finite = TRUE)
+    time_panel(ylim, if (k %% 3 == 1) paste0("Correction\n(", score_units, ")") else "",
+      paste("alpha =", plot_levels[k]), axis_dates = TRUE)
+    abline(h = 0, col = "gray40")
+    lines(b, broken[[7]][, j], col = component_colours[["issued"]], lwd = 3.2)
+    lines(b, broken[[4]][, j], col = component_colours[["slow"]], lwd = 1.3)
+    lines(b, broken[[5]][, j], col = component_colours[["angle"]], lwd = 1.3)
+    lines(b, broken[[6]][, j], col = component_colours[["sum"]], lwd = .9, lty = 2)
+    lines(b, broken[[8]][, j], col = component_colours[["adjustment"]], lwd = .8)
+    points(dates, adjustment[, j], col = component_colours[["adjustment"]], pch = 16, cex = .3)
+  }
+  for (level in weight_forecast_levels) {
+    j <- match(level, run$case$alpha)
+    time_panel(range(base[, j], issued[, j], run$truth, finite = TRUE),
+      if (level == weight_forecast_levels[1]) paste0("Forecast\n(", score_units, ")") else "",
+      paste("Forecast, alpha =", level), axis_dates = TRUE)
+    lines(b, broken[[9]][, j], col = colours[["original"]], lwd = 1.1)
+    lines(b, broken[[10]][, j], col = colours[["phase_angle"]], lwd = 1.3)
+    lines(b, broken[[11]], col = "black", lwd = .7)
+    points(dates, run$truth, pch = 16, cex = .35)
+  }
+  par(mar = c(0, 0, 0, 0))
+  plot.new()
+  legend("center", c("Slow offset sigma_t c_t", "Angle contribution sigma_t (1 - 2p_t) u_t",
+    "Sum of the two (before the ordering projection)", "Issued correction q_t - b_t",
+    "Ordering adjustment: issued minus the sum (where nonzero)", "Base", method_short_labels[[method]],
+    "Scoring target"), col = c(component_colours, colours[["original"]], colours[[method]], "black"),
+    lwd = c(1.3, 1.3, .9, 3.2, .8, 1.1, 1.3, .7), lty = c(1, 1, 2, 1, 1, 1, 1, 1),
+    pch = c(NA, NA, NA, NA, 16, NA, NA, 16), pt.cex = .5, ncol = 3, bty = "n", cex = .95)
+  plot.new()                                             # The free space of the page.
+  mtext("Angle + slow offset: probability and contributions", side = 3, outer = TRUE,
+    line = 2.4, font = 2, cex = 1.3)
+  mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
+  mtext(paste("Issued at each target date (re-run: from that week's replay). Corrections in",
+    score_units, "on the power scale of the tracker: signed additive parts, not weights; u_t is",
+    "signed, so a positive multiplier need not give a positive correction."), side = 1,
+    outer = TRUE, line = .4, cex = .82)
+  mtext(paste("Probability source:", d$source, "| Vertical dotted lines: peaks | Gray: first",
+    "season (not scored) | The ordering adjustment belongs to neither component."), side = 1,
+    outer = TRUE, line = 1.6, cex = .82)
 }
 
 # 6. EVERY DISEASE, HORIZON AND FEEDBACK DESIGN ---------------------

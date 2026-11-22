@@ -56,7 +56,14 @@ multiqt_settings <- function() {
   # Window lengths in weeks. No forecasts were issued 2025-10-25 to 2025-11-15, so
   # COVID after-peak windows of September 2025 peaks miss some weeks.
   weeks_before_peak = 8L,           # before = weeks -7..0: 8 weeks, including the peak week.
-  weeks_after_peak = 8L)            # after = weeks 1..8: 8 weeks.
+  weeks_after_peak = 8L,            # after = weeks 1..8: 8 weeks.
+  # Phase probabilities of phase_angle, phase_hidden and the angle controls: R/05's file of this
+  # base, or another complete file of the same structure (MULTIQT_PHASE_PROBABILITIES, e.g. a
+  # candidate of agent/outputs/phase_probability_regularization/); phase_inputs() records its
+  # path and checksum in every case, so a changed source changes R/04's cache keys.
+  phase_probabilities = Sys.getenv("MULTIQT_PHASE_PROBABILITIES",
+    file.path(if (base_model == "cmu_submission") "output" else file.path("output", base_model),
+      "data", "phase_probabilities.rds")))
 }
 # The prepared data of the base model of `settings` (R/01_data_overview.R), checked to be
 # of that base.
@@ -345,15 +352,17 @@ get_case <- function(prepared, disease, location, horizon, feedback_delay = 0L,
 # tail) of its target week at its cutoff; W[s, t, ], the probabilities of row s's target week as
 # known at the cutoff of issue week t (updated once reported; the weights when row s is learned
 # at week t). The file is read once per session.
+# source, md5: the file read (multiqt_settings()$phase_probabilities) and its checksum.
 phase_cache <- new.env()
 phase_inputs <- function(case) {
-  file <- file.path(multiqt_settings()$output_dir, "data", "phase_probabilities.rds")
+  file <- multiqt_settings()$phase_probabilities
   if (!file.exists(file)) return(NULL)
   stamp <- paste(file, file.mtime(file))
   if (!identical(phase_cache$stamp, stamp)) {
     x <- readRDS(file)
     phase_cache$bias <- split(x$bias, paste(x$bias$disease, x$bias$location, x$bias$horizon))
     phase_cache$hidden <- split(x$hidden, paste(x$hidden$disease, x$hidden$location))
+    phase_cache$md5 <- unname(tools::md5sum(file))
     phase_cache$stamp <- stamp
   }
   bias <- phase_cache$bias[[paste(case$disease, case$location, case$horizon)]]
@@ -370,7 +379,8 @@ phase_inputs <- function(case) {
   pairs <- expand.grid(s = seq_len(n), t = seq_len(n))
   list(p_bias = bias$p_bias[order(bias$row)],
     P = lookup(case$as_of, case$target_date),
-    W = array(lookup(case$as_of[pairs$t], case$target_date[pairs$s]), c(n, n, 3)))
+    W = array(lookup(case$as_of[pairs$t], case$target_date[pairs$s]), c(n, n, 3)),
+    source = file, md5 = phase_cache$md5)
 }
 # Label of a feedback design.
 feedback_label <- function(delay, revisions = FALSE, corrected = FALSE)
@@ -487,7 +497,8 @@ case_as_of <- function(case, week, frozen_s0 = NULL, frozen_loss_scale = NULL) {
     W <- case$phase$W[rows, rows, , drop = FALSE]
     for (w in rows) W[, w, ] <- case$phase$W[rows, week, ]
     case$phase <- list(p_bias = case$phase$p_bias[rows],
-      P = case$phase$P[rows, , drop = FALSE], W = W)
+      P = case$phase$P[rows, , drop = FALSE], W = W, source = case$phase$source,
+      md5 = case$phase$md5)
   }
   case$feedback_observed <- own$observed
   case$feedback_samples <- samples
@@ -1509,13 +1520,25 @@ polar_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, unit, an
 # row s as known then. phase_angle: P = (1 - p, p), V = (shared, flip) = (1 1; 1 -1): a slow
 # per-level offset and one correction whose sign follows 1 - 2p. phase_hidden: three free
 # phases, V = I.
+# diagnostics = TRUE: also the issued components (angle-controls diagnostics, 20 Nov 2026),
+# in the units of base: states [week x state x level], the states Z as issued at each week
+# (after that week's updates; 0 in the warmup); multiplier [week x state], (P_t V)_j; sigma,
+# eta; components [week x state x level] = sigma_t (P_t V)_j Z_j; raw = base + their sum (the
+# forecast before the ordering projection); issued = the forecast; adjustment = issued - raw,
+# the projection's change, attributed to no state. The forecast is computed exactly as without
+# diagnostics.
 phase_weighted_multiqt <- function(base, feedback, feedback_by_week, alpha, eta, sigma, P,
                                    weights, V = diag(ncol(P)), rate = rep(1, ncol(V)),
-                                   warmup_weeks = 0L, feedback_samples = NULL) {
+                                   warmup_weeks = 0L, feedback_samples = NULL,
+                                   diagnostics = FALSE) {
   n <- nrow(base)
   stopifnot(nrow(P) == n, nrow(V) == ncol(P), length(rate) == ncol(V), length(eta) == n)
   Z <- matrix(0, ncol(V), length(alpha))
   q <- base
+  if (diagnostics) {
+    states <- array(0, c(n, ncol(V), length(alpha)), list(NULL, colnames(V), alpha))
+    multiplier <- P %*% V
+  }
   for (week in seq_len(n)) {
     if (week <= warmup_weeks) next
     for (s in feedback_by_week[[week]]) {
@@ -1523,8 +1546,14 @@ phase_weighted_multiqt <- function(base, feedback, feedback_by_week, alpha, eta,
       Z <- Z + outer(rate * drop(weights(week, s) %*% V), step)
     }
     q[week, ] <- isoreg(base[week, ] + sigma[week] * drop((P[week, ] %*% V) %*% Z))$yf
+    if (diagnostics) states[week, , ] <- Z
   }
-  q
+  if (!diagnostics) return(q)
+  components <- states * array(multiplier * sigma, dim(states))
+  raw <- base + apply(components, c(1, 3), sum)
+  list(q = q, diagnostics = list(states = states, multiplier = multiplier, sigma = sigma,
+    eta = eta, components = components, raw = raw, issued = q, adjustment = q - raw,
+    warmup = seq_len(n) <= warmup_weeks))
 }
 
 # Sign-flip experts (power_flip, level_flip, width_flip): the base, a tracker's forecasts
@@ -1749,6 +1778,10 @@ method_parameters <- function() list(
   # phase_angle: the rate factor of its slow per-level offset (as REF-op's slow term, .003
   # against .03); not tuned.
   phase_slow = .1,
+  # The rate multipliers of phase_angle's one-offset controls (angle_controls); fixed before
+  # scoring (20 Nov 2026), a diagnostic grid, not tuned.
+  angle_control_rates = c(angle_slow_only = .1, angle_rate_025 = .25, angle_rate_05 = .5,
+    angle_rate_1 = 1),
   # Score-based experts (score_experts, score_methods): learned weights per level with H and
   # sharing 1/(2H) as the other learned mixtures; not tuned.
   # Studentized MultiQT: sigma_t from the RMS of the last median_window released
@@ -1806,6 +1839,15 @@ flip_methods <- c("power_flip", "level_flip", "width_flip")
 phase_methods <- c("phase_power", "phase_oracle")
 # Phase from outside data (R/05_phase_probabilities.R; since 17 November 2026).
 outside_methods <- c("phase_angle", "phase_hidden")
+# Controls of phase_angle (20 November 2026; diagnostic, not in method_groups, so neither in
+# 06's tree nor in 04's trade-off pages; their page: diagnostic_groups): one power-scale
+# offset at a multiple of phase_angle's rate (angle_control_rates; .1 = p fixed at 1/2: the
+# slow offset alone), the angle with |1 - 2p| in forecast and update (no reversals), and one
+# offset learning each released error at {.1 + (1 - 2 p_t)^2} times the rate of the learning
+# week t, issued without a probability multiplier. Same power scale, adaptive rate, warmup and
+# phase inputs as phase_angle; each learns from its own issued forecasts.
+angle_controls <- c("angle_slow_only", "angle_rate_025", "angle_rate_05", "angle_rate_1",
+  "angle_abs", "angle_rate_only")
 method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_op",
   "sqrt_constant", "sqrt_adaptive", "leaky_select", "leaky_weighted", "studentized",
   "studentized_base", "median_constant",
@@ -1815,7 +1857,7 @@ method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_o
   "shared_common", "restart_uniform", "restart_weighted", "restart_recent", "restart_recent_dual",
   score_methods, "restart_persistent", "shared_outer", "shared_common_outer",
   "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods, "polar",
-  outside_methods)
+  outside_methods, angle_controls)
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
@@ -1868,6 +1910,16 @@ method_groups <- list(
 # base and Fixed MultiQT are left.
 method_groups <- Filter(function(group) length(setdiff(group, c("original", "fixed"))) > 0L,
   lapply(method_groups, intersect, active_methods))
+# Diagnostic pages of 04's forecast plots (not candidates of 06's tree, not on the trade-off
+# pages), with their own colours and line types: the rate multipliers dashed in blues from
+# light (slow) to dark (1x), no reversals solid vermillion, rate only dot-dashed green.
+diagnostic_groups <- list("Angle + slow offset: controls" = intersect(c("original",
+  "phase_angle", angle_controls), active_methods))
+diagnostic_colours <- c(phase_angle = "#E69F00", angle_slow_only = "#9ECAE1",
+  angle_rate_025 = "#4292C6", angle_rate_05 = "#2171B5", angle_rate_1 = "#08306B",
+  angle_abs = "#D55E00", angle_rate_only = "#009E73")
+diagnostic_line_types <- c(phase_angle = 1, angle_slow_only = 2, angle_rate_025 = 2,
+  angle_rate_05 = 2, angle_rate_1 = 2, angle_abs = 1, angle_rate_only = 4)
 # Short method names without settings (06's tree; 04's labels add the tuned values).
 method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Leaky MultiQT",
   fixed_log = "Fixed MultiQT (log1p tracker)", leaky_log = "Leaky MultiQT (log1p tracker)",
@@ -1882,6 +1934,11 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   phase_angle = "Angle + slow offset (bias probability, outside data)",
   phase_hidden = "Hidden-phase model (three phases, outside data)",
   phase_oracle = "Two-phase power scale (phase in hindsight)",
+  angle_slow_only = "Power MultiQT (0.1x rate; slow only)",
+  angle_rate_025 = "Power MultiQT (0.25x rate)", angle_rate_05 = "Power MultiQT (0.5x rate)",
+  angle_rate_1 = "Power MultiQT (1x rate)",
+  angle_abs = "Angle magnitude + slow offset (no reversals)",
+  angle_rate_only = "Power MultiQT (probability-dependent rate only)",
   uniform = "Rate grid: equal", weighted = "Rate grid: learned, no sharing",
   weighted_common = "Rate grid: learned, common weights",
   shared = "Rate grid: learned + sharing",
@@ -2220,7 +2277,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     names_of <- c(paste0("studentized_", scale_name), paste0(scale_name, c("_uniform",
       "_weighted_common", "_restart_equal", "_restart_recent")))
     needed <- want(names_of) || (scale_name == "power" &&
-      want("power_flip", "phase_power", "phase_oracle", outside_methods))
+      want("power_flip", "phase_power", "phase_oracle", outside_methods, angle_controls))
     if (!needed) next
     scale_key <- paste(scale_name, params$power_p, params$spread_lambda, params$scale_guard)
     studentized <- memo(paste("scale", scale_key), normalized_scale(studentized_scale(case,
@@ -2294,19 +2351,51 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # too high plus a slow per-level offset (phase_slow); phase_hidden, three free phases with the
   # hidden-phase model's probabilities, learned with the probabilities as known when each
   # report arrives. Locations without phase inputs (outside the pooled locations): NA.
-  if (want(outside_methods)) {
+  # phase_angle and its controls (angle_controls) also return their issued components
+  # (diagnostics, in counts / count_scale like the forecasts, with p_t and the probability
+  # source); without phase inputs: NA forecasts and diagnostics marked unavailable.
+  diagnostics <- list()
+  if (want(outside_methods, angle_controls)) {
     power <- scaled$power
-    outside <- function(P, weights, V, rate) phase_weighted_multiqt(case$base,
-      case$feedback_observed, case$feedback_by_week, case$alpha, rate_of(power$unit),
-      power$scale, P, weights, V, rate, power$warmup, case$feedback_samples) / count_scale
-    ph <- case$phase
-    if (want("phase_angle")) predictions$phase_angle <- if (is.null(ph)) base * NA else {
-      P2 <- cbind(1 - ph$p_bias, ph$p_bias)
-      outside(P2, function(t, s) P2[s, ], cbind(shared = c(1, 1), flip = c(1, -1)),
-        c(params$phase_slow, 1))
+    outside <- function(P, weights, V, rate, diagnostics = FALSE) {
+      x <- phase_weighted_multiqt(case$base, case$feedback_observed, case$feedback_by_week,
+        case$alpha, rate_of(power$unit), power$scale, P, weights, V, rate, power$warmup,
+        case$feedback_samples, diagnostics)
+      if (!diagnostics) return(x / count_scale)
+      d <- x$diagnostics
+      for (part in c("components", "raw", "issued", "adjustment", "sigma"))
+        d[[part]] <- d[[part]] / count_scale
+      list(q = x$q / count_scale, diagnostics = c(list(available = TRUE,
+        p = case$phase$p_bias, source = case$phase$source, md5 = case$phase$md5,
+        base = base, count_scale = count_scale), d))
     }
+    ph <- case$phase
+    unavailable <- list(available = FALSE, reason = "no phase inputs for this location")
+    angle <- cbind(shared = c(1, 1), flip = c(1, -1))
+    one <- matrix(1, 1, 1, dimnames = list(NULL, "offset"))
+    run_angle <- function(method, x) {
+      if (is.null(ph)) { predictions[[method]] <<- base * NA; diagnostics[[method]] <<- unavailable }
+      else { r <- x(); predictions[[method]] <<- r$q; diagnostics[[method]] <<- r$diagnostics }
+    }
+    angle_with <- function(p) function() {
+      P2 <- cbind(1 - p, p)
+      outside(P2, function(t, s) P2[s, ], angle, c(params$phase_slow, 1), TRUE)
+    }
+    if (want("phase_angle")) run_angle("phase_angle", angle_with(ph$p_bias))
     if (want("phase_hidden")) predictions$phase_hidden <- if (is.null(ph)) base * NA else
       outside(ph$P, function(t, s) ph$W[s, t, ], diag(3), rep(1, 3))
+    n_rows <- nrow(case$base)
+    for (method in intersect(names(params$angle_control_rates), methods))
+      run_angle(method, local({ r <- params$angle_control_rates[[method]]; function()
+        outside(matrix(1, n_rows, 1), function(t, s) 1, one, r, TRUE) }))
+    # No reversals: p replaced by min(p, 1 - p), so 1 - 2p becomes |1 - 2p| in the forecast
+    # (P_t V) and in the update (the saved P_s of the learned row).
+    if (want("angle_abs")) run_angle("angle_abs", angle_with(pmin(ph$p_bias, 1 - ph$p_bias)))
+    # Rate only: the weight of a report learned at week t is .1 + (1 - 2 p_t)^2 (p_t of the
+    # learning week, not of the learned row); issued without a multiplier.
+    if (want("angle_rate_only")) run_angle("angle_rate_only", function()
+      outside(matrix(1, n_rows, 1), function(t, s) params$phase_slow + (1 - 2 * ph$p_bias[t])^2,
+        one, 1, TRUE))
   }
   for (method in names(mixtures)) predictions[[method]] <- mixtures[[method]]$q
   # The first-start control has exactly the same birth rule as the restart copies.
@@ -2331,6 +2420,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   list(case = case, scaling = scaling, s0 = s0, sigma = sigma, base_sigma = base_sigma,
     median_warmup_weeks = median_warmup_weeks,
     constant_sigma = constant_sigma, predictions = predictions,
+    diagnostics = diagnostics[intersect(names(diagnostics), names(predictions))],
     weights = lapply(mixtures, `[[`, "weights"), lambda = lapply(mixtures, `[[`, "lambda"),
     expert_forecasts = lapply(mixtures, `[[`, "experts"),
     rate_experts = rate_experts, restart_experts = restart_experts, score_experts = score_bank)
@@ -2401,9 +2491,18 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
   last <- run_at(max(weeks))
   parts <- c("predictions", "weights", "lambda", "expert_forecasts")
   issued <- lapply(last[parts], function(part) lapply(part, blank))
+  # Diagnostics (phase_angle and its controls): every per-week part from row t of the replay
+  # at t, as the forecasts, including the scale sigma that replay used.
+  row_parts <- c("p", "base", "states", "multiplier", "sigma", "eta", "components", "raw",
+    "issued", "adjustment", "warmup")
+  issued_diagnostics <- lapply(last$diagnostics, function(d) if (!isTRUE(d$available)) d else
+    c(d[setdiff(names(d), row_parts)], lapply(d[row_parts], blank)))
   omitted <- list()
   for (t in weeks) {
     run <- if (t == max(weeks)) last else run_at(t)
+    for (method in names(issued_diagnostics)) if (isTRUE(issued_diagnostics[[method]]$available))
+      for (part in row_parts) issued_diagnostics[[method]][[part]] <- fill(
+        issued_diagnostics[[method]][[part]], run$diagnostics[[method]][[part]], t, NA)
     # The score bank keeps its members in every re-run; an invalid report only removes its
     # feedback (rerun_omitted).
     for (method in intersect(names(run$weights), score_methods))
@@ -2416,6 +2515,7 @@ rerun_methods <- function(case, settings, params, methods, cache = NULL, weeks =
       omitted[[length(omitted) + 1L]] <- data.frame(week = t, row = run$case$rerun_omitted)
   }
   last[parts] <- issued
+  last$diagnostics <- issued_diagnostics
   last$case <- case
   last$rerun_omitted <- do.call(rbind, c(list(data.frame(week = integer(), row = integer())),
     omitted))
