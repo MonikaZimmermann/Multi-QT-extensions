@@ -12,7 +12,7 @@
 # Run from the project root after R/04_methods.R, which scores every location, horizon and
 # feedback design of both diseases: Rscript R/06_evaluation_tree.R. Also draws
 # multiqt_feedback_bars.pdf: every method under each feedback design, side by side (with
-# three diagnostic controls of phase_angle below it, not ranked), and
+# diagnostic controls below phase_angle and phase_hidden, not ranked), and
 # multiqt_feedback_bars_corrected.pdf: each design next to its corrected version. The tree and
 # multiqt_feedback_bars.pdf use the three designs without corrected labels.
 # Order of the workflow: 00 -> 01 -> 02 / 04 -> 06.
@@ -24,12 +24,26 @@ prepared <- read_prepared(settings)       # The base model's prepared data and o
 scores <- read.csv(file.path(settings$output_dir, "results", "peak_reasoning",
   "summary_scores_all_locations.csv"),
   colClasses = c(location = "character"))
-# The diagnostic controls of phase_angle (diagnostic_groups in R/03): scored by R/04 for its
-# forecast pages, never candidates or rows of the tree. Three of them are rows of the
-# feedback bars (section 4), below phase_angle, with these labels.
+# The diagnostic controls of phase_angle and phase_hidden (diagnostic_groups in R/03): scored
+# by R/04 for its forecast pages, never candidates or rows of the tree. Five of them are rows
+# of the feedback bars (section 4), below the method they test (bar_control_parent), with
+# these labels; bar_control_notes: one footnote line per tested method.
 bar_controls <- c(angle_slow_only = "Control: slow offset only (0.1x rate)",
   angle_abs = "Control: no reversals (|1 - 2p_t|)",
-  angle_rate_only = "Control: probability-dependent rate only")
+  angle_rate_only = "Control: probability-dependent rate only",
+  hidden_uniform = "Control: equal probabilities (rate/3)",
+  hidden_issued_weights = "Control: issued probabilities P_s")
+bar_control_parent <- c(angle_slow_only = "phase_angle", angle_abs = "phase_angle",
+  angle_rate_only = "phase_angle", hidden_uniform = "phase_hidden",
+  hidden_issued_weights = "phase_hidden")
+bar_control_notes <- c(
+  phase_angle = paste("Control rows below Angle + slow offset: diagnostics of phase_angle, not",
+    "methods, never ranked. Slow offset only: p_t fixed at 1/2. No reversals: multiplier",
+    "|1 - 2p_t|. Rate only: one tracker at {0.1 + (1 - 2p_t)^2} x rate, no multiplier at",
+    "issuance."),
+  phase_hidden = paste("Control rows below Hidden-phase model: diagnostics of phase_hidden, not",
+    "methods, never ranked. Equal probabilities: 1/3 per phase (one tracker at rate/3). Issued",
+    "probabilities: reports learned with P_s, not the revised W_{s,t}."))
 scores <- scores[!scores$method %in% setdiff(unlist(diagnostic_groups),
   c(unlist(method_groups), names(bar_controls))), ]
 # Scores and prepared data of another feedback protocol (R/03_functions.R) are not combined.
@@ -475,8 +489,9 @@ for (lower in names(lower_panels)) {
 # one axis per page, up to 1.15 times the 95th percentile of the absolute reductions (a
 # bar beyond it ends in "<" or ">"), and the share of cases with a smaller loss than the
 # base to the right; coverage-error panels on one axis from 0, dashed: the base. Colours:
-# tradeoff_colours (R/03), lighter for the later designs. Below phase_angle, the controls
-# of bar_controls (section 1), in their colours of 04's forecast pages (diagnostic_colours).
+# tradeoff_colours (R/03), lighter for the later designs. Below phase_angle and phase_hidden,
+# their controls (bar_controls, section 1), in their colours of 04's forecast pages
+# (diagnostic_colours).
 bar_methods <- c(intersect(unique(unlist(method_groups)), c(tree_candidates, reference_methods)),
   names(bar_controls))
 bar_colours <- tradeoff_colours
@@ -489,12 +504,14 @@ tint <- function(colour, share) colorRampPalette(c("white", colour))(101)[1 + ro
 # Rows of a page: the methods by group, a header row before each group.
 bar_rows <- do.call(rbind, lapply(names(method_groups), function(group) {
   members <- intersect(bar_methods, names(home_group)[home_group == group])
-  if ("phase_angle" %in% members) members <- append(members, names(bar_controls),
-    match("phase_angle", members))
+  for (parent in intersect(members, bar_control_parent[names(bar_controls)]))
+    members <- append(members, names(bar_controls)[bar_control_parent[names(bar_controls)] ==
+      parent], match(parent, members))
   if (length(members)) data.frame(method = c(NA, members), group = group)
 }))
-# Footnote lines below the bars (four; five with the controls), 1.2 lines apart.
-bar_notes_oma <- if (length(bar_controls)) 7.8 else 6.6
+# Footnote lines below the bars: four, plus one per method with control rows, 1.2 lines apart.
+bar_note_parents <- intersect(unique(bar_control_parent[names(bar_controls)]), bar_rows$method)
+bar_notes_oma <- 6.6 + 1.2 * length(bar_note_parents)
 # levels, tints: the designs drawn and their shares of the method colour; outlined: designs
 # drawn with a black outline (the corrected ones).
 draw_bar_page <- function(disease, location, data = bar_scores, levels = feedback_levels,
@@ -586,11 +603,8 @@ draw_bar_page <- function(disease, location, data = bar_scores, levels = feedbac
     paste("Every tracker learns at the adaptive rate (no tuning).",
       if (any(bar_methods %in% reference_methods))
         "Hatched: the phase in hindsight (phase_oracle), a reference, not a method."),
-    if (length(bar_controls)) paste("Control rows below Angle + slow offset: diagnostics of",
-      "phase_angle, not methods, never ranked. Slow offset only: p_t fixed at 1/2. No reversals:",
-      "multiplier |1 - 2p_t|. Rate only: one tracker at {0.1 + (1 - 2p_t)^2} x rate, no",
-      "multiplier at issuance.")),
-    side = 1, outer = TRUE, line = 1.2 * seq_len(4L + (length(bar_controls) > 0)), cex = .8)
+    unname(bar_control_notes[bar_note_parents])),
+    side = 1, outer = TRUE, line = 1.2 * seq_len(4L + length(bar_note_parents)), cex = .8)
 }
 # Page height: the rows, the titles and the footnote lines (.2 inch per margin line).
 bar_height <- function(n_levels) .125 * (sum(ifelse(is.na(bar_rows$method), 1.4,
