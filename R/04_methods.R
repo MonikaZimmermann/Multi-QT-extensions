@@ -202,6 +202,11 @@ method_labels <- function(p) {
       "; |1 - 2p| in forecast and update: no reversals)"),
     angle_rate_only = paste0("Power MultiQT (probability-dependent rate only: {", p$phase_slow,
       " + (1 - 2p_t)\u00b2} \u00d7 rate at learning, no multiplier at issuance)"),
+    # The controls of phase_hidden (hidden_controls in R/03).
+    hidden_uniform = paste("Hidden phases, equal probabilities 1/3 at issuance and learning",
+      "(= one tracker at rate/3)"),
+    hidden_issued_weights = paste("Hidden-phase model learned with the issued probabilities P_s",
+      "(no revised assignments)"),
     # The expert banks of the scaled trackers (scaled_methods in R/03), rates in multiples of
     # the rolling scale of their scores: the rate grid and the most recent weekly starts.
     unlist(lapply(names(scale_titles), function(scale) setNames(paste0(scale_titles[[scale]], ": ",
@@ -628,6 +633,7 @@ draw_weight_pages <- function(runs) for (run in runs) {
     line = 3.8, cex = .8)
   }
   draw_component_page(run)
+  draw_hidden_page(run)
 }
 
 # Angle + slow offset: probability and contributions, after a location's weight pages (the
@@ -723,6 +729,137 @@ draw_component_page <- function(run, method = "phase_angle") {
   mtext(paste("Probability source:", d$source, "| Vertical dotted lines: peaks | Gray: first",
     "season (not scored) | The ordering adjustment belongs to neither component."), side = 1,
     outer = TRUE, line = 1.6, cex = .82)
+}
+
+# Hidden-phase model: probability and contributions, after the angle page (the issued
+# components of phase_hidden, phase_weighted_multiqt(diagnostics = TRUE) in R/03; notes,
+# "Three phases"). Top: the issued probabilities P_t^k of rise, overshoot and tail. Below, the
+# feedback assigned to each phase: per learning week t, summed over the rows s learned that
+# week, the learning weights W_{s,t}^k (solid) and the probabilities P_s^k those rows were
+# issued with (dashed); re-run: the totals of the replay at each cutoff, which re-learns every
+# row reported by then with the weights known then. Per level 0.2, 0.5 and 0.8: the learned
+# states u_t^{k,alpha} (standardized: before sigma_t and the probabilities); the signed
+# contributions sigma_t P_t^k u_t^{k,alpha} in the plotted units, positive parts stacked above
+# zero and negative parts below, so cancellation stays visible, with their sum (the forecast
+# before the ordering projection minus the base), the issued correction q_t - b_t and the
+# ordering adjustment; and the forecasts (base, issued, scoring target). Re-run: every week
+# from that week's replay. No page without phase inputs (the US).
+phase_colours <- c(rise = "#0072B2", overshoot = "#D55E00", tail = "#009E73")
+hidden_inches <- c(probability = 2.6, assigned = 3, states = 4.4, contributions = 5.6,
+  forecast = 4.4, key = 1.8)
+draw_hidden_page <- function(run, method = "phase_hidden") {
+  d <- run$diagnostics[[method]]
+  if (is.null(d) || !isTRUE(d$available)) return(invisible(NULL))
+  dates <- run$case$target_date
+  n <- length(dates)
+  ticks <- date_ticks(dates)
+  phases <- dimnames(d$states)[[2]]
+  colour_of <- phase_colours[phases]
+  P <- matrix(d$P, n, dimnames = list(NULL, phases))
+  # Feedback assigned to each phase; NA in weeks without learned rows.
+  rows_learned <- as.numeric(d$learn_rows)
+  learned <- matrix(d$learn_weights, n)
+  issued_with <- matrix(d$learn_issued, n)
+  learned[!(rows_learned > 0), ] <- NA
+  issued_with[!(rows_learned > 0), ] <- NA
+  base <- matrix(d$base, n)
+  issued <- matrix(d$issued, n)
+  correction <- issued - base
+  total <- matrix(d$raw, n) - base
+  adjustment <- matrix(d$adjustment, n)
+  adjustment[!is.finite(adjustment) | abs(adjustment) < 1e-9] <- NA
+  broken <- break_gaps(dates, P, learned, issued_with)
+  b <- broken$dates
+  rerun <- isTRUE(run$case$feedback_revised)
+  heights <- hidden_inches[c("probability", "assigned", "states", "contributions", "forecast",
+    "key")]
+  layout(rbind(1, 2, 3:5, 6:8, 9:11, 12, 13), heights = c(lcm(2.54 * heights), 1))
+  par(oma = c(4.8, .8, 5.2, .8), mgp = c(2.2, .5, 0), cex = .9)
+  time_panel <- function(ylim, ylab, main = "") {
+    par(mar = c(2.3, 5, if (nzchar(main)) 1.6 else .6, .8))
+    plot(dates, rep(NA, n), ylim = ylim, xaxt = "n", xlab = "", ylab = ylab, main = main,
+      las = 1, cex.axis = .8)
+    mark_time(run$case)
+    axis.Date(1, at = ticks, format = "%b %Y", cex.axis = .8)
+  }
+  time_panel(0:1, "P_t^k (issued\nprobability)")
+  for (k in seq_along(phases)) lines(b, broken[[2]][, k], col = colour_of[k], lwd = 1.4)
+  time_panel(range(0, learned, issued_with, finite = TRUE), if (rerun)
+    "Feedback weight\n(replay at cutoff)" else "Feedback weight\n(rows learned)")
+  for (k in seq_along(phases)) {
+    lines(b, broken[[4]][, k], col = colour_of[k], lwd = 1, lty = 2)
+    lines(b, broken[[3]][, k], col = colour_of[k], lwd = 1.4)
+    points(dates, learned[, k], col = colour_of[k], pch = 16, cex = .35)
+  }
+  levels_shown <- weight_forecast_levels
+  for (level in levels_shown) {
+    j <- match(level, run$case$alpha)
+    states <- matrix(d$states[, , j], n)
+    sb <- break_gaps(dates, states)
+    time_panel(range(0, states, finite = TRUE), if (level == levels_shown[1])
+      "State u_t^k\n(standardized)" else "", paste("Learned states, alpha =", level))
+    abline(h = 0, col = "gray40")
+    for (k in seq_along(phases)) lines(sb$dates, sb[[2]][, k], col = colour_of[k], lwd = 1.3)
+  }
+  for (level in levels_shown) {
+    j <- match(level, run$case$alpha)
+    parts <- matrix(d$components[, , j], n)
+    up <- t(apply(pmax(parts, 0), 1, cumsum))
+    down <- t(apply(pmin(parts, 0), 1, cumsum))
+    cb <- break_gaps(dates, total[, j], correction[, j])
+    time_panel(range(0, up, down, correction[, j], adjustment[, j], finite = TRUE),
+      if (level == levels_shown[1]) paste0("Contribution\n(", score_units, ")") else "",
+      paste("Contributions, alpha =", level))
+    abline(h = 0, col = "gray40")
+    x <- as.numeric(dates)
+    for (k in seq_along(phases)) {
+      lower_up <- if (k == 1) 0 else up[, k - 1]
+      lower_down <- if (k == 1) 0 else down[, k - 1]
+      fill <- adjustcolor(colour_of[k], alpha.f = .8)
+      rect(x - 2.6, lower_up, x + 2.6, up[, k], col = fill, border = NA)
+      rect(x - 2.6, lower_down, x + 2.6, down[, k], col = fill, border = NA)
+    }
+    lines(cb$dates, cb[[3]], col = adjustcolor("gray30", alpha.f = .55), lwd = 3)
+    lines(cb$dates, cb[[2]], col = "black", lwd = .9, lty = 2)
+    points(dates, adjustment[, j], col = component_colours[["adjustment"]], pch = 16, cex = .4)
+  }
+  for (level in levels_shown) {
+    j <- match(level, run$case$alpha)
+    fb <- break_gaps(dates, base[, j], issued[, j], run$truth)
+    time_panel(range(base[, j], issued[, j], run$truth, finite = TRUE),
+      if (level == levels_shown[1]) paste0("Forecast\n(", score_units, ")") else "",
+      paste("Forecast, alpha =", level))
+    lines(fb$dates, fb[[2]], col = colours[["original"]], lwd = 1.1)
+    lines(fb$dates, fb[[3]], col = colours[[method]], lwd = 1.3)
+    lines(fb$dates, fb[[4]], col = "black", lwd = .7)
+    points(dates, run$truth, pch = 16, cex = .35)
+  }
+  par(mar = c(0, 0, 0, 0))
+  plot.new()
+  legend(0, .5, phases, fill = adjustcolor(colour_of, alpha.f = .8), border = NA, yjust = .5,
+    bty = "n", cex = .95, title = "Phases", title.adj = 0, title.font = 2)
+  legend(.5, .5, c(if (rerun) "Learning weights W_{s,t} of the replay at each cutoff (solid)"
+    else "Learning weights W_{s,t}, summed over the rows learned that week (solid)",
+    "Issuance probabilities P_s of the same rows (dashed)",
+    "Sum of the contributions (before the ordering projection)", "Issued correction q_t - b_t",
+    "Ordering adjustment: issued minus the sum (where nonzero)", "Base",
+    method_short_labels[[method]], "Scoring target"),
+    col = c("gray20", "gray20", "black", adjustcolor("gray30", alpha.f = .55),
+      component_colours[["adjustment"]], colours[["original"]], colours[[method]], "black"),
+    lwd = c(1.4, 1, .9, 3, NA, 1.1, 1.3, .7), lty = c(1, 2, 2, 1, NA, 1, 1, 1),
+    pch = c(NA, NA, NA, NA, 16, NA, NA, 16), pt.cex = .5, ncol = 2, bty = "n", cex = .95,
+    xjust = .5, yjust = .5)
+  plot.new()                                             # The free space of the page.
+  mtext("Hidden-phase model: probability and contributions", side = 3, outer = TRUE,
+    line = 2.4, font = 2, cex = 1.3)
+  mtext(plot_title(run), side = 3, outer = TRUE, line = .9, cex = .9)
+  mtext(c(paste("Issued at each target date from its cutoff (re-run: from that week's replay).",
+    "States u_t^k: standardized, before sigma_t and the probabilities."),
+    paste("Contributions sigma_t P_t^k u_t^k in", score_units, "on the power scale: positive",
+      "parts stacked above zero, negative below; the ordering adjustment belongs to no phase."),
+    paste("Probability source:", d$source, "| Vertical dotted lines: peaks, known only in",
+      "hindsight (for interpretation) | Gray: first season (not scored)")), side = 1,
+    outer = TRUE, line = c(.4, 1.6, 2.8), cex = .82)
 }
 
 # 6. EVERY DISEASE, HORIZON AND FEEDBACK DESIGN ---------------------
