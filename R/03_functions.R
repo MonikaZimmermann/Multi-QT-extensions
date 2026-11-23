@@ -1870,6 +1870,11 @@ angle_controls <- c("angle_slow_only", "angle_rate_025", "angle_rate_05", "angle
 # rise, over, tail.
 hidden_controls <- c("hidden_uniform", "hidden_issued_weights")
 hidden_phases <- c("rise", "overshoot", "tail")
+# The true three phases (23 November 2026; a hindsight benchmark like phase_oracle, drawn as a
+# reference and never ranked in 06): phase_hidden issued and learned with the phase of each
+# row's target week relative to the nearest peak of the latest counts instead of the
+# hidden-phase model's probabilities. Needs no phase inputs (every location).
+hindsight_hidden <- "hidden_oracle"
 method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_op",
   "sqrt_constant", "sqrt_adaptive", "leaky_select", "leaky_weighted", "studentized",
   "studentized_base", "median_constant",
@@ -1879,7 +1884,7 @@ method_names <- c("original", "fixed", "leaky", "fixed_log", "leaky_log", "ref_o
   "shared_common", "restart_uniform", "restart_weighted", "restart_recent", "restart_recent_dual",
   score_methods, "restart_persistent", "shared_outer", "shared_common_outer",
   "restart_uniform_outer", "restart_weighted_outer", flip_methods, phase_methods, "polar",
-  outside_methods, angle_controls, hidden_controls)
+  outside_methods, hindsight_hidden, angle_controls, hidden_controls)
 # The mixture each outer MultiQT corrects.
 outer_inner <- c(shared_outer = "shared", shared_common_outer = "shared_common",
   restart_uniform_outer = "restart_uniform", restart_weighted_outer = "restart_weighted")
@@ -1927,7 +1932,7 @@ method_groups <- list(
   "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
     flip_methods, "polar"),
   "Two-phase trackers" = c("original", "studentized_power", phase_methods),
-  "Phase from outside data" = c("original", "phase_oracle", outside_methods))
+  "Phase from outside data" = c("original", "phase_oracle", outside_methods, hindsight_hidden))
 # Only the methods that run: a group keeps its active methods and is dropped when only the
 # base and Fixed MultiQT are left.
 method_groups <- Filter(function(group) length(setdiff(group, c("original", "fixed"))) > 0L,
@@ -1962,6 +1967,7 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   phase_angle = "Angle + slow offset (bias probability, outside data)",
   phase_hidden = "Hidden-phase model (three phases, outside data)",
   phase_oracle = "Two-phase power scale (phase in hindsight)",
+  hidden_oracle = "Three phases (phase in hindsight)",
   angle_slow_only = "Power MultiQT (0.1x rate; slow only)",
   angle_rate_025 = "Power MultiQT (0.25x rate)", angle_rate_05 = "Power MultiQT (0.5x rate)",
   angle_rate_1 = "Power MultiQT (1x rate)",
@@ -2013,7 +2019,8 @@ group_palettes <- list("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Studentized full base" = "BluGrn", "Power scale" = "Peach",
   "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
   "Two-phase trackers" = "Dark Mint",
-  "Phase from outside data" = c(phase_angle = "#E69F00", phase_hidden = "#7815C4"))
+  "Phase from outside data" = c(phase_angle = "#E69F00", phase_hidden = "#7815C4",
+    hidden_oracle = "#C9A0F0"))
 home_group <- local({
   home <- character()
   for (group in names(method_groups)) for (method in method_groups[[group]])
@@ -2308,7 +2315,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
       "_weighted_common", "_restart_equal", "_restart_recent")))
     needed <- want(names_of) || (scale_name == "power" &&
       want("power_flip", "phase_power", "phase_oracle", outside_methods, angle_controls,
-        hidden_controls))
+        hidden_controls, hindsight_hidden))
     if (!needed) next
     scale_key <- paste(scale_name, params$power_p, params$spread_lambda, params$scale_guard)
     studentized <- memo(paste("scale", scale_key), normalized_scale(studentized_scale(case,
@@ -2387,7 +2394,7 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
   # probabilities, p_t or P_t, and the probability source); without phase inputs: NA forecasts
   # and diagnostics marked unavailable.
   diagnostics <- list()
-  if (want(outside_methods, angle_controls, hidden_controls)) {
+  if (want(outside_methods, angle_controls, hidden_controls, hindsight_hidden)) {
     power <- scaled$power
     outside <- function(P, weights, V, rate, diagnostics = FALSE, with_p = TRUE) {
       x <- phase_weighted_multiqt(case$base, case$feedback_observed, case$feedback_by_week,
@@ -2433,6 +2440,19 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     # Learned with the issued probabilities P_s of the learned row.
     if (want("hidden_issued_weights")) run_angle("hidden_issued_weights",
       hidden_with(ph$P, function(t, s) ph$P[s, ]))
+    # The true three phases (hidden_oracle, hindsight): rise up to and including the nearest
+    # peak of the latest counts (relative week <= 0), overshoot weeks 1-4 after it, tail from
+    # week 5; no nearest peak: thirds. Floored at .005 as phase_inputs() floors P and W; the
+    # same weights at issuance and learning (the true phase of a week does not change).
+    if (want(hindsight_hidden)) {
+      rw <- case$relative_week
+      truth <- cbind(rw <= 0, rw > 0 & rw <= 4, rw > 4) * 1
+      truth[!is.finite(rw), ] <- 1 / 3
+      truth <- pmin(pmax(truth, .005), 1)
+      r <- hidden_with(truth, function(t, s) truth[s, ])()
+      predictions$hidden_oracle <- r$q
+      diagnostics$hidden_oracle <- r$diagnostics
+    }
     for (method in intersect(names(params$angle_control_rates), methods))
       run_angle(method, local({ r <- params$angle_control_rates[[method]]; function()
         outside(matrix(1, n_rows, 1), function(t, s) 1, one, r, TRUE) }))

@@ -83,10 +83,10 @@ loss_label <- if (settings$transform == "log1p") "loss of log(counts + 1)" else
 n_tree_methods <- 10L
 selection_phase <- "after"
 tree_candidates <- setdiff(unique(unlist(method_groups)), c("original", "oracle_target",
-  "phase_oracle"))
+  "phase_oracle", "hidden_oracle"))
 # Hindsight benchmarks drawn as references, hatched and never ranked: below the ten best of
 # the tree and in their group of the bar plot.
-reference_methods <- "phase_oracle"
+reference_methods <- c("phase_oracle", "hidden_oracle")
 # Colours as in 04's trade-off plots (tradeoff_colours in R/03), so a method keeps its
 # colour on every page. A variant shares its method's shade: pale with an outline in the
 # colour = common weights for all levels; black outline = + outer MultiQT. marker: the
@@ -114,7 +114,7 @@ hatch_bars <- function(x0, y, x1, hatch, marker, half = .38) {
 # The key's note on the colours and on the variants drawn, one line each, so it fits.
 key_note <- function(methods) c("Colours as in the trade-off plots of R/04.",
   if (any(methods %in% reference_methods))
-    "Hatched: the phase in hindsight, a reference, not ranked.",
+    "Hatched: the phase in hindsight, references, not ranked.",
   if (any(grepl("_common", methods))) "Pale: common weights for all levels.",
   if (any(grepl("_outer$", methods))) "Black outline: + outer MultiQT.")
 window_titles <- c(overall = "Overall",
@@ -602,7 +602,8 @@ draw_bar_page <- function(disease, location, data = bar_scores, levels = feedbac
       if (any(outlined)) "(black outline: corrected labels)." else "(darker to lighter)."),
     paste("Every tracker learns at the adaptive rate (no tuning).",
       if (any(bar_methods %in% reference_methods))
-        "Hatched: the phase in hindsight (phase_oracle), a reference, not a method."),
+        paste0("Hatched: the phase in hindsight (", paste(intersect(reference_methods,
+          bar_methods), collapse = ", "), "), references, not methods.")),
     unname(bar_control_notes[bar_note_parents])),
     side = 1, outer = TRUE, line = 1.2 * seq_len(4L + length(bar_note_parents)), cex = .8)
 }

@@ -2040,7 +2040,8 @@ Sign-flip experts & \texttt{power\_flip}, \texttt{width\_flip}; polar MultiQT
  \texttt{polar} & \ref{sec:two-phase-methods}\\
 Two-phase trackers & \texttt{phase\_power}; \texttt{phase\_oracle} (phase in hindsight)
  & \ref{sec:two-phase-methods}\\
-Phase from outside data & \texttt{phase\_angle}, \texttt{phase\_hidden} & below\\
+Phase from outside data & \texttt{phase\_angle}, \texttt{phase\_hidden};
+ \texttt{hidden\_oracle} (phase in hindsight) & below\\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -2142,7 +2143,13 @@ when each report arrives; the choice for flu.
 \end{itemize}
 Both run for both diseases, so that each is compared on the other disease
 as well. Outside the pooled locations they have no inputs and no
-forecasts.
+forecasts. The benchmark \texttt{hidden\_oracle} is \texttt{phase\_hidden}
+with the true phase of each target week in place of $P_t^k$ and
+$W_{s,t}^k$: rise up to and including the nearest peak of the latest
+counts, overshoot in weeks 1 to 4 after it, tail from week 5 (each
+component floored at $0.005$, as the inputs are). It needs no phase inputs
+and runs for every location; like \texttt{phase\_oracle}, it is drawn
+hatched in the tree and the bar plot and never ranked.
 
 \subsubsection{Single trackers}
 \label{sec:single-trackers}
