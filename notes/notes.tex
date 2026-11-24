@@ -876,130 +876,248 @@ phase whose weights stay near zero is corrected slowly, so the bound can be
 large for it.
 
 
-\paragraph{Phase probabilities from outside the feedback.}
+\paragraph{Bias and phase probabilities.}
 \label{sec:phase-predictors}
-There are two prediction tasks here. \texttt{phase\_angle} asks whether
-the reported outcome will fall below the base median; \texttt{phase\_hidden}
-asks where the target week lies in the epidemic cycle.
+The two methods of this section need probabilities that the feedback alone
+cannot provide in time. \texttt{phase\_angle} needs $p_t$, the probability
+that the reported outcome of round $t$ will fall below the base median
+$b_t^{.5}$: it multiplies the learned correction by $1-2p_t$
+in~\eqref{eq:phase-angle}. \texttt{phase\_hidden} needs
+$P_t^k$, the probabilities that the target week lies in the rise, the
+overshoot or the tail of a wave ($k\in\{\mathrm{rise},\mathrm{over},
+\mathrm{tail}\}$), which weight the three corrections
+of~\eqref{eq:three-phase}. The two questions differ. The bias probability is
+about the error of a particular base: the same epidemic week can have
+$p_t$ near 1 for one base and near 0 for another. The phase
+probabilities are about the epidemic itself and do not depend on the base,
+except through the hospital reports each base's history makes available
+(Section~\ref{sec:data-preparation}).
 
-This separation addresses two observations. The error-based selectors turned too late,
-while the forecast-based predictors tested did not reliably predict the
-change of bias. For flu, even the two-phase oracle left a large loss just
-after peaks, and the bias became negative again in the tail: one decline
-state was mixing periods needing different corrections. The predictor
-choices and their comparisons are in
-Section~\ref{sec:results-phase-outside}. Extra signals can make the
-decision respond to information available now, although the labels used
-to train the predictors still arrive later.
+Both are computed by script~05 (\path{R/05_phase_probabilities.R}) at every
+issuance cutoff of the base, for the 10 pooled states, from what is known
+at that cutoff; the functions are in \path{R/03_functions.R}, section
+``PHASE AND BIAS PROBABILITIES'' (prefix \texttt{pp\_}). The same
+specifications and fitting rules apply to both bases, but every model is
+fitted separately for each disease and base, with that base's history.
+Separate fits per disease are needed because the two diseases behave
+differently: flu returns at a similar time of year, so its history supports
+a calendar prior for the turns, while COVID's waves come at varying times,
+so its timing is better described by how long a rise or tail has lasted and
+by the current growth. The selected specifications (23 November 2026) are:
 
-\paragraph{Exact covariates of the bias model.}
-The design below uses the variable names from script 05. For row $s$,
-write $h_s$ for its numeric horizon. For $j=1,2,3$, let $L_{s,j}$ be
-the $j$th most recent log-transformed report, $\log(1+y)$, after the
-age-specific revision adjustment. Let $E_{s,j}$ be the log of the
-$j$th most recent available NSSP visit share. The exact design
-vector (including its intercept) is
-\begin{align*}
- x_s=\big(&1,\ \mathtt{season}_s,\ \mathtt{g1}_s,\ \mathtt{curv}_s,
- \ \mathtt{base\_growth}_s,\ h_s,\\
- &h_s\mathtt{g1}_s,\ h_s\mathtt{curv}_s,
- \ \mathtt{ng1}_s,\ \mathtt{ncurv}_s,\ \mathtt{nratio}_s,\\
- &h_s\mathtt{ng1}_s,\ h_s\mathtt{ncurv}_s,
- \ \mathtt{hol\_break}_s,\ \mathtt{hol\_post}_s,\ \mathtt{hol\_thanks}_s,\\
- &\mathtt{hum\_level}_s,\ \mathtt{hum\_anom}_s,\ \mathtt{hum\_fc}_s,
- \ \mathtt{onset}_s,\ \mathtt{rising}_s\big)^\top.
-\end{align*}
-Thus there are \emph{20 slopes and one intercept}, with no state effects,
-no other interactions, and no spline terms. The definitions are:
-\begin{itemize}[leftmargin=*,itemsep=2pt]
-\item $\mathtt{g1}_s=L_{s,1}-L_{s,2}$ and
-$\mathtt{curv}_s=L_{s,1}-2L_{s,2}+L_{s,3}$.
-$\mathtt{base\_growth}_s$ is the horizon-3 base median minus the
-horizon-0 base median \emph{on the $\log(1+\cdot)$ scale}, for the same
-reference week.
-\item $\mathtt{ng1}_s=E_{s,1}-E_{s,2}$,
-$\mathtt{ncurv}_s=E_{s,1}-2E_{s,2}+E_{s,3}$, and
-$\mathtt{nratio}_s$ is the latest NSSP share divided by its maximum over
-the last 26 reports. All three are missing if fewer than 26 NSSP reports
-are available. Only NSSP versions with publication date plus six days
-no later than the cutoff are used.
-\item $\mathtt{season}_s=\operatorname{logit}(\operatorname{clip}_{[.02,.98]}(a_s))$,
-where $a_s$ is the share of historical weeks in the target calendar week
-($\pm1$) lying after their nearest peak. History is pooled over the 10
-states, uses reports known at the cutoff, and ends 26 weeks before it;
-$a_s=1/2$ with fewer than 10 eligible observations.
-\item $\mathtt{hol\_break}_s$ is the fraction of the seven target days
-in 22 December--3 January; $\mathtt{hol\_post}_s$ indicates a target
-week end 1--21 days after 3 January; $\mathtt{hol\_thanks}_s$ indicates
-a target week end 0--6 days after the fourth Thursday of November.
-\item $\mathtt{hum\_level}_s$ is mean specific humidity during the 14
-days preceding the cutoff; $\mathtt{hum\_anom}_s$ subtracts the
-2014--2023 climatological mean for those days;
-$\mathtt{hum\_fc}_s$ is mean humidity forecast for the next seven days
-minus $\mathtt{hum\_level}_s$, set to zero if a complete seven-day
-forecast is unavailable. State humidity averages three cities with
-population weights. Historical observations are ERA5 reanalysis;
-archived forecasts start in January 2024.
-\item Let $m_s$ be the minimum of the last 20 reported counts,
-$d_s$ its date, and $e_s$ the weeks from $d_s$ to the forecast target.
-Then $\mathtt{rising}_s=\ind\{\text{latest report}\ge1.5\max(m_s,1)\}$.
-For historical rise durations $D_1,\ldots,D_J$, constructed from peaks
-at least 26 weeks old,
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Role & Specification\\
+\midrule
+COVID bias $p_t$ & G0, label as of target-week end $+11$ days\\
+Flu bias $p_t$ & G0, label as of target-week end $+4$ days\\
+COVID phases $P_t^k$ & duration prior from European waves; observation
+model O2 (conditional-growth GAMs of hospital and NSSP growth); NSSP lead
+chosen per 13-week block among 0, 1 and 2 weeks\\
+Flu phases $P_t^k$ & duration-and-calendar hazard GAMs on hospital and
+NREVSS episodes; observation model O1 (phase-mean Gaussians of hospital
+and NSSP growth); NSSP lead 0\\
+\bottomrule
+\end{tabularx}
+\end{center}
+\refstepcounter{table}\label{tab:phase-specifications}
+\begin{center}\small Table \thetable: The bias and phase models used by
+\texttt{phase\_angle} and \texttt{phase\_hidden}.
+\end{center}
+
+\paragraph{Sources and what they are used for.}
+Every input is used as it was known at the cutoff of the row that uses it.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{3.3cm}p{3.8cm}X@{}}
+\toprule
+Source & Used for & Availability at cutoff $t$\\
+\midrule
+Prepared forecasts of the base (R/01: CMU submissions or
+\texttt{windowed\_seasonal}) & base medians, horizons, issuance cutoffs and
+target weeks & the forecast as issued\\
+NHSN report versions; for the longer history also the HHS versions before
+NHSN's first (19 November 2024) & hospital growth, bias labels, hospital
+episodes & versions dated $\le t$ (up to 30 October 2026); reviewed exclusions
+masked (Section~\ref{sec:data-preparation})\\
+NSSP versions (Delphi Epidata, state share of emergency-department visits
+with COVID or influenza) & phase observations (second channel) & issues
+with issue date $+6$ days $\le t$; issues from 14 April 2024 to 20 September
+2026 (weeks from October 2022)\\
+WHO/NREVSS clinical-laboratory files (Delphi's flu auxiliary data) & flu
+transition episodes only & a single snapshot (weeks October 2010 to 27 July
+2024; files extracted 13 November 2026); a week is used once it is 14 days
+old\\
+ECDC ERVISS hospital admissions (EU/EEA, all ages) & COVID rise and tail
+durations only & a single snapshot (weeks June 2022 to 8 November 2026,
+downloaded 17 November 2026; 15 countries); a country's series up to $t-182$
+days\\
+\bottomrule
+\end{tabularx}
+\end{center}
+\refstepcounter{table}\label{tab:phase-sources}
+\begin{center}\small Table \thetable: Sources of the bias and phase
+probabilities (\texttt{sources} and \texttt{coverage} in
+\path{phase_probabilities.rds} record each file's checksum, size and
+modification date and the weeks it covers).
+\end{center}
+
+NREVSS and ERVISS have no archive of earlier versions: their snapshots are
+truncated by event date (the week a value refers to), which assumes that
+values of old weeks were not revised much later. The ERVISS country cohort
+(series with at least 100 weeks and a median of at least 5 admissions) is
+chosen on the whole snapshot, so the set of countries is not itself known
+at early cutoffs. The replay is therefore not a fully reconstructed
+real-time archive for these two sources; the hospital and NSSP inputs are.
+
+\paragraph{Reports as known at a cutoff.}
+For a disease and state, the versions of the report of target week $w$ are
+pairs (version date, value). The report \emph{known at date} $d$ is the
+latest version dated $\le d$. A reviewed exclusion masks one exact
+version: its value is missing and stays in the archive, so it is never
+replaced by an older version. The weeks of incomplete reporting, 4 May to
+2 November 2024 (inclusive), are left out of the phase series (not of the
+bias labels).
+
+The newest reports are revised upward on average. Their \emph{revision
+shift} at cutoff $t$ is, for ages $a=0,1,2$ weeks,
 \[
- \mathtt{onset}_s=
- \begin{cases}
- \operatorname{logit}\!\left(\operatorname{clip}_{[.02,.98]}
- \left(\dfrac{\sum_{j=1}^{J}\ind\{D_j<e_s\}+.5}{J+1}\right)\right),
-   &\mathtt{rising}_s=1,\ J\ge5,\\
- 0,&\text{otherwise}.
- \end{cases}
+ \Delta_{t,a}=\operatorname{median}\bigl\{\log(1+y_w^{(t)})-
+ \log(1+y_w^{(w+\ell_t+7a)})\bigr\},
 \]
-\end{itemize}
-Each input is saved at the historical row's forecast cutoff; later
-training uses that saved input, not its subsequently revised value.
-The hidden model uses the different subsets and formulas below.
+where $y_w^{(d)}$ is the report of week $w$ known at date $d$, $\ell_t$ is the
+report age (days from the newest target week to $t$) of the first pooled  
+state at $t$, and the median runs over the weeks $w$ of the 10 pooled
+states with $t-427<w\le t-63$ days (9 to 61 weeks old) after the
+incomplete-reporting interval, with both values present. With fewer than 8
+such pairs, $\Delta_{t,a}=0$. The shift is added to $\log(1+\cdot)$ of the
+newest three reports ($a=0$ the newest), as in the corrected labels
+(Section~\ref{sec:corrected-labels}). The bias inputs take $\ell_t$ from all
+known reports; the phase series from the complete weeks.
 
-\paragraph{Bias probability: what is fitted.}
+\paragraph{The bias probability.}
 \label{sec:bias-probability-model}
-For a historical forecast row $s$, define its binary training label
+Let $\ell_d=11$ days for COVID and $\ell_d=4$ days for flu. For forecast row
+$s$, with target week ending $w_s$, the label is
 \[
- B_s=\ind\{\bar y_s^{(1)}<b_s^{.5}\},
+ B_s=\ind\bigl\{y_s^{[\ell_d]}<b_s^{.5}\bigr\},\qquad
+ y_s^{[\ell]}=\text{the report of week $w_s$ known at $w_s+\ell$ days},
 \]
-where $\bar y_s^{(1)}$ is the report one week after the first report.
-Thus $B_s=1$ means the reported outcome was below the base median. It is
-not the indicator of falling counts, a label for every quantile, or a
-label based on the latest finalized count. Let $x_s$ contain an intercept
-and the inputs saved at that row's forecast cutoff. The regression also
-includes the horizon and its interactions with the growth and curvature
-of the reports and NSSP visits, because a trend can have different
-implications at different horizons.
+missing when there is no report by then or the latest one is masked
+(an equal report gives $B_s=0$). $w_s+4$ days is the Wednesday on which the
+first report of the week appears; $w_s+11$ days is one week later, after the
+first revision. The first report is revised more (its label differs from
+the latest report's in 7--10\% of the 1--3-week rows, against 3--4.5\% one
+week later) and is biased towards ``base too high''; in return the label
+arrives a week earlier and the model learns from more recent weeks. The
+choice per disease is empirical (development evidence below), a reporting
+and learning choice, not a biological time scale. The mature label (the
+latest report) is used only for evaluation.
 
-At each cutoff $t$, let $\mathcal D_t$ be all complete historical rows of
-the same disease whose training label has arrived. The rows are pooled
-over the 10 states and the horizons. The code refits an unpenalized
-logistic regression,
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{1.8cm}p{2.3cm}X@{}}
+\toprule
+Symbol & Code name & Definition (row $s$, issuance cutoff $t_s$)\\
+\midrule
+$g_s$ & \texttt{g1} & newest weekly growth of $\log(1+\text{count})$ of the
+hospital reports known at $t_s$, the newest three shifted by
+$\Delta_{t_s,a}$; at least 4 known reports and the newest two exactly 7 days
+apart, else missing\\
+$\Delta b_s$ & \texttt{base\_growth} & $\log(1+b^{.5})$ of the horizon-3
+minus the horizon-0 base median of the same reference week (not divided by
+3)\\
+$h_s$ & \texttt{horizon} & forecast horizon in weeks\\
+$c_s$ & \texttt{year\_phase} & fraction of the target date's calendar year
+elapsed (days since 1 January over the days of that year, so leap years
+count 366)\\
+$H^{\mathrm{break}}_s$ & \texttt{hol\_break} & share of the target week's
+seven days in 22 December--3 January\\
+$H^{\mathrm{post}}_s$ & \texttt{hol\_post} & target week ends 1--21 days
+after 3 January\\
+$H^{\mathrm{thanks}}_s$ & \texttt{hol\_thanks} & target week ends 0--6 days
+after the fourth Thursday of November\\
+$j(s)$ & \texttt{state} & the row's state (10 levels)\\
+\bottomrule
+\end{tabularx}
+\end{center}
+\refstepcounter{table}\label{tab:bias-covariates}
+\begin{center}\small Table \thetable: Covariates of the bias GAM, computed
+once at the row's issuance cutoff (hospital inputs at the cutoffs of the
+horizon-0 rows) and never recomputed from later reports.
+\end{center}
+
+With $x_s=(\Delta b_s,h_s,H^{\mathrm{break}}_s,H^{\mathrm{post}}_s,
+H^{\mathrm{thanks}}_s)$, centred and scaled by the mean and standard
+deviation of the training rows (a column with standard deviation at most
+$10^{-10}$ is dropped and recorded), the model (G0) is
+\begin{equation}
+ \operatorname{logit}p_s=\beta_0+x_s^\top\beta+f_c(c_s)+f_g(g_s)+a_{j(s)},
+ \qquad B_s\sim\operatorname{Bernoulli}(p_s),
+ \label{eq:bias-gam}
+\end{equation}
+with $f_c$ a cyclic cubic regression spline on $[0,1]$ (6 knots, equal
+ends), $f_g$ a cubic regression spline (4 knots) and $a_j$ a state random
+intercept. The coefficients maximize the penalized log-likelihood
 \[
- \widehat\beta_t\in\argmin_\beta\sum_{s\in\mathcal D_t}
- \left\{\log\bigl(1+e^{x_s^\top\beta}\bigr)-B_sx_s^\top\beta\right\},
- \qquad
- p_t=\operatorname{clip}_{[.02,.98]}
- \left(\frac{1}{1+e^{-x_t^\top\widehat\beta_t}}\right).
+ \sum_{s\in\mathcal D_t}\bigl\{B_s\eta_s-\log(1+e^{\eta_s})\bigr\}
+ -\tfrac12\Bigl(\lambda_\beta\norm{\beta}^2+\lambda_c\int(f_c'')^2
+ +\lambda_g\int(f_g'')^2+\lambda_a\textstyle\sum_ja_j^2
+ +\lambda_c^0\norm{f_c^0}^2+\lambda_g^0\norm{f_g^0}^2\Bigr),
 \]
-Clipping restricts the fitted probability to $[.02,.98]$. Before there
-are 40 complete training rows with both labels, or when prediction inputs
-are missing, the probability stays at $1/2$. There is one fitted model per
-disease and base, with coefficients pooled over states and horizons;
-the current row's state-specific inputs and horizon determine its
-probability. Predictions are not averaged across states. This is complete
-pooling of the feature--bias relationship, without a state intercept;
-the correction trackers remain separate for each state and horizon.
-Complete pooling shares information but assumes that the same features
-have the same effects across these states. Its adequacy has not been
-established by a state-specific calibration or partial-pooling comparison. ``Online'' here
-means weekly refitting using labels available by then. It does not mean
-that the logistic coefficients are updated by the quantile tracker's
-coverage error. The fitted relationship is applied to current features,
-so a new signal can change $p_t$ before that target's report is available.
+$\eta_s$ the right side of~\eqref{eq:bias-gam}, where the last two terms
+penalize the smooths' null spaces (\texttt{select = TRUE}), so that a
+smooth can be shrunk to zero, and the intercept $\beta_0$ is unpenalized;
+REML estimates every $\lambda$ (mgcv). The formula in the code is
+\texttt{B \textasciitilde{} Xlin + s(year\_phase, bs = "cc", k = 6) +
+s(g1, bs = "cr", k = 4) + s(state, bs = "re")}, with \texttt{Xlin} the
+standardized $x_s$ under one identity penalty.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{3cm}X@{}}
+\toprule
+Item & Rule\\
+\midrule
+Estimated & $\beta_0,\beta,f_c,f_g,a_j$ and the penalties, one fit per
+disease, base and cutoff\\
+Training rows $\mathcal D_t$ & rows of that disease issued before $t$
+(issuance cutoff $<t$) with label date $w_s+\ell_d\le t$, an observed label
+and complete covariates; the 10 states and every horizon of the base pooled
+(CMU $-1$ to 3, longer history 0 to 3)\\
+Predicted rows & the rows issued at $t$; a state without training rows gets
+$a_j=0$\\
+Eligibility & at least 200 rows, 20 of each label, 8 target weeks, 3
+states, 12 distinct year fractions and 8 distinct values of $g$; at most
+$0.2\,|\mathcal D_t|$ coefficients; an inner iteration that converged, an
+outer REML iteration with ``full convergence'' or ``step failed'' (the latter
+recorded as a warning), finite coefficients and predictions\\
+Fallback & ineligible or failed fit, or a predicted row with a missing
+covariate: $(\sum B+1)/(n+2)$ over all $n$ labels known at $t$ (rows with
+incomplete covariates included), $1/2$ before any label\\
+Output & raw $p_s$ and operational $p_t=\min(\max(p_s,.02),.98)$; per cutoff
+the eligibility, counts, dropped columns, smoothing parameters, effective
+degrees of freedom, warnings and the reason of every fallback\\
+\bottomrule
+\end{tabularx}
+\end{center}
+\refstepcounter{table}\label{tab:bias-fitting}
+\begin{center}\small Table \thetable: Fitting the bias GAM
+(\texttt{pp\_bias\_rows()}, \texttt{pp\_bias\_fit\_at()} in R/03).
+\end{center}
+
+The bias GAM predicts the error relative to a particular base: the
+calendar term carries the base's seasonal pattern of over- and
+underforecasting, $g$ the momentum of the reports, $\Delta b$ how much the
+base itself projects, the holidays the reporting dips. Curvature (the
+change of $g$) and the NSSP growth were tested as further smooths and left
+out (Section~\ref{sec:results-phase-outside}): curvature changed no design
+for the better, and the NSSP smooth, although informative about the COVID
+sign on the rows where NSSP exists, costs more than it adds while its short
+history (versions from April 2024) leaves fewer training rows.
 
 \paragraph{From the bias probability to the angle and slow offset.}
 The angle is a representation of the predicted probability:
@@ -1012,203 +1130,259 @@ before the ordering projection. There is no separate gradient update of
 $\varphi_t$, unlike polar MultiQT. For example, $p_t=.8$ multiplies the
 learned $u_t^\alpha$ by $-.6$; $p_t=.5$ removes that contribution. The
 same probability controls all quantile levels, but $c^\alpha$ and
-$u^\alpha$ are learned separately at each level.
-
-When the report for row $s$ is learned at cutoff $t$, the hidden states
-receive the updates
+$u^\alpha$ are learned separately at each level. When the report for row
+$s$ is learned at cutoff $t$, the states receive
 \[
  u^\alpha\leftarrow u^\alpha+
  \eta_t(1-2p_s)(\alpha-\cov_s^\alpha),\qquad
  c^\alpha\leftarrow c^\alpha+
  .1\eta_t(\alpha-\cov_s^\alpha).
 \]
-Here $p_s$ is the probability saved when that forecast was issued, and
-$\cov_s^\alpha$ is coverage of the issued, projected forecast by the
-label being learned (the corresponding covered share for corrected
-labels). The hidden states are updated; they are not themselves
-projected. The scale in the studentized loss cancels as in
-\eqref{eq:scale-cancellation}.
+Here $p_s$ is the probability issued with row $s$ (never a later
+re-estimate), and $\cov_s^\alpha$ the coverage of the issued, projected
+forecast by the label being learned (the covered share for corrected
+labels). The scale in the studentized loss cancels as
+in~\eqref{eq:scale-cancellation}. The slow offset keeps a correction of one
+sign where $p_t$ is near $1/2$ and adds an unweighted coverage-error
+accumulator to the signed one; Proposition~\ref{prop:phase-weighted} is a
+statement about these accumulators, not a claim that $p_t$ is calibrated.
 
-The slow offset has a different purpose from phase prediction. A
-persistent bias need not reverse with the directional signal. In
-particular, when $p_t$ is near $1/2$, the angle contribution nearly
-vanishes while a systematic bias can remain. The slow offset can retain
-and learn such a correction in every phase, at a tenth of the other
-state's rate. It is not a separately detected ``non-peak'' phase. It also
-adds an unweighted coverage-error accumulator to the signed one; the
-conditional telescoping statement is
-Proposition~\ref{prop:phase-weighted}, not a claim that the logistic
-probabilities are calibrated.
-
-\paragraph{Hidden phases: the states and the reason for memory.}
+\paragraph{Hidden phases: states and transitions.}
 \label{sec:hidden-phase-model}
-\texttt{phase\_hidden} returns three probabilities
-$(P_t^{\mathrm{rise}},P_t^{\mathrm{over}},P_t^{\mathrm{tail}})$ for the
-target week. The labels are defined relative to a peak: rise through the
-peak, overshoot in weeks 1 to 4, and tail from week 5 until the next rise.
-These are timing categories, not a requirement that every rise week has
-positive growth or every overshoot week has an overforecast.
-
-A single week of falling counts can belong to either overshoot or tail.
-The previous weeks and the time elapsed since a likely peak help separate
-them. A hidden Markov model combines that memory with noisy observations.
-For the following specification, $w$ indexes calendar weeks and $Z_w$ is
-the internal hidden state. For flu its possible values are
-\[
- \mathrm{rise},\ \mathrm{over}_1,\ \mathrm{over}_2,
- \ \mathrm{over}_3,\ \mathrm{over}_4,\ \mathrm{tail}.
-\]
-Rise can remain rise or enter $\mathrm{over}_1$; the four overshoot states
-advance one per week into tail; tail can remain tail or enter the next
-rise. Their four probabilities are summed to obtain the reported
-overshoot probability. \emph{Four weeks is a fixed modelling choice}. The uncertainty is about when the phase starts.
-
-\paragraph{Transition probabilities: the historical starting expectation.}
-A transition hazard is the conditional probability of leaving a phase
-this week, given that it has lasted until now. For flu, the hazard of
-entering overshoot from the rise is a logistic regression fitted on WHO/NREVSS laboratory
-test positivity in the pooled states (nine have data), in seasons
-2014/15--2019/20, 2022/23 and 2023/24. Each historical week before a peak
-is a row at risk; the peak week is the event. The predictors are a natural
-cubic spline in season week (four degrees of freedom), the three holiday
-features, and humidity level and anomaly. Explicitly, for a historical week $w$ at risk,
+\texttt{phase\_hidden} uses $P_t=(P_t^{\mathrm{rise}},P_t^{\mathrm{over}},
+P_t^{\mathrm{tail}})$ for the target week: rise through a peak, overshoot
+in weeks 1 to 4 after it, tail from week 5 until the next rise. These are
+timing categories, not statements that every rise week grows. A single
+falling week can belong to the overshoot or the tail; the weeks before it
+and the time since a likely peak separate them, which a hidden
+semi-Markov chain combines with noisy observations. Its internal state
+$Z_w$ in week $w$ is one of 84: rise of age $d=1,\dots,40$, overshoot
+week $1,\dots,4$, tail of age $d=1,\dots,40$. With exit hazards
+$h_{\mathrm{rise}}(d,w)$ and $h_{\mathrm{tail}}(d,w)$ of week $w$, one step
+from $w$ to $w+1$ is
 \begin{align*}
- E_w&\sim\operatorname{Bernoulli}(h_w),\\
- \operatorname{logit}(h_w)&=\gamma_0+
- \sum_{r=1}^4\gamma_r\mathcal B_r(\mathrm{sw}_w)
- +\gamma_{\rm break}H_{w,\rm break}+\gamma_{\rm post}H_{w,\rm post}\\
- &\quad+\gamma_{\rm thanks}H_{w,\rm thanks}
- +\gamma_{\rm level}M_w+\gamma_{\rm anom}A_w.
+ \text{rise }d&\to\text{rise }\min(d+1,40)\ \text{w.p. }1-h_{\mathrm{rise}}(d,w),
+ &\text{rise }d&\to\text{over }1\ \text{w.p. }h_{\mathrm{rise}}(d,w),\\
+ \text{over }i&\to\text{over }i+1\ (i<4),&\text{over }4&\to\text{tail }1,\\
+ \text{tail }d&\to\text{tail }\min(d+1,40)\ \text{w.p. }1-h_{\mathrm{tail}}(d,w),
+ &\text{tail }d&\to\text{rise }1\ \text{w.p. }h_{\mathrm{tail}}(d,w),
 \end{align*}
-Here $E_w=1$ at the positivity peak, $\mathrm{sw}_w$ is the number of
-weeks since 1 August, and $\mathcal B_1,\ldots,\mathcal B_4$ are the
-four columns of \texttt{splines::ns(sw, df=4)}. $M_w$ is mean humidity
-over the 14 days ending in that week and $A_w$ its climatological anomaly.
-The holiday definitions are as above, evaluated for that week. This is
-an unpenalized logistic fit with ten coefficients, using weeks with
-$\mathrm{sw}_w\ge8$. It has no report-growth, NSSP, horizon or state
-coefficient. At prediction, the fitted hazard is clipped to $[.002,.95]$;
-before season week 8 it is $.002$. The timing is shifted by the
-median lag of hospital-admission peaks behind positivity peaks estimated
-in 2022/23 and 2023/24 (one week in the saved run). The tail-to-rise hazard is a separate empirical
-calendar-week hazard learned from historical midpoints between peaks;
-the model does not know the future peak's actual midpoint. More precisely,
-let $e_j$ count historical midpoints in season week $j$, and $r_j$ count
-historical weeks at risk from peak plus five weeks through the midpoint.
-With $J_w$ the season weeks within one week of $w$, wrapping over 53 weeks,
-\[
- h_{\rm mid}(w)=\begin{cases}
- .5,&r_w=0,\\
- \operatorname{clip}_{[.005,.95]}
- \left(\dfrac{\sum_{j\in J_w}e_j}{\max(\sum_{j\in J_w}r_j,1)}\right),
- &r_w>0.
- \end{cases}
-\]
-For future weeks, humidity uses the weather forecast for a week, then
-climatology.
+so an exit in week $w$ changes the phase in week $w+1$, a phase that lasts
+beyond 40 weeks stays at age 40 and can still exit, and the overshoot
+advances deterministically. The reported probabilities sum the internal
+states of each coarse phase.
 
-For COVID, the prior is based on durations instead of a fixed winter
-calendar: historical EU/EEA hospitalization waves from ECDC ERVISS provide
-the lengths of rises and tails, using waves whose peaks are at least 26
-weeks before the cutoff. The chance of transition depends on elapsed
-weeks in the current rise or tail. Internally the model therefore keeps
-rise and tail states for durations 1 to 40, plus the four overshoot weeks;
-the duration counter stays at 40 if the phase continues. For either
-rise or tail, let $e_d$ count historical durations equal to $d$ and
-$r_d=\sum_{j=d}^{40}e_j$ count those still at risk. Durations are first
-clipped to $[1,40]$. With $J_d=\{\max(1,d-1),\ldots,\min(40,d+1)\}$,
+\emph{Hospital series.} At cutoff $t$, for each pooled state, the reports
+known at $t$ without masked versions and without the weeks of incomplete
+reporting, $x_w=\log(1+y_w)$ with the newest three shifted by the revision
+shift, split into segments of consecutive weeks. The growth
+$G^H_w=x_w-x_{w-7}$ and the lag growth $G^H_{w-7}$ exist only within a
+segment.
+
+\emph{Episodes.} Peaks are found within each segment by R/01's peak rule
+(\texttt{find\_peaks()}: local maxima of the 3-week centred mean within
+$\pm8$ weeks whose prominence is at least $.3$ of their height and $.1$ of the
+segment's maximum) and kept if at least 56 days old at $t$. Two adjacent
+kept peaks $a<b$ of one segment, with $b\le t-84$ days, define the midpoint
+$m=a+7\lfloor(b-a)/14\rfloor$; if $m\ge a+35$ days, the pair is an
+admitted, completed episode: overshoot weeks $a+7,\dots,a+28$; tail weeks
+$a+35,\dots,m$ (exit at $m$); rise weeks $m+7,\dots,b$ (exit at $b$). Pairs
+across a gap, with a younger second peak or too close are logged and not
+used; the unfinished cycle after the last peak never supplies labels or
+risk rows. Each episode week is a \emph{risk row} with its age $d$, the
+capped age $\min(d,40)$, the year fraction $c(w)$ of the week and the event
+indicator ($1$ only in the last week).
+
+\emph{Flu transitions.} For $k\in\{\mathrm{rise},\mathrm{tail}\}$,
+\[
+ \operatorname{logit}h_k(d,w)=\gamma_{0k}+f_{d,k}(\min(d,40))+f_{c,k}(c(w)),
+\]
+a binomial GAM (\texttt{event \textasciitilde{} s(age\_cap, bs = "cr", k = 4)
++ s(year\_phase, bs = "cc", k = 6)}, REML, \texttt{select = TRUE}, cyclic
+on $[0,1]$), fitted at every cutoff on the risk rows of the hospital
+episodes of the 10 states pooled with those of NREVSS: the laboratory test
+positivity (positives over specimens; New York City added to New York by
+counts; MMWR weeks ending on Saturday) of the pooled states, each week used
+once it is 14 days old, with the same episode rules at its own dates.
+NREVSS only enlarges the history of the turns (its episodes from 2010 on);
+the observations remain those of the hospital reports. The calendar smooth
+is a \emph{soft} seasonal prior: flu's historical timing makes a turn more
+likely at some times of the year without fixing a peak window. A hazard GAM
+needs 20 events, 20 non-events, 3 source series, a 730-day span, 4 capped
+ages, 12 year fractions, a full-rank design and a converged fit. A source
+series is one state's hospital series or one state's NREVSS series, so
+the two of one state count as two: they are not independent states. If the
+GAM is not eligible or fails but both outcomes occur, the hazard is the
+constant $(E+1)/(N+2)$ ($E$ exits, $N$ risk rows); otherwise the hazard is
+unavailable and the week's probabilities are $(\frac13,\frac13,\frac13)$.
+Hazards are clipped to $[10^{-6},1-10^{-6}]$.
+
+\emph{COVID transitions.} Hazards by duration alone (no calendar term),
+from the waves of the European countries (ERVISS): each country's series
+is truncated at $t-182$ days \emph{before} its peaks are found
+(\texttt{find\_peaks()} on the whole truncated series); between adjacent
+peaks $a<b$ with midpoint $m=\lfloor(a+b)/2\rfloor$ (days), the rise lasts
+$\mathrm{round}((b-m)/7)$ weeks and the tail $\mathrm{round}((m-a)/7)-4$.
+With $e_d$ the number of durations equal to $d$ (clipped to $[1,40]$),
+$r_d=\sum_{j\ge d}e_j$ and $J_d=\{\max(1,d-1),\dots,\min(40,d+1)\}$,
 \[
  h(d)=\begin{cases}
  .3,&\sum_{j\in J_d}r_j<3,\\
- \operatorname{clip}_{[.01,.6]}
-   \left(\dfrac{\sum_{j\in J_d}e_j}{\sum_{j\in J_d}r_j}\right),
-   &\text{otherwise}.
+ \min\bigl(\max\bigl(\sum_{j\in J_d}e_j/\sum_{j\in J_d}r_j,\ .01\bigr),\ .6\bigr),
+ &\text{otherwise},
  \end{cases}
 \]
-There are no regression covariates in this COVID duration hazard.
-These extra states are summed into the same three output probabilities. The
-European data supply historical duration information, not a signal from
-the current European wave predicting the current US peak.
+separately for rises and tails. COVID's waves come at varying times of the
+year, so the prior describes how long rises and tails last rather than
+when they happen; the current growth (below) decides the rest. The
+European waves supply durations, not a signal of the current US wave.
 
-\paragraph{Observation model: how reports change the phase probabilities.}
-Let $G_{w,j}$ be weekly growth for channel $j$: the difference of
-$\log(1+\text{count})$ for hospital reports, or of the log share for NSSP
-visits. The latest three hospital reports are adjusted for their typical
-revision before growth is computed. For coarse phase $k$, the model is
-\[
- G_{w,j}\mid\{\text{phase }k\}\ \sim\
- N\!\left(\mu_{j,k}+\delta_{j,\mathrm{break}}H_{w,\mathrm{break}}
-       +\delta_{j,\mathrm{post}}H_{w,\mathrm{post}},\ \tau_{j,k}^2\right),
-\]
-where $H_{w,\mathrm{break}}$ and $H_{w,\mathrm{post}}$ are the winter-break
-and post-break features. The means and variances differ by phase; each
-holiday shift is shared across phases within a channel. Each of the two
-mean regressions therefore has five coefficients (three phase means and
-two holiday shifts), plus three phase-specific residual standard
-deviations; there is no horizon, humidity, state effect or extra global
-intercept in this observation model. They are fitted
-at each cutoff on older weeks pooled over the 10 states, labelled from
-peaks that can already be identified: the peaks are at least eight weeks
-old and the training weeks at least twelve weeks old. A channel needs
-at least 20 labelled observations in every phase; its fitted standard
-deviations are floored at $.05$ in growth units.
-
-The likelihood of a week's observations is the product of the two
-channel densities, an assumption of conditional independence given the
-phase and holiday features. A missing observation contributes no
-evidence. Falling growth can increase the probability of both overshoot
-and tail; the transition history helps decide between them. This is a
-model of growth conditional on phase, whereas the logistic bias model
-directly predicts whether the base median exceeds the reported outcome.
-
-\paragraph{Filtering, forecasting, and revising past phase assignments.}
-At a fixed cutoff $t$, let $\pi_{w\mid t}(z)$ be the forward probability
-of internal state $z$ after processing observations through week $w$,
-using the data versions and parameters available at that cutoff. Let
-$T_{w\mid t}(z',z)$ be the transition probability into week $w$ and
-$L_{w\mid t}(z)$ its observation likelihood. The forward update is
+\paragraph{Hidden phases: observations.}
+Two channels inform week $w$: the hospital growth $G^H_w$ and the NSSP
+growth $G^N_{w-L}=\log v_{w-L}-\log v_{w-L-7}$ of the visit share $v$ of
+week $w-L$ (lead $L$ weeks, consecutive weeks; versions with issue
+$+6$ days $\le t$). The phase label always refers to the hospital week $w$;
+NSSP's holiday covariates refer to its own week $w-L$. For channel
+$j\in\{H,N\}$ and coarse phase $k$, the mean of the channel's growth is
 \begin{align*}
- \pi^-_{w\mid t}(z)&=\sum_{z'}\pi_{w-1\mid t}(z')T_{w\mid t}(z',z),\\
- \pi_{w\mid t}(z)&=\frac{\pi^-_{w\mid t}(z)L_{w\mid t}(z)}
- {\sum_{z'}\pi^-_{w\mid t}(z')L_{w\mid t}(z')}.
+ \text{O1 (flu, }L=0\text{):}\quad
+ \mu_{j,k}(w)&=\mu_{j,k}+\delta_{j}^{\mathrm{break}}H^{\mathrm{break}}
+ +\delta_{j}^{\mathrm{post}}H^{\mathrm{post}},\\
+ \text{O2 (COVID):}\quad
+ \mu_{j,k}(w)&=\mu_{j,k}+f_j(G^j_{\text{previous week}})
+ +\delta_{j}^{\mathrm{break}}H^{\mathrm{break}}
+ +\delta_{j}^{\mathrm{post}}H^{\mathrm{post}},
 \end{align*}
-First advance last week's probabilities according to the transition
-model, then multiply by how compatible this week's observations are with
-each state, and normalize. Beyond the latest observed week, propagate
-with the transition probabilities alone. Summing the internal states
-for the forecast target gives $P_t^k$; these probabilities, rather than a
-hard phase selection, mix the three correction states.
-
-At a later cutoff, observations can also clarify the phase of an earlier
-week. A backward pass through the observations available by that later
-cutoff produces these \emph{smoothed} probabilities. Write $W_{s,t}^k$
-for the probability assigned to the target of row $s$ when its report is
-learned at cutoff $t$. The correction update is
+O1 is fitted by least squares, O2 as a Gaussian GAM (REML,
+\texttt{select = TRUE}); in the code
+\begin{center}\small
+\texttt{growth \textasciitilde{} 0 + phase + hol\_break + hol\_post}\quad(O1),\\
+\texttt{growth \textasciitilde{} 0 + phase + s(lag\_growth, bs = "cr", k = 4) +
+hol\_break + hol\_post}\quad(O2):
+\end{center}
+the phase intercepts differ, the growth smooth and the holiday shifts are
+shared by the phases of a channel. O2 describes deceleration through the current growth relative to
+the previous one; no separate curvature likelihood is added, which would
+count the same observations twice. Given the phase,
 \[
- u^{k,\alpha}\leftarrow u^{k,\alpha}
-       +\eta_t W_{s,t}^k(\alpha-\cov_s^\alpha),
+ \begin{pmatrix}G^H_w\\G^N_{w-L}\end{pmatrix}\Big|\,Z_w\in k\ \sim\
+ N\!\left(\begin{pmatrix}\mu_{H,k}(w)\\\mu_{N,k}(w)\end{pmatrix},
+ \begin{pmatrix}\tau_{H,k}^2&\rho\tau_{H,k}\tau_{N,k}\\
+ \rho\tau_{H,k}\tau_{N,k}&\tau_{N,k}^2\end{pmatrix}\right),
 \]
-while issuance used the probabilities $P_s^k$ available at the original
-cutoff. Thus a report can teach the correction for the phase to which the
-week now seems to belong. The old issued forecast is not changed, and
-the backward pass uses only observations available at the learning
-cutoff. This extra use of revised assignments distinguishes the
-implemented hidden model from simply replacing the oracle's two hard
-labels by three soft ones.
+with phase-specific residual standard deviations $\tau_{j,k}\ge.05$ and one
+correlation $\rho$: the correlation of the paired standardized residuals
+times $n/(n+50)$ ($n$ pairs), capped at $|\rho|\le.9$, and $0$ with fewer
+than 3 pairs. One observed channel contributes its marginal density, none
+contributes likelihood 1 (the transition alone). A channel model needs 20
+labelled weeks in each phase; an O2 smooth also 8 distinct lag growths. A
+week without a lag growth, or a channel whose GAM cannot be fitted, uses the
+channel's O1 mean; a channel without a model is unobserved; without a
+hospital model the week's probabilities are $(\frac13,\frac13,\frac13)$.
+The models are fitted at every cutoff on the labelled weeks of the admitted
+hospital episodes of the 10 states (pooled).
 
-\paragraph{What is assumed and what the results establish.}
-The phase timing, the fixed four-week overshoot, the transition models,
-and the Gaussian observation distributions are modelling choices. Their
-probabilities are estimates, not known phase memberships. The current
-replay uses report and NSSP versions, but historical humidity is ERA5
-reanalysis and the European duration prior uses an ECDC snapshot rather
-than a complete archive of versions. The inputs were explored on the
-evaluation periods, so the comparisons do not establish that every
-ingredient is needed on new seasons. Quantile coverage of a corrected
-forecast, accuracy of a phase prediction, and calibration of a predicted
-probability are different properties. Proposition~\ref{prop:phase-weighted}
-is about coverage errors weighted by the weights actually used, under
-its stated assumptions; it does not certify either probability model.
+Hospital weeks are known up to 4 days before a Wednesday cutoff, NSSP weeks
+up to 11 days before; with lead $L$, NSSP therefore informs the hospital
+weeks after the newest report up to the newest NSSP week $+L$ (at most 6),
+through its marginal density. Beyond all observations the chain propagates
+with the transitions alone; no future NSSP value enters.
+
+\paragraph{COVID: choosing the lead.}
+The COVID chain is computed at every cutoff with $L=0$, 1 and 2. Blocks of 13
+weeks of cutoffs start at the first cutoff of the base. For each cutoff
+and lead, the \emph{predictive score} of the next hospital week $w'$ (the
+week after the newest report) is
+\[
+ \log\sum_k\pi_k\,\phi\bigl(G^H_{w'};\,\mu_k,\sigma_k\bigr),
+\]
+with $\pi_k$ the phase probabilities of $w'$ given everything known at the
+cutoff (including NSSP evidence of $w'$ where the lead reaches it) and
+$\mu_k,\sigma_k$ the moments of the hospital growth given phase $k$ and,
+when observed, the NSSP growth of $w'$ (the conditional Gaussian); $G^H_{w'}$
+is the revision-shifted growth of $w'$ when it first becomes the newest
+report. A score counts for block $j$ only if that report arrived before the
+block starts. The lead of block $j$ maximizes the summed scores (ties: the
+smallest lead; lead 0 while a lead has no score) and is held for the whole
+block, for every probability of the grid, including the revised assignments
+of earlier weeks. The lead is thus chosen from data available in real
+time, not from the downstream results. Flu uses $L=0$ without selection.
+
+\paragraph{Filtering, smoothing and the probabilities used.}
+At a fixed cutoff $t$, each segment starts with probability $\frac13$ per
+coarse phase, spread uniformly over its internal states (a gap resets
+the chain). With $\pi_{w\mid t}$ the forward probabilities over the
+internal states, $T_w$ the transition matrix out of week $w$ and $L_w$ the
+week's likelihood,
+\begin{align*}
+ \pi^-_{w+1\mid t}(z)&=\sum_{z'}\pi_{w\mid t}(z')T_w(z',z),\\
+ \pi_{w+1\mid t}(z)&=\frac{\pi^-_{w+1\mid t}(z)L_{w+1}(z)}
+ {\sum_{z'}\pi^-_{w+1\mid t}(z')L_{w+1}(z')}.
+\end{align*}
+A backward pass within each segment gives the smoothed probabilities of
+every observed week; after the last observed week the forward
+probabilities are propagated with the transitions alone. The output at
+cutoff $t$ holds, per state, the smoothed probabilities of the weeks up to
+80 weeks before $t$ and those of the 6 weeks after the newest hospital
+report. \texttt{phase\_hidden} issues row $t$ with $P_t^k$, the
+probability of its target week at its own cutoff, and learns the report of
+row $s$ at cutoff $t$ with $W_{s,t}^k$, the probability of row $s$'s target
+week at the learning cutoff:
+\[
+ q_t^\alpha=\Pi_\K\Bigl(b_t^\alpha+\sigma_t\sum_kP_t^ku_t^{k,\alpha}\Bigr),
+ \qquad
+ u^{k,\alpha}\leftarrow u^{k,\alpha}+\eta_tW_{s,t}^k(\alpha-\cov_s^\alpha).
+\]
+The issued forecast never changes; a report can still teach the correction
+of the phase its week now seems to belong to, and the backward pass uses
+only observations available at the learning cutoff. The raw probabilities
+sum to one; the tracker's input (\texttt{phase\_inputs()} in R/03) floors each
+component at $.005$ (and gives $\frac13$ to a week missing from the grid)
+without renormalizing, so the operational weights can sum to slightly more
+than one.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{@{}p{2.8cm}X@{}}
+\toprule
+Item & Rule\\
+\midrule
+Estimated at each cutoff & flu: two hazard GAMs, O1 means, variances and
+$\rho$; COVID: duration hazards, O2 GAMs, variances and $\rho$ for each lead\\
+Rows & the labelled weeks and risk rows of completed, admitted episodes of
+the 10 states' hospital series known at the cutoff (pooled); for the flu
+hazards also the NREVSS episodes; for the COVID hazards the European waves\\
+Not used & weeks of incomplete reporting, masked versions, unfinished cycles,
+episodes across gaps; any value after the cutoff\\
+Fallbacks & constant or unavailable hazards; the O1 mean for a missing lag;
+marginal or no likelihood for missing channels; $(\frac13,\frac13,\frac13)$
+without a hospital model or transitions\\
+Output & per disease, state and cutoff the probabilities of the grid; the
+records of every fit (counts, eligibility, edf, smoothing parameters,
+warnings, $\rho$), the predictive scores and the lead of each block\\
+\bottomrule
+\end{tabularx}
+\end{center}
+\refstepcounter{table}\label{tab:phase-fitting}
+\begin{center}\small Table \thetable: Fitting the phase model
+(\texttt{pp\_hidden\_at()}, \texttt{pp\_select\_leads()} in R/03).
+\end{center}
+
+\paragraph{What is assumed.}
+The phase definition (with its fixed four-week overshoot), the episode
+rules, the transition families and the Gaussian observations are modelling
+choices; the probabilities are estimates, not known phase memberships. A
+lower quantile loss of a tracker that uses them does not show that they
+classify the phases more accurately, and no fixed lead or peak window is
+claimed: the lead is chosen anew per block, and the flu calendar term is a
+smooth prior. Quantile coverage of a corrected forecast, accuracy of a phase
+prediction and calibration of a probability are different properties.
+Neither model adds a calibration guarantee:
+Proposition~\ref{prop:phase-weighted} concerns the coverage errors weighted by
+the weights actually used, whatever their quality, under its own
+assumptions. The specifications were selected on the evaluation periods
+(Section~\ref{sec:results-phase-outside}), so those comparisons are
+development evidence, not tests on new seasons.
 
 
 \subsection{Revised reports as labels: corrected labels}
@@ -1436,17 +1610,16 @@ Increasing, invertible scores preserve the quantile coverage event;
 changing the target to PIT or highest-density-region calibration would
 require a separate formulation.
 
-\paragraph{Open question: the weeks after the peak.} With the phase from
-outside data (NSSP visits, humidity, since low absolute humidity marks the
-onset of the flu season~\cite{shaman2010}, the winter holidays, which lower
-flu transmission and delay the peak~\cite{ewing2017}, and for COVID the
-waves of other countries), \texttt{phase\_angle} and \texttt{phase\_hidden}
-beat the base in every design, but almost only up to the peaks; after the
-peaks both still lose, and for flu so does the phase in hindsight
-(Section~\ref{sec:results-phase-outside}). The signals see the turn 2 to 3
-weeks after the peak, too late for the four-week flu overshoot. What is
-missing is a signal that leads the hospital counts; wastewater (COVID) is
-still unused, for lack of versioned data.
+\paragraph{Open question: the weeks after the peak.} With the bias and
+phase probabilities of Section~\ref{sec:phase-predictors} (hospital reports
+and NSSP visits; for flu the turns of earlier seasons in NREVSS, for COVID
+the waves of other countries), \texttt{phase\_angle} and \texttt{phase\_hidden}
+beat the base in every design on the longer history, but on the CMU base
+almost only up to the peaks; after the peaks they still lose there, while
+the true three phases gain (Section~\ref{sec:results-phase-outside}). The
+probabilities recognize the turn too late for the four-week flu overshoot.
+What is missing is a signal that leads the hospital counts by more than
+NSSP does; wastewater (COVID) is still unused, for lack of versioned data.
 
 \paragraph{Idea: scores with a seasonal centre.} No positive scale can
 remove the drift of the scores, since the $\alpha$-quantile of the residual
@@ -2040,7 +2213,7 @@ Sign-flip experts & \texttt{power\_flip}, \texttt{width\_flip}; polar MultiQT
  \texttt{polar} & \ref{sec:two-phase-methods}\\
 Two-phase trackers & \texttt{phase\_power}; \texttt{phase\_oracle} (phase in hindsight)
  & \ref{sec:two-phase-methods}\\
-Phase from outside data & \texttt{phase\_angle}, \texttt{phase\_hidden};
+Bias and phase probabilities & \texttt{phase\_angle}, \texttt{phase\_hidden};
  \texttt{hidden\_oracle} (phase in hindsight) & below\\
 \bottomrule
 \end{tabularx}
@@ -2124,22 +2297,21 @@ Methods & What they do & Why paused\\
 (\texttt{paused\_methods} in R/03); their results are not reported below.
 \end{center}
 
-\paragraph{Phase from outside data: \texttt{phase\_angle} and
+\paragraph{Bias and phase probabilities: \texttt{phase\_angle} and
 \texttt{phase\_hidden}.} Script 05 (\path{R/05_phase_probabilities.R}) computes,
-for the base and the pooled locations, the phase inputs known at each
-cutoff (Section~\ref{sec:phase-predictors}, with detailed specifications
-of the bias and hidden-phase predictors). Both
-methods use the power scale (Table~\ref{tab:scores-tested}) at the adaptive rate of
-\texttt{phase\_power} (\texttt{phase\_weighted\_multiqt()}):
+for the base and the pooled locations, the probabilities known at each
+cutoff (Section~\ref{sec:phase-predictors}, Table~\ref{tab:phase-specifications}).
+Both methods use the power scale (Table~\ref{tab:scores-tested}) at the adaptive
+rate of \texttt{phase\_power} (\texttt{phase\_weighted\_multiqt()}):
 \begin{itemize}[leftmargin=*,itemsep=1pt]
-\item \texttt{phase\_angle}: the angle~\eqref{eq:phase-angle} with the probability
-that the base is too high (reports, base growth, NSSP, holidays, humidity,
-onset) and a slow per-level offset at a tenth of the rate, so that the
-overall coverage keeps its guarantee (Proposition~\ref{prop:phase-weighted});
-the choice for COVID;
-\item \texttt{phase\_hidden}: three free phases~\eqref{eq:three-phase} with the
-hidden-phase model's probabilities, learned with the probabilities as known
-when each report arrives; the choice for flu.
+\item \texttt{phase\_angle}: the angle~\eqref{eq:phase-angle} with the bias
+probability $p_t$ of the GAM~\eqref{eq:bias-gam} (label as of target-week end
+$+11$ days for COVID, $+4$ days for flu) and a slow per-level offset at a tenth
+of the rate, so that the overall coverage keeps its guarantee
+(Proposition~\ref{prop:phase-weighted});
+\item \texttt{phase\_hidden}: three free phases~\eqref{eq:three-phase} with
+the phase probabilities $P_t^k$ at issuance and $W_{s,t}^k$, those of the
+learned row's target week as known when its report arrives, at learning.
 \end{itemize}
 Both run for both diseases, so that each is compared on the other disease
 as well. Outside the pooled locations they have no inputs and no
@@ -2784,14 +2956,15 @@ phase in hindsight (\texttt{phase\_oracle}) beats the base in every cell
 ($-1.9\%$; up to peaks $-9.7\%$), but neither the base's forecasts nor the
 reports known at the cutoff predict the sign of the bias (AUC about $0.5$).
 [Section~\ref{sec:results-phase}.]
-\item \textbf{The phase from outside data} (NSSP visits, holidays,
-humidity, a seasonal prior). On the CMU base \texttt{phase\_angle} is the
-best real-time method in every design for both diseases (COVID $-0.5\%$ to
-$-0.8\%$, flu $-1.4\%$ to $-1.8\%$), \texttt{phase\_hidden} the second for
-flu ($-0.7\%$ to $-1.1\%$); on the longer history \texttt{phase\_hidden}
-gains $4.2\%$ to $5.1\%$ for flu, close to \texttt{phase\_oracle}, and
-\texttt{phase\_angle} $1.6\%$ to $1.9\%$ for COVID. Both gain up to the
-peaks and lose after them, as \texttt{phase\_oracle} does.
+\item \textbf{The bias and phase probabilities}
+(Section~\ref{sec:phase-predictors}). On the longer history
+\texttt{phase\_angle} and \texttt{phase\_hidden} beat the base in every
+design for both diseases (horizons 1 to 3: $-2.8\%$ to $-4.1\%$, calibration
+error $-41\%$ to $-75\%$), \texttt{phase\_angle} after the peaks too; on the
+CMU base they gain up to the peaks ($-2\%$ to $-14\%$) and lose after them
+($+5\%$ to $+10\%$), so that only \texttt{phase\_hidden} for flu is ahead
+overall ($-0.4\%$). The true three phases gain after the peaks as well.
+Development evidence from the inspected seasons.
 [Section~\ref{sec:results-phase-outside}.]
 \item \textbf{COVID and flu.} COVID waves are broad and symmetric, and the
 base's bias is close to a mirror image around the peak; flu waves are
@@ -2993,14 +3166,14 @@ flu delay 0.
 corrected labels lower the calibration error of every method at delay 0
 (COVID median $-18$ points, flu $-15$), and after peaks they cost less than
 with the CMU base (COVID delay 0 $+0.9$ points of loss).
-\item \textbf{The two methods with the phase from outside data}
+\item \textbf{The two methods with the bias and phase probabilities}
 (\texttt{phase\_angle}, \texttt{phase\_hidden};
 Section~\ref{sec:results-phase-outside}) behave like the others: corrected
-labels change their loss by at most $0.4$ points overall and lower their
-calibration error at delay 0 (CMU COVID: \texttt{phase\_angle} $-1\%$ becomes
-$-16\%$, \texttt{phase\_hidden} $-1\%$ becomes $-28\%$); after peaks they cost
-up to $2.6$ points at delay 0 (\texttt{phase\_hidden}, CMU COVID) and almost
-nothing in the re-run.
+labels change their loss by at most $0.33$ points overall (horizons 1 to 3)
+and lower their calibration error at delay 0 in 7 of the 8 cells (CMU COVID:
+\texttt{phase\_angle} $+10\%$ becomes $-5\%$, \texttt{phase\_hidden} $+31\%$
+becomes $-4\%$); after peaks they cost up to $3.2$ points at delay 0
+(\texttt{phase\_hidden}, CMU COVID) and almost nothing in the re-run.
 \end{itemize}
 \emph{Plots and tables.} \path{multiqt_feedback_bars_corrected.pdf}
 (script 06, each design next to its corrected version; pooled on pp.~1 and
@@ -3473,7 +3646,8 @@ errors that are $h+1$ weeks old or more, turns too late.
 \item \textbf{Knowing the phase is worth about 3 points.}
 \texttt{phase\_oracle}, the same tracker with the phase in hindsight,
 beats the base overall in every disease and design ($-0.7\%$ to $-2.8\%$;
-of the real-time methods only \texttt{phase\_angle} does too,
+on this base no real-time method does, on the longer history
+\texttt{phase\_angle} and \texttt{phase\_hidden} do,
 Section~\ref{sec:results-phase-outside}) and in most cases (COVID $54\%$,
 flu $77\%$), most of it up to peaks ($-9.7\%$; flu $-14\%$ to $-16\%$). Its
 calibration gain is smaller, and for COVID at delay 0 its calibration error
@@ -3653,399 +3827,140 @@ documented for the hub forecasts~\cite{mathis2024}.
 wave shapes, and the base's bias and dispersion by week relative to the
 peak, one thin line per season or winter.
 
-\subsection{Phase probabilities from outside the feedback}
+\subsection{Bias and phase probabilities}
 \label{sec:results-phase-outside}
-The phase inputs of Section~\ref{sec:sign-flip} known at each cutoff, first
-in experiments in \path{agent/} (14 to 17 November, the CMU base and then
-the longer history; \path{agent/scripts/phase_angle/}, outputs in
-\path{agent/outputs/phase_angle/}), which chose the two methods
-\texttt{phase\_angle} and \texttt{phase\_hidden}; since 17 November both run
-in the workflow. The experiments use the workflow's pooling, designs and
-adaptive rate: the two-phase tracker with the error-based probability
-reproduces \texttt{phase\_power} exactly, with the true phase
-\texttt{phase\_oracle}.
+The models of Section~\ref{sec:phase-predictors} were chosen on 22 and 23
+November in experiments in \path{agent/} (\path{agent/scripts/final_shared_gam/}
+and \path{agent/scripts/growth_nssp/}, reports in
+\path{agent/outputs/final_shared_gam/report.md} and
+\path{agent/outputs/growth_nssp/report.md}) on the evaluation periods of
+both bases. Everything in this subsection is therefore \emph{development
+evidence} from inspected seasons (one evaluation season for the CMU base,
+two for the longer history), not a test on new seasons; the six feedback
+designs share those seasons and states and are not independent
+replications. The workflow run of 24 November (scripts 05, 04 and 06)
+reproduces the experiments exactly: the same bias and phase probabilities
+(largest difference 0), fallback decisions and COVID lead choices, and the
+same tracker scores ($5\cdot10^{-15}$ relative;
+\path{agent/outputs/production_phase/checks.csv}).
+
+\paragraph{How the specifications were chosen.}
+Each comparison below changes one ingredient against its nested control,
+with the trackers unchanged; numbers are the change of the pooled quantile
+loss (\%), horizons 1 to 3 pooled, median over the six designs, with the
+number of designs in which the ingredient helps (the experiments pool each
+case with equal weight).
+\begin{itemize}[leftmargin=*,itemsep=3pt]
+\item \textbf{Curvature in the bias GAM} ($s(\mathrm{curv})$ added to G0) helps
+in no design of any base or disease ($+0.04\%$ to $+0.20\%$ overall).
+\item \textbf{NSSP growth in the bias GAM} (added to that) helps CMU COVID
+($-0.25\%$, all six designs) and costs the longer history ($+1.2\%$ COVID,
+$+1.0\%$ flu, no design better). Fitted on exactly the same rows as the model
+without it, it does improve the COVID probabilities (log loss $0.638$ against
+$0.644$ on the CMU base, $0.636$ against $0.656$ on the longer history), not
+flu's; in the operational model its short history (versions from April 2024)
+leaves fewer training rows and more fallbacks. Neither term was kept.
+\item \textbf{The label date}: fitting the bias GAM to the first report ($+4$
+days) instead of one week later ($+11$) helps flu (CMU $-0.45\%$, longer
+history $-0.13\%$, all six designs each) and costs COVID on the longer
+history ($+2.7\%$, no design better).
+\item \textbf{Flu transitions}: hazards of duration and calendar learned on
+the hospital and NREVSS episodes instead of the hospital episodes alone: with
+29 completed hospital episodes the calendar GAM became eligible only in
+March 2026, with the NREVSS episodes (about 100 more) from the first cutoff
+of each base; the loss falls by $1.6\%$ (CMU) and $1.0\%$ (longer history)
+overall and by $4.1\%$ and $4.9\%$ after the peaks (all designs).
+\item \textbf{Flu observations}: adding the NSSP growth at lead 0 (O1) to the
+hospital growth gains $0.64\%$ (CMU) and $0.41\%$ (longer history) in all
+designs; at leads 1 and 2 it gained nothing ($-0.02\%$ to $+0.54\%$). The
+predictive score of the next hospital week would choose lead 2 for flu; the
+settled specification fixes lead 0.
+\item \textbf{COVID observations}: the conditional-growth model O2 with the
+lead chosen per block gains $2.6\%$ on the longer history in all designs
+($6.0\%$ after the peaks) and loses $0.2\%$ on the CMU base. The chosen lead
+is 1 in most blocks; lead 2 has by far the worst predictive score (about 100
+log-score units below lead 0 for O1, 15 to 19 for O2).
+\item \textbf{Null effects are not always removed.} A check with simulated
+labels that depend on $g$ only (the prespecified acceptance check, which
+failed) found the curvature and calendar smooths with 1.37 and 0.55
+effective degrees of freedom; over 20 simulations their median edf is $0.10$
+and $0.00$ but above $0.5$ in 7, and the fitted probabilities move by $0.004$
+(median of the largest change per simulation), at most $0.11$. The shrinkage
+of \texttt{select = TRUE} makes a null smooth small, not zero.
+\end{itemize}
+
+\paragraph{In the workflow.}
+Table~\ref{tab:phase-workflow} gives \texttt{phase\_angle} and
+\texttt{phase\_hidden} with these probabilities, against each run's base,
+and the true three phases (\texttt{hidden\_oracle}) as the hindsight
+reference.
 
 \begin{center}\small
 \renewcommand{\arraystretch}{1.12}
-\begin{tabular}{@{}lrrrrrr@{}}
+\begin{tabular}{@{}llrrrrr@{}}
 \toprule
- & \multicolumn{3}{c}{COVID} & \multicolumn{3}{c}{Flu}\\
-\cmidrule(lr){2-4}\cmidrule(l){5-7}
-Probability & Phase & Bias & Week & Phase & Bias & Week\\
+ & Method & Overall & Up to peak & After peak & CE & $h=1$ / 2 / 3\\
 \midrule
-Recent errors (\texttt{phase\_power})       & 0.57 & 0.59 & 6 & 0.67 & 0.46 & 6\\
-Seasonal timing prior                       & 0.78 & 0.59 & 1 & 0.99 & 0.63 & 7\\
-Falling counts: reports                     & 0.70 & 0.54 & 3 & 0.98 & 0.61 & 2\\
-Falling counts: reports and NSSP            & 0.71 & 0.60 & 3 & 0.98 & 0.59 & 2\\
-Base too high: reports and NSSP             & 0.63 & 0.68 & 4 & 0.51 & 0.48 & ---\\
-Phase in hindsight                          & 1    & 0.68 &   & 1    & 0.62 & \\
-\bottomrule
-\end{tabular}
-\end{center}
-\refstepcounter{table}\label{tab:phase-signals}
-\begin{center}\small Table \thetable: How well each probability predicts the
-phase (AUC for ``after the nearest peak'') and the sign of the bias (AUC
-for ``report below the base median''), and the first week after the peak in
-which its mean exceeds $\frac12$; evaluation weeks, horizons $-1$ to $3$
-(\path{agent/outputs/phase_angle/phase_signals.pdf}).
-\end{center}
-
-\begin{itemize}[leftmargin=*,itemsep=3pt]
-\item \textbf{The outside signals see the turn 2 to 3 weeks after the
-peak}, the error-based probability only after 6: about as early as the data
-allow, since the reports are a week old at the cutoff and a turn shows only
-after a week of falling counts. The flu seasonal prior knows the phase well
-over the whole season but passes $\frac12$ only 7 weeks after the peak.
-\item \textbf{The bias model with NSSP predicts the sign of the COVID bias
-as well as the true phase does} ($0.68$); for flu no probability does
-better than the true phase ($0.62$), whose bias after the peak changes sign
-itself (Section~\ref{sec:results-flu-covid}).
-\end{itemize}
-
-\paragraph{How the two methods were chosen: exploratory development.}
-These were sequential experiments, not models specified before an
-untouched test. The workflow was: inspect delayed sign-flip and
-phase-selector failures; use hindsight phases to compare correction
-forms; compare logistic targets (falling counts versus base too high);
-add holiday, humidity, onset and NSSP input groups; then test a hidden
-model with phase persistence, revised phase assignments, and alternative
-historical hazards. The scripts record further input ablations on
-16--17 November and the European COVID duration prior on 17 November.
-The final implementation retains the all-input bias model; it is not a
-formula demonstrated to be optimal by an independent selection exercise.
-
-Two levels of data use must be distinguished. Each weekly coefficient
-fit uses only labels available at that cutoff. However, the choice of
-prediction target, covariates, correction form and hidden-state structure
-was informed by performance on the main evaluation weeks. The latter
-creates selection bias even if every individual replay respects the
-feedback delay. The quoted gains are therefore development results.
-The block bootstrap below conditions on the selected method; it does
-not account for this model search or restore an untouched-test
-interpretation~\cite{cawley-selection}. The observations that motivated
-the successive experiments were:
-\begin{itemize}[leftmargin=*,itemsep=3pt]
-\item \textbf{The form.} With the true phase, the angle~\eqref{eq:phase-angle}
-suits COVID and not flu (COVID $-4.6\%$ against $-1.0\%$ for two phases,
-flu $+3.2\%$ against $-2.7\%$): the mirror image holds for COVID's bias, not
-for flu's. For flu a third phase~\eqref{eq:three-phase} raises the ceiling:
-three free phases $-4.8\%$, and in weeks 1 to 4 after the peak $+1\%$
-instead of $+10\%$.
-\item \textbf{The probability.} Probabilities that are good at the phase
-(falling counts) did not help the angle ($+0.5\%$); the probability that
-the base is too high did: with reports and NSSP the angle was the first
-real-time method to beat the base overall ($-0.3\%$, the gain COVID's).
-Logistic three phases never recognized the flu overshoot online (its
-probability reached $0.30$, in weeks 2 and 3).
-\item \textbf{The inputs.} The holidays carry the gain most consistently:
-leaving them out cost $0.5$ to $2.9$ points in three of the four
-base--disease pairs, and with holidays added to the reports/base/season/horizon inputs the angle gained $4.1\%$
-for COVID and $2.3\%$ for flu on the longer history (block bootstrap over
-the evaluation weeks: the COVID gain below the base in $98\%$ of 2000
-draws, 95\% interval $-9.3\%$ to $-0.3\%$; on the CMU base, with one flu
-winter, the flu gain only in $73\%$). The humidity helped flu on the CMU
-base; the onset timing, the other disease and the base's projected minus
-realized growth added nothing; NSSP helped COVID on the CMU base only.
-\item \textbf{The hidden-phase model} with the NREVSS prior recognizes the
-flu overshoot (probability $0.65$ in week 3 after the peak, against $0.34$
-without holidays, humidity and NSSP) and gets the tail right: on the longer
-history $-4.5\%$ against $-5.6\%$ for three phases with the true phase, on
-the CMU base $-1.0\%$; the updated weights help a little ($-4.5\%$ against
-$-4.2\%$ as issued). For COVID, the hazard from the European waves
-recognizes the phase better (AUC $0.71$ and $0.69$ against $0.67$ and
-$0.62$), but the angle with the bias probability stays better: for COVID
-the sign of the bias matters more than the phase.
-\end{itemize}
-These experiments motivated trying \texttt{phase\_angle} for COVID and
-\texttt{phase\_hidden} for flu; both run for both diseases. They do not
-establish that these are the best probability models or that all their
-inputs are required. The CMU evaluation contains only one flu winter
-(10 state peaks); CMU's ensemble already uses NSSP as a predictor.
-Delphi's Epidata API (V4) stopped receiving NSSP data on 22 September
-2026, after the evaluation period.
-
-\paragraph{Sample sizes and numerical stability (audit of 20 November).}
-The 40-row rule is a minimum for attempting a fit, not the sample size
-of every fit. Replaying the exact production formula on the archived
-feature rows reproduces all 18,400 saved bias probabilities exactly
-(maximum absolute difference zero). A row is one state--horizon--forecast
-combination. Across cutoffs issuing at least one unfilled evaluation
-forecast, the complete, labelled training rows are:
-\begin{center}\small
-\begin{tabular}{@{}llrrr@{}}
-\toprule
-Base & Disease & Rows, first--last fit & Median rows & Target weeks, first--last\\
-\midrule
-CMU & COVID & 1,000--4,160 & 2,460 & 24--90\\
-CMU & Flu & 1,100--2,550 & 1,800 & 25--59\\
-Windowed seasonal & COVID & 60--3,500 & 1,700 & 3--89\\
-Windowed seasonal & Flu & 60--3,500 & 1,700 & 3--89\\
-\bottomrule
-\end{tabular}
-\end{center}
-This excludes cutoffs with no fitted regression: on the longer history,
-the first 160 evaluation forecasts per disease use $p=1/2$.
-The first fit in each of the four series has 60 rows from only three
-target weeks (30 state--target pairs). Repeated horizons and correlated
-state epidemics mean that neither 60 nor the later row totals count
-independent epidemic experiences. Requiring the NSSP features also
-excludes the entire 2023/24 tuning season from the full regression;
-complete feature rows start only in November 2024.
-
-There are actual numerical problems, not only a small-sample concern.
-Among the 93 longer-history evaluation cutoffs with fitted regressions,
-COVID has one nonconverged fit and 13 rank-deficient fits; flu has two
-nonconverged fits and 16 rank-deficient fits. These categories can
-overlap. All CMU evaluation fits converge and have full rank, although
-earlier CMU fits have problems too. Across the 3,820 evaluation
-predictions per disease on the longer history, 525 COVID probabilities
-and 596 flu probabilities require clipping to $[.02,.98]$. The current
-code suppresses fitting warnings and uses these predictions; clipping
-limits the angle but does not regularize or identify the coefficients.
-
-The \emph{separate} flu peak-hazard regression has 1,307 at-risk weekly
-rows, 63 peak events and 10 nominal coefficients. Its saved summary also
-signals instability: the intercept is about $-8{,}116$ with a standard
-error about $137{,}468$, and several spline coefficients have similarly
-large uncertainty. This warrants a regularized refit and a separation
-check, rather than interpretation of the reported coefficient tests.
-Convergence alone would not establish reliable prediction.
-
-\paragraph{What the ablations establish about the inputs.}
-There is no validated ranking of individual inputs. The experiments
-compare groups of inputs after refitting the complete prediction and
-correction procedure; the correlated predictors and horizon interactions
-also prevent reading importance directly from coefficient magnitudes.
-For example, the following changes in overall quantile loss use the
-\emph{angle without the slow offset}, averaged over the three original
-feedback designs (negative is better):
-\begin{center}\small
-\begin{tabular}{@{}lrrrr@{}}
-\toprule
-Bias-model inputs & CMU COVID & CMU flu & Longer COVID & Longer flu\\
-\midrule
-Core & $+0.3\%$ & $-0.3\%$ & $-1.1\%$ & $-1.6\%$\\
-Core + holidays & $+0.2\%$ & $-0.9\%$ & $-4.1\%$ & $-2.3\%$\\
-Core + holidays/humidity/onset & $+0.5\%$ & $-2.0\%$ & $-2.6\%$ & $-2.3\%$\\
-Core + holidays/humidity/onset/NSSP & $-1.2\%$ & $-2.1\%$ & $-1.2\%$ & $-1.1\%$\\
-\bottomrule
-\end{tabular}
-\end{center}
-Here ``core'' means reports/base/season/horizon, including horizon
-interactions with report growth and curvature. The last experimental variant has the
-horizon--NSSP-growth interaction but omits the horizon--NSSP-curvature
-interaction present in the production formula. It is therefore a nearby
-variant, not an exact ablation of the deployed model. These are the
-\path{angle_variants/summary.txt} results under the two bases in
-\path{agent/outputs/phase_angle/}.
-
-The simpler holiday addition matches or beats the richer inputs on the
-longer history, whereas NSSP helps CMU COVID. Adding NSSP also changes
-which historical rows are complete, so these comparisons combine a
-feature effect with a training-history effect. A matched-history
-comparison would be needed to isolate the former. The longer-history
-COVID bias AUC rises from $0.657$ for reports/base plus holidays to
-$0.682$ for the full experimental input set, yet its quantile-loss gain
-falls from $4.1\%$ to $1.2\%$. Better discrimination of the binary label
-does not ensure better probability calibration or lower corrected
-quantile loss. These observations support testing simpler models; they
-do not establish a new winner on unseen seasons.
-
-\paragraph{Simpler and regularized alternatives: proposed, not yet run.}
-Keep the correction rule fixed while comparing a small, prespecified
-set of probability models. A useful reduced logistic design is
-\[
- x_s^{\rm small}=(1,\mathtt{season}_s,\mathtt{g1}_s,
- \mathtt{base\_growth}_s,h_s,\mathtt{hol\_break}_s,
- \mathtt{hol\_post}_s,\mathtt{hol\_thanks}_s)^\top.
-\]
-This has eight coefficients; omitting the seasonal prior gives an even
-simpler seven-coefficient alternative. A regularized comparison should
-also include the \emph{same full formula}, to separate simplification
-from shrinkage. With covariates standardized using training rows only,
-fit ridge logistic regression by
-\[
- \widehat\beta_t^{(\lambda)}\in\argmin_\beta
- \left[\frac{1}{|\mathcal D_t|}\sum_{s\in\mathcal D_t}
- \{\log(1+e^{x_s^\top\beta})-B_sx_s^\top\beta\}
- +\frac{\lambda}{2}\sum_{j=1}^{p}\beta_j^2\right],
- \qquad\lambda>0,
-\]
-leaving the intercept unpenalized. This shrinks weak or poorly identified
-slopes, including when columns are correlated or the labels separate.
-Ridge and elastic-net logistic estimation are described by
-Friedman, Hastie and Tibshirani~\cite{friedman-glmnet}.
-
-A small binomial GAM is another candidate, for example
-\[
- \operatorname{logit}(p_s)=\beta_0+f_{\rm cyc}(\mathrm{week}_s)
-   +f_g(\mathtt{g1}_s)+\beta_b\mathtt{base\_growth}_s+\beta_hh_s
-   +\delta^\top H_s+a_{\ell(s)},
- \qquad a_\ell\sim N(0,\tau_a^2),
-\]
-where $H_s$ is the vector of three holiday inputs and $\ell(s)$ the state.
-Here a low-rank cyclic seasonal smooth replaces the empirical seasonal
-prior; a low-rank growth smooth permits nonlinearity. The optional random
-state intercept provides partial pooling, rather than ten separate
-regressions. Smoothness and shrinkage need penalties, with small basis
-sizes; REML and term-shrinkage options are described in the
-\texttt{mgcv} documentation~\cite{wood-gam-selection}. A flexible GAM
-with all current inputs is not justified by these data. The flu hazard
-already contains an unpenalized fixed-degree spline; it too could use a
-penalized smooth, starting with season week alone.
-
-Choose penalty and model complexity using earlier rolling validation
-blocks with labels available by each fit, and keep all states and
-horizons for a target week together. Standardization must also be fitted
-inside each training block. Report probability log loss, Brier score
-and calibration, alongside the downstream quantile loss and coverage,
-and inspect results by state. Ordinary random row splits are
-inappropriate for these repeated, serially dependent observations.
-The already inspected evaluation seasons remain development data;
-a new held-out period is needed for a clean confirmation. Penalization
-addresses coefficient fitting, not the selection bias from choosing
-methods after inspecting their evaluation results.
-
-\paragraph{In the workflow (run of 18 November).} Script 04 runs both
-methods (Section~\ref{sec:methods}) with the inputs of script 05 for both
-diseases, on both bases and in all six feedback designs, the corrected ones
-included (Section~\ref{sec:corrected-labels}); on the uncorrected designs
-they reproduce the experiments (\texttt{phase\_hidden} exactly,
-\texttt{phase\_angle} within $0.006$ in the mean loss of a case).
-Tables~\ref{tab:phase-workflow} and~\ref{tab:phase-workflow-peaks} give each
-design separately, every design next to its corrected version.
-
-\begin{center}\footnotesize
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.12}
-\begin{tabular}{@{}llrrrrrr@{}}
-\toprule
- & & \multicolumn{2}{c}{Delay 0} & \multicolumn{2}{c}{Delay 1} & \multicolumn{2}{c}{Re-run}\\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-8}
-Disease & Method & reports & corrected & reports & corrected & reports & corrected\\
-\midrule
-\multicolumn{8}{@{}l}{\emph{CMU base}}\\
-COVID & \texttt{phase\_angle} & $-0.7$ / $-1$ & $-0.8$ / $-16$ & $-0.6$ / $-12$ & $-0.6$ / $-18$ & $-0.5$ / $-19$ & $-0.5$ / $-19$ \\
- & \texttt{phase\_hidden} & 0.3 / 0 & 0.6 / $-28$ & 1.0 / $-24$ & 1.2 / $-29$ & 1.2 / $-28$ & 1.2 / $-28$ \\
- & \texttt{phase\_oracle} & $-1.2$ / 41 & $-2.1$ / 0 & $-1.2$ / 12 & $-1.2$ / $-3$ & $-0.7$ / $-3$ & $-0.8$ / $-5$ \\
-Flu & \texttt{phase\_angle} & $-1.6$ / $-26$ & $-1.4$ / $-30$ & $-1.8$ / $-33$ & $-1.7$ / $-32$ & $-1.5$ / $-32$ & $-1.4$ / $-32$ \\
- & \texttt{phase\_hidden} & $-1.1$ / $-32$ & $-0.7$ / $-30$ & $-1.0$ / $-30$ & $-0.7$ / $-27$ & $-0.9$ / $-33$ & $-0.8$ / $-31$ \\
- & \texttt{phase\_oracle} & $-2.8$ / $-30$ & $-2.7$ / $-36$ & $-2.5$ / $-34$ & $-2.3$ / $-32$ & $-2.8$ / $-36$ & $-2.7$ / $-34$ \\
-\multicolumn{8}{@{}l}{\emph{Longer history}}\\
-COVID & \texttt{phase\_angle} & $-1.8$ / $-17$ & $-1.9$ / $-24$ & $-1.6$ / $-26$ & $-1.7$ / $-29$ & $-1.9$ / $-32$ & $-1.9$ / $-33$ \\
- & \texttt{phase\_hidden} & $-0.7$ / $-26$ & $-0.3$ / $-37$ & $-0.3$ / $-39$ & 0.1 / $-41$ & $-0.5$ / $-47$ & $-0.5$ / $-48$ \\
- & \texttt{phase\_oracle} & $-0.3$ / 24 & $-1.0$ / $-5$ & 0.1 / $-3$ & $-0.1$ / $-21$ & $-0.8$ / $-26$ & $-0.9$ / $-31$ \\
-Flu & \texttt{phase\_angle} & $-1.9$ / $-52$ & $-2.0$ / $-67$ & $-1.9$ / $-64$ & $-1.9$ / $-70$ & $-2.0$ / $-70$ & $-2.0$ / $-71$ \\
- & \texttt{phase\_hidden} & $-4.3$ / $-65$ & $-4.4$ / $-72$ & $-4.2$ / $-73$ & $-4.2$ / $-74$ & $-5.1$ / $-77$ & $-5.1$ / $-78$ \\
- & \texttt{phase\_oracle} & $-5.2$ / $-50$ & $-5.5$ / $-68$ & $-5.0$ / $-63$ & $-5.0$ / $-69$ & $-5.8$ / $-68$ & $-5.9$ / $-70$ \\
+\multicolumn{7}{@{}l}{\emph{CMU base}}\\
+COVID & \texttt{phase\_angle} & $+1.1$ (0) & $-4.9$ (6) & $+5.4$ (0) & $-5$ & $+1.4$ / $+1.3$ / $+0.7$\\
+ & \texttt{phase\_hidden} & $+2.2$ (0) & $-2.1$ (4) & $+5.1$ (0) & $-4$ & $+1.9$ / $+2.4$ / $+2.2$\\
+ & true phases & $-2.1$ (6) & $-6.7$ (6) & $-2.6$ (6) & $+16$ & $-2.6$ / $-2.6$ / $-1.2$\\
+Flu & \texttt{phase\_angle} & $+0.1$ (2) & $-6.4$ (6) & $+5.8$ (0) & $-37$ & $-0.9$ / $+0.4$ / $+0.5$\\
+ & \texttt{phase\_hidden} & $-0.4$ (6) & $-13.6$ (6) & $+10.0$ (0) & $-28$ & $-1.0$ / $-0.1$ / $-0.3$\\
+ & true phases & $-4.4$ (6) & $-15.2$ (6) & $-0.2$ (4) & $-28$ & $-6.7$ / $-5.0$ / $-2.6$\\
+\addlinespace
+\multicolumn{7}{@{}l}{\emph{Longer history}}\\
+COVID & \texttt{phase\_angle} & $-4.1$ (6) & $-0.3$ (4) & $-2.1$ (6) & $-41$ & $-1.9$ / $-4.1$ / $-5.5$\\
+ & \texttt{phase\_hidden} & $-2.8$ (6) & $+0.4$ (2) & $0.0$ (3) & $-43$ & $-0.5$ / $-2.4$ / $-4.6$\\
+ & true phases & $-1.5$ (6) & $+2.5$ (0) & $-3.8$ (6) & $-25$ & $-0.4$ / $-1.3$ / $-2.4$\\
+Flu & \texttt{phase\_angle} & $-3.1$ (6) & $-4.4$ (6) & $-1.9$ (6) & $-71$ & $-3.1$ / $-3.2$ / $-3.0$\\
+ & \texttt{phase\_hidden} & $-4.1$ (6) & $-9.9$ (6) & $+0.1$ (0) & $-75$ & $-4.0$ / $-4.1$ / $-4.3$\\
+ & true phases & $-5.3$ (6) & $-11.4$ (6) & $-0.9$ (6) & $-70$ & $-6.4$ / $-5.2$ / $-4.7$\\
 \bottomrule
 \end{tabular}
 \end{center}
 \refstepcounter{table}\label{tab:phase-workflow}
-\begin{center}\small Table \thetable: The phase from outside data in the
-workflow (run of 18 November): change of the pooled loss / calibration error
-versus each base (\%), every design separately (``reports'': learning from
-the reports; ``corrected'': from the corrected labels). CMU base: horizons
-$-1$ to $3$, June 2025 to September 2026; longer history: horizons $0$ to
-$3$, November 2024 to September 2026; \texttt{phase\_oracle}: the phase in
-hindsight (\path{workflow_by_design.txt} in \path{agent/outputs/phase_angle/}).
-\end{center}
-
-\begin{center}\footnotesize
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.12}
-\begin{tabular}{@{}llrrrrrr@{}}
-\toprule
- & & \multicolumn{2}{c}{Delay 0} & \multicolumn{2}{c}{Delay 1} & \multicolumn{2}{c}{Re-run}\\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(l){7-8}
-Disease & Method & reports & corrected & reports & corrected & reports & corrected\\
-\midrule
-\multicolumn{8}{@{}l}{\emph{CMU base}}\\
-COVID & \texttt{phase\_angle} & $-1.0$ / 0.7 & $-3.6$ / 1.8 & $-2.5$ / 1.7 & $-3.4$ / 2.0 & $-4.6$ / 2.3 & $-4.6$ / 2.3 \\
- & \texttt{phase\_hidden} & $-2.9$ / 2.4 & $-7.4$ / 5.0 & $-4.1$ / 4.4 & $-5.6$ / 5.2 & $-6.2$ / 5.1 & $-6.8$ / 5.2 \\
- & \texttt{phase\_oracle} & $-1.5$ / $-2.6$ & $-7.6$ / 0.0 & $-5.0$ / 0.5 & $-7.5$ / 1.4 & $-7.6$ / 3.1 & $-8.3$ / 3.1 \\
-Flu & \texttt{phase\_angle} & $-9.7$ / 5.7 & $-10.7$ / 6.5 & $-10.0$ / 5.2 & $-10.3$ / 5.6 & $-11.4$ / 7.2 & $-11.4$ / 7.3 \\
- & \texttt{phase\_hidden} & $-12.4$ / 8.4 & $-13.6$ / 9.3 & $-12.6$ / 7.6 & $-13.0$ / 8.0 & $-14.4$ / 10.3 & $-14.5$ / 10.4 \\
- & \texttt{phase\_oracle} & $-13.7$ / 5.8 & $-14.9$ / 6.5 & $-14.4$ / 6.9 & $-14.8$ / 7.3 & $-15.8$ / 8.0 & $-15.9$ / 8.1 \\
-\multicolumn{8}{@{}l}{\emph{Longer history}}\\
-COVID & \texttt{phase\_angle} & 1.7 / 0.5 & 1.3 / 0.6 & 1.7 / 0.4 & 1.3 / 0.5 & 0.6 / 0.9 & 0.6 / 0.9 \\
- & \texttt{phase\_hidden} & $-1.9$ / 4.6 & $-2.8$ / 5.9 & $-2.3$ / 5.3 & $-3.0$ / 6.3 & $-2.2$ / 5.4 & $-2.4$ / 5.5 \\
- & \texttt{phase\_oracle} & 2.7 / 0.0 & 1.3 / 0.3 & 2.1 / 2.1 & 1.0 / 2.2 & 0.9 / $-1.0$ & 0.6 / $-1.1$ \\
-Flu & \texttt{phase\_angle} & $-3.4$ / 1.7 & $-3.8$ / 1.9 & $-3.3$ / 1.4 & $-3.5$ / 1.5 & $-3.9$ / 2.1 & $-4.0$ / 2.2 \\
- & \texttt{phase\_hidden} & $-9.2$ / 0.4 & $-9.8$ / 0.6 & $-9.2$ / 0.1 & $-9.3$ / 0.2 & $-9.6$ / 0.4 & $-9.7$ / 0.4 \\
- & \texttt{phase\_oracle} & $-10.9$ / $-0.4$ & $-11.5$ / $-0.3$ & $-11.0$ / $-0.3$ & $-11.1$ / $-0.3$ & $-12.2$ / 0.0 & $-12.3$ / 0.0 \\
-\bottomrule
-\end{tabular}
-\end{center}
-\refstepcounter{table}\label{tab:phase-workflow-peaks}
-\begin{center}\small Table \thetable: As Table~\ref{tab:phase-workflow}:
-change of the pooled loss versus each base (\%) up to the peaks / after the
-peaks.
+\begin{center}\small Table \thetable: Change of the pooled quantile loss versus
+the base (\%), horizons 1 to 3 of the 10 pooled states, each case's mean loss
+weighted by its weeks (as script 06): median over the six designs, in
+brackets the designs better than the base; CE: change of the overall
+calibration error (\%, median); last column the overall change per horizon.
+Ranges and every design: \path{agent/outputs/production_phase/notes_tables.txt}
+(\path{agent/scripts/production_phase/notes_tables.R}).
 \end{center}
 
 \begin{itemize}[leftmargin=*,itemsep=3pt]
-\item \textbf{On the CMU base \texttt{phase\_angle} is the best real-time
-method in every design, for both diseases}: COVID $-0.5\%$ to $-0.8\%$, flu
-$-1.4\%$ to $-1.8\%$, against $-0.1\%$ to $-0.3\%$ for the best other COVID
-method (\texttt{restart\_recent}, \texttt{power\_restart\_recent}) and
-$-0.2\%$ to $-0.4\%$ for flu (\texttt{sqrt\_constant}). It also lowers the
-calibration error in every cell. For flu \texttt{phase\_hidden} comes second
-($-0.7\%$ to $-1.1\%$); for COVID it stays above the base ($+0.3\%$ to
-$+1.2\%$), as in the experiments.
-\item \textbf{On the longer history \texttt{phase\_hidden} is best for flu in
-every design} ($-4.2\%$ to $-5.1\%$, calibration error $-65\%$ to $-78\%$),
-within about a point of \texttt{phase\_oracle}, and about twice the next method
-(\texttt{sqrt\_constant}, $-2.0\%$ to $-2.4\%$). For COVID
-\texttt{phase\_angle} gains $1.6\%$ to $1.9\%$ in every design; it is best in
-three of the six, while the spread-scale tracker
-\texttt{studentized\_spread} is better at delay 0 ($-3.2\%$, corrected
-$-2.3\%$) and delay 1 ($-1.7\%$).
-\item \textbf{The corrected labels hardly change the loss} of the two
-methods (at most $0.4$ points) but lower their calibration error where the
-reports were most biased: delay 0 on the CMU base for COVID
-(\texttt{phase\_angle} $-1\%$ becomes $-16\%$, \texttt{phase\_hidden} $0\%$
-becomes $-28\%$), and on the longer history for both diseases. The
-\texttt{phase\_oracle}'s COVID calibration error at delay 0, $+41\%$, falls
-to $0\%$. In the re-run the corrected labels change almost nothing.
-\item \textbf{The gain comes before the peaks; after them both lose.} Up to
-the peaks \texttt{phase\_hidden} gains nearly what the true phase gains (CMU
-flu $-12\%$ to $-15\%$, \texttt{phase\_oracle} $-14\%$ to $-16\%$,
-\texttt{phase\_angle} $-10\%$ to $-11\%$); after the peaks both lose (CMU flu $+5\%$ to $+10\%$), and so
-does \texttt{phase\_oracle} ($+6\%$ to $+8\%$): with this tracker even the
-true phase does not repair the weeks after a flu peak. With the corrected
-labels the loss after peaks grows a little, most at delay 0 (CMU COVID
-\texttt{phase\_hidden} $+2.4\%$ becomes $+5.0\%$), as for every method
-(Section~\ref{sec:corrected-labels}). Only on the longer history, for flu,
-does \texttt{phase\_hidden} keep the after-peak loss near the base
-($+0.1\%$ to $+0.6\%$).
-\item \textbf{Bias.} Both methods remove the base's average bias for flu
-(CMU: $-0.07$ to between $-0.03$ and $+0.02$) but not its sign change at the
-peaks: pooled over the uncorrected designs, the CMU COVID bias after the
-peaks stays $+0.17$ (base $+0.17$, \texttt{phase\_oracle} $+0.13$), and after
-the flu peaks it turns positive ($+0.03$ and $+0.04$ against the base's
-$-0.02$).
+\item \textbf{On the longer history both methods beat the base in every
+design}, for both diseases ($-2.8\%$ to $-4.1\%$), and remove 41\% to 75\% of
+the calibration error. \texttt{phase\_angle} gains after the peaks too
+($-2.1\%$ COVID, $-1.9\%$ flu, all designs), and for COVID more than the true
+three phases ($-4.1\%$ against $-1.5\%$ overall): the bias probability, not
+a phase classification, decides there. The gains grow with the horizon for
+COVID ($-1.9\%$ to $-5.5\%$).
+\item \textbf{On the CMU base the probabilities help up to the peaks and
+lose after them} ($+5\%$ to $+10\%$), so that overall only
+\texttt{phase\_hidden} is ahead for flu ($-0.4\%$, all designs); for COVID
+both lose ($+1.1\%$, $+2.2\%$). CMU's base is the better one and leaves less
+to correct (Section~\ref{sec:results-longer-history}).
+\item \textbf{After the peaks the true phases gain} ($0.2\%$ to
+$3.8\%$) where the real-time methods lose up to $10\%$ on the CMU base: the
+gap is in recognizing the turn, not in the tracker, and the flu gain up to the
+peak ($-13.6\%$ CMU, $-9.9\%$ longer history) is close to the true phases'.
+A lower quantile loss of a tracker does not by itself show that its phase
+probabilities classify the phases better.
+\item \textbf{Corrected labels} change the overall loss of the two methods by at
+most $0.33$ points and lower their calibration error at delay 0 in 7 of the 8
+cells (CMU COVID: \texttt{phase\_angle} $+10\%$ becomes $-5\%$,
+\texttt{phase\_hidden} $+31\%$ becomes $-4\%$; CMU flu \texttt{phase\_hidden}
+unchanged at $-31\%$); after the peaks they cost up to $3.2$ points at delay 0
+(\texttt{phase\_hidden}, CMU COVID) and almost nothing in the re-run.
 \end{itemize}
-\emph{Plots.} The group ``Phase from outside data'' of
-\path{multiqt_feedback_bars.pdf} and of
-\path{multiqt_feedback_bars_corrected.pdf} (pooled: pp.~1 and 7, both bases); the forecasts on the ninth
-page of each location in \path{multiqt_method_forecasts/} (none for the US,
-which is not a pooled location). R/06's tree picks its ten methods by the
-after-peak loss, so its CMU flu pages show neither method and its
-longer-history COVID pages not \texttt{phase\_hidden}. Tables:
-\path{workflow_by_design.txt} and \path{workflow_notes_tables.txt} (cases
-weighted by their weeks) in \path{agent/outputs/phase_angle/}, from the
-scripts \path{workflow_by_design.R}, \path{workflow_notes_tables.R} and
-\path{workflow_latex_rows.R} in \path{agent/scripts/phase_angle/}.
-
-\paragraph{Bias and dispersion in the tree} (\path{multiqt_evaluation_tree_bias.pdf}).
-Pooled over the 10 states, the base's bias is $-0.19$ up to
-the COVID peaks and $+0.17$ after them, $-0.23$ up to the flu peaks and
-$-0.02$ after them (CMU base; longer history $-0.14$ / $+0.08$ and $-0.30$ /
-$-0.04$). The trackers remove most of the base's average bias and width
-error over the season (flu, power scale: bias $-0.07$ to $0.00$, dispersion
-$+0.06$ to $0.00$) but hardly change the bias up to and after the peaks;
-only \texttt{phase\_oracle} reduces it on both sides (COVID after peaks
-$+0.13$ against $+0.17$).
+\emph{Plots.} The group ``Bias and phase probabilities'' of
+\path{multiqt_feedback_bars.pdf} and \path{multiqt_evaluation_tree.pdf}
+(script 06; the true phases hatched) and of the trade-off and forecast pages
+of script 04; the probabilities, records, lead choices and predictive scores
+in \path{<output_dir>/data/phase_probabilities.rds}, the fitted models at the
+season ends in \path{phase_probability_models.rds}.
 
 \subsection{Longer history: the \texttt{windowed\_seasonal} base}
 \label{sec:results-longer-history}
@@ -4102,8 +4017,8 @@ Method & windowed & CMU & windowed & CMU & windowed / CMU\\
 \texttt{phase\_oracle} (hindsight) & $-0.3$ / $-2$ & $-1.0$ / 17 & $-5.4$ / $-61$ & $-2.7$ / $-34$ & 1.9 / $-4.7$\\
 \texttt{polar}             & 9.9 / 6   & 6.1 / 9   & 1.9 / $-53$  & 4.3 / $-30$  & 15.9 / 1.9\\
 \addlinespace
-\texttt{phase\_angle}      & $-1.8$ / $-25$ & $-0.6$ / $-11$ & $-1.9$ / $-62$ & $-1.6$ / $-30$ & 1.3 / $-2.7$\\
-\texttt{phase\_hidden}     & $-0.5$ / $-37$ & 0.8 / $-17$ & $-4.5$ / $-72$ & $-1.0$ / $-32$ & $-2.1$ / $-4.4$\\
+\texttt{phase\_angle}      & $-3.2$ / $-27$ & 0.6 / $-12$ & $-3.0$ / $-61$ & $-0.7$ / $-30$ & $-0.6$ / $-3.2$\\
+\texttt{phase\_hidden}     & $-2.3$ / $-32$ & 1.2 / $-14$ & $-4.6$ / $-72$ & $-1.3$ / $-30$ & 0.4 / $-2.2$\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -4113,7 +4028,7 @@ error versus each run's own base (\%), mean over the three designs; the
 last column the loss up to the COVID peaks. Windowed: evaluation November
 2024 to September 2026, horizons $0$ to $3$; CMU: June 2025 to September
 2026, horizons $-1$ to $3$ (\path{agent/scripts/windowed_vs_cmu.R};
-Table~\ref{tab:phase-workflow} gives every design of the phase methods).
+Table~\ref{tab:phase-workflow} gives the phase methods for horizons 1 to 3).
 \end{center}
 
 \begin{itemize}[leftmargin=*,itemsep=3pt]
@@ -4143,10 +4058,11 @@ $7.2\%$ after the 2024/25 peaks instead of $1.8\%$
 of the season before; a COVID wave does not.
 \item \textbf{The phase is worth more for flu with this base}:
 \texttt{phase\_oracle} $-5.4\%$ against $-2.7\%$ with CMU's, and the
-error-based two-phase tracker already gains ($-1.9\%$). With the phase from
-outside data, \texttt{phase\_hidden} recovers most of it ($-4.5\%$, $-72\%$
-calibration error); for COVID \texttt{phase\_angle} gains $1.8\%$, against $0.6\%$ with
-CMU's base (Section~\ref{sec:results-phase-outside}, ``In the workflow'').
+error-based two-phase tracker already gains ($-1.9\%$). With the bias and
+phase probabilities, \texttt{phase\_hidden} recovers most of it ($-4.6\%$,
+$-72\%$ calibration error); for COVID \texttt{phase\_angle} gains $3.2\%$, while
+with CMU's base it loses $0.6\%$ (Section~\ref{sec:results-phase-outside},
+``In the workflow'').
 \end{itemize}
 What two winters make possible: a seasonal timing prior and a seasonal
 centre (Section~\ref{sec:open-issues}) need earlier seasons to learn
@@ -4217,7 +4133,8 @@ Pennsylvania for COVID.
 \paragraph{Before and after the peaks, state by state.}
 Table~\ref{tab:locations-phase} gives, for each of the 10 pooled states, the
 base's bias up to and after the peaks and the loss change of four methods in
-the two windows (run of 18 November; mean over the horizons and the three
+the two windows (run of 18 November; \texttt{phase\_angle} and
+\texttt{phase\_hidden} run of 24 November; mean over the horizons and the three
 uncorrected designs).
 
 \begin{center}\footnotesize
@@ -4232,27 +4149,27 @@ uncorrected designs).
 State & up to & after & up to & after & up to & after & up to & after & up to & after\\
 \midrule
 \multicolumn{11}{@{}l}{\emph{COVID}}\\
-California & $-0.35$ & 0.17 & $-7.6$ & 16.9 & $-14.0$ & 4.7 & $-5.3$ & 4.3 & $-9.5$ & 4.7 \\
-Texas & $-0.20$ & 0.15 & $-10.7$ & 12.7 & $-6.7$ & $-1.0$ & $-6.6$ & 3.5 & $-2.6$ & 6.8 \\
-New York & $-0.10$ & 0.19 & 8.8 & 2.0 & 3.9 & 3.4 & 2.3 & 1.3 & $-2.2$ & 1.7 \\
-Pennsylvania & $-0.15$ & 0.21 & 4.7 & 6.4 & $-7.5$ & $-3.4$ & $-0.4$ & 0.4 & $-7.1$ & 3.7 \\
-Illinois & $-0.23$ & 0.16 & 7.8 & 5.9 & $-9.7$ & 0.1 & 1.5 & 1.1 & $-4.6$ & 4.0 \\
-Ohio & $-0.21$ & 0.20 & 1.7 & 6.4 & $-13.6$ & $-2.0$ & $-4.4$ & 1.1 & $-6.4$ & 5.0 \\
-Georgia & $-0.16$ & 0.09 & $-9.6$ & 16.5 & 1.6 & 1.0 & $-6.7$ & 2.6 & 0.0 & 4.1 \\
-North Carolina & $-0.21$ & 0.20 & $-5.5$ & 12.7 & $-8.7$ & 4.3 & $-5.3$ & 5.1 & $-5.5$ & 8.9 \\
-Michigan & $-0.18$ & 0.01 & 14.7 & 4.4 & 14.8 & 9.5 & $-1.1$ & $-0.3$ & $-2.3$ & 4.8 \\
-New Jersey & $-0.10$ & 0.25 & 20.6 & $-1.6$ & $-2.8$ & $-6.6$ & 0.3 & $-0.3$ & 1.5 & $-1.5$ \\
+California & $-0.35$ & 0.17 & $-7.6$ & 16.9 & $-14.0$ & 4.7 & $-10.7$ & 9.6 & $-4.7$ & 5.1 \\
+Texas & $-0.20$ & 0.15 & $-10.7$ & 12.7 & $-6.7$ & $-1.0$ & $-8.7$ & 9.3 & $-3.2$ & 5.2 \\
+New York & $-0.10$ & 0.19 & 8.8 & 2.0 & 3.9 & 3.4 & $-2.1$ & 2.1 & $-1.0$ & 2.2 \\
+Pennsylvania & $-0.15$ & 0.21 & 4.7 & 6.4 & $-7.5$ & $-3.4$ & 2.3 & 0.4 & $-3.6$ & 2.8 \\
+Illinois & $-0.23$ & 0.16 & 7.8 & 5.9 & $-9.7$ & 0.1 & 2.0 & 2.5 & 0.6 & 3.2 \\
+Ohio & $-0.21$ & 0.20 & 1.7 & 6.4 & $-13.6$ & $-2.0$ & $-3.6$ & 4.8 & $-3.0$ & 5.1 \\
+Georgia & $-0.16$ & 0.09 & $-9.6$ & 16.5 & 1.6 & 1.0 & $-5.9$ & 6.9 & $-1.9$ & 4.8 \\
+North Carolina & $-0.21$ & 0.20 & $-5.5$ & 12.7 & $-8.7$ & 4.3 & $-7.6$ & 10.6 & $-5.4$ & 8.3 \\
+Michigan & $-0.18$ & 0.01 & 14.7 & 4.4 & 14.8 & 9.5 & 2.0 & 0.4 & 0.3 & 3.7 \\
+New Jersey & $-0.10$ & 0.25 & 20.6 & $-1.6$ & $-2.8$ & $-6.6$ & 0.2 & $-0.5$ & 3.6 & $-1.6$ \\
 \multicolumn{11}{@{}l}{\emph{Flu}}\\
-California & $-0.15$ & 0.01 & $-4.2$ & 14.4 & $-15.7$ & 21.1 & $-12.1$ & 10.4 & $-13.1$ & 20.6 \\
-Texas & $-0.14$ & $-0.08$ & $-1.8$ & $-0.9$ & $-7.1$ & 5.0 & $-4.5$ & 1.7 & $-7.1$ & 2.5 \\
-New York & $-0.31$ & $-0.01$ & $-2.0$ & 4.6 & $-15.2$ & $-1.6$ & $-6.9$ & 1.7 & $-14.3$ & 3.8 \\
-Pennsylvania & $-0.24$ & 0.00 & $-5.0$ & 6.1 & $-18.8$ & 23.6 & $-19.6$ & 16.1 & $-16.7$ & 16.3 \\
-Illinois & $-0.24$ & $-0.06$ & $-3.3$ & 1.5 & $-14.2$ & 3.2 & $-10.1$ & 2.9 & $-12.5$ & 6.5 \\
-Ohio & $-0.26$ & $-0.02$ & $-7.0$ & 3.7 & $-15.6$ & 1.1 & $-12.5$ & 6.0 & $-14.9$ & 11.6 \\
-Georgia & $-0.27$ & $-0.08$ & $-1.7$ & $-1.2$ & $-10.7$ & 1.9 & $-4.4$ & $-0.5$ & $-10.2$ & 2.6 \\
-North Carolina & $-0.29$ & $-0.01$ & $-1.8$ & 1.2 & $-11.4$ & 4.6 & $-7.1$ & 4.8 & $-10.5$ & 6.7 \\
-Michigan & $-0.22$ & $-0.03$ & 2.1 & 4.0 & $-10.9$ & 8.0 & $-12.3$ & 6.0 & $-8.4$ & 6.6 \\
-New Jersey & $-0.29$ & 0.04 & $-4.7$ & 9.1 & $-20.2$ & 7.7 & $-10.9$ & 13.5 & $-17.1$ & 20.4 \\
+California & $-0.15$ & 0.01 & $-4.2$ & 14.4 & $-15.7$ & 21.1 & $-7.6$ & 2.6 & $-13.8$ & 21.1 \\
+Texas & $-0.14$ & $-0.08$ & $-1.8$ & $-0.9$ & $-7.1$ & 5.0 & $-3.8$ & 1.2 & $-7.8$ & 2.5 \\
+New York & $-0.31$ & $-0.01$ & $-2.0$ & 4.6 & $-15.2$ & $-1.6$ & $-3.9$ & 2.0 & $-14.4$ & 3.5 \\
+Pennsylvania & $-0.24$ & 0.00 & $-5.0$ & 6.1 & $-18.8$ & 23.6 & $-12.1$ & 11.9 & $-16.3$ & 15.1 \\
+Illinois & $-0.24$ & $-0.06$ & $-3.3$ & 1.5 & $-14.2$ & 3.2 & $-6.5$ & 3.7 & $-12.1$ & 6.8 \\
+Ohio & $-0.26$ & $-0.02$ & $-7.0$ & 3.7 & $-15.6$ & 1.1 & $-8.0$ & 5.7 & $-14.3$ & 10.8 \\
+Georgia & $-0.27$ & $-0.08$ & $-1.7$ & $-1.2$ & $-10.7$ & 1.9 & $-1.1$ & 0.6 & $-10.0$ & 3.0 \\
+North Carolina & $-0.29$ & $-0.01$ & $-1.8$ & 1.2 & $-11.4$ & 4.6 & $-2.7$ & 2.8 & $-10.4$ & 7.0 \\
+Michigan & $-0.22$ & $-0.03$ & 2.1 & 4.0 & $-10.9$ & 8.0 & $-7.6$ & 5.7 & $-8.9$ & 7.9 \\
+New Jersey & $-0.29$ & 0.04 & $-4.7$ & 9.1 & $-20.2$ & 7.7 & $-7.0$ & 10.6 & $-17.7$ & 20.8 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -4260,7 +4177,9 @@ New Jersey & $-0.29$ & 0.04 & $-4.7$ & 9.1 & $-20.2$ & 7.7 & $-10.9$ & 13.5 & $-
 \begin{center}\small Table \thetable: The 10 pooled states up to the peaks
 (weeks $-7$ to 0) and after them (weeks 1 to 8): the base's bias (mean
 coverage minus $\alpha$; negative: too low) and the loss change versus the
-base (\%) (\path{agent/scripts/summary_state_phase.R}).
+base (\%), mean over the horizons and the three uncorrected designs; \texttt{phase\_angle}
+and \texttt{phase\_hidden} with the probabilities of
+Section~\ref{sec:phase-predictors} (\path{agent/scripts/production_phase/state_phase.R}).
 \end{center}
 
 \begin{itemize}[leftmargin=*,itemsep=3pt]
@@ -4280,12 +4199,12 @@ rise with the downward correction learned in the decline; where the
 undershoot dominates (California, Texas, Georgia) the correction of the
 rise wins. Illinois and Michigan do not fit.
 \item \textbf{With the phase} the rise gains in more states: up to the COVID
-peaks \texttt{phase\_oracle} gains in 7 states, \texttt{phase\_angle} in 7
-and \texttt{phase\_hidden} in 8, but after them only in 4, 2 and 1. For flu
+peaks \texttt{phase\_oracle} gains in 7 states, \texttt{phase\_angle} in 6
+and \texttt{phase\_hidden} in 7, but after them only in 4, 1 and 1. For flu
 the three gain up to the peak in every state and after it in at most one;
 the losses after flu peaks are largest in California, Pennsylvania and New
 Jersey (\texttt{phase\_oracle} $+21\%$, $+24\%$, $+8\%$;
-\texttt{phase\_hidden} $+21\%$, $+16\%$, $+20\%$).
+\texttt{phase\_hidden} $+21\%$, $+15\%$, $+21\%$).
 \item Hence the gain before and the loss after the peak are the same story
 in every state, but their size depends on the state's waves: a single
 correction cannot serve both phases, and the pooled numbers average states

@@ -182,7 +182,7 @@ print(available_then)
 #     forecast from May to November 2024, so the methods carry their state across that gap.
 # Peaks only label weeks in hindsight; they do not affect online feedback. A peak is a
 # local maximum of the scoring truth, the latest-reported weekly counts (with HHS reports:
-# the last HHS report for the weeks that have one; find_peaks() below): the largest
+# the last HHS report for the weeks that have one; find_peaks() in R/03): the largest
 # value within peak_halfwidth weeks on either side, whose counts fall by at least
 # peak_drop of its height on both sides before any higher week, by at least
 # peak_min_prominence of the location's largest forecast-week count, on the centred
@@ -289,37 +289,7 @@ prepare_settings <- list(base_model = base_model,
                              "2025-12-29"))),
                          horizons = -1:3, feedback_delays = 0:4, fill_gaps_up_to = 6L)
 
-# Peaks of a weekly series x: local maxima of its centred `smooth`-week mean s that are
-# the largest value of s within `halfwidth` weeks on either side (ties: the earliest) and
-# whose prominence is at least `drop` times their height and `min_prominence` times
-# `scale`. Prominence: the height above the higher of the two lowest points between the
-# week and the nearest higher week on each side (or the end of the series), so a
-# maximum at the end of the series has none. Each peak is placed at the largest x within
-# one week. Returns the rows of x and the relative prominence.
-find_peaks <- function(x, halfwidth = 8L, drop = .3, min_prominence = .1, smooth = 3L,
-                       scale = max(x)) {
-  n <- length(x)
-  s <- if (smooth > 1L) as.numeric(stats::filter(x, rep(1 / smooth, smooth), sides = 2)) else x
-  s[is.na(s)] <- x[is.na(s)]
-  prominence <- vapply(seq_len(n), function(i) {
-    higher_left <- which(s[seq_len(i - 1L)] > s[i])
-    higher_right <- i + which(s[i + seq_len(n - i)] > s[i])
-    left <- min(s[(if (length(higher_left)) max(higher_left) else 1L):i])
-    right <- min(s[i:(if (length(higher_right)) min(higher_right) else n)])
-    s[i] - max(left, right)
-  }, numeric(1))
-  local_max <- vapply(seq_len(n), function(i) {
-    around <- max(1L, i - halfwidth):min(n, i + halfwidth)
-    s[i] == max(s[around]) && !any(s[around[around < i]] == s[i])
-  }, logical(1))
-  top <- which(local_max & prominence > 0 & prominence >= drop * s &
-    prominence >= min_prominence * scale)
-  row <- vapply(top, function(i) {
-    near <- max(1L, i - 1L):min(n, i + 1L)
-    near[which.max(x[near])]
-  }, integer(1))
-  data.frame(row, relative_prominence = prominence[top] / s[top])
-}
+# find_peaks(): R/03 (section "PHASE AND BIAS PROBABILITIES"; also used by the phase model).
 # A missing horizon-h forecast of round r is filled with the latest earlier forecast
 # of the same target week: the horizon-(h + k) forecast issued k weeks earlier, with
 # the smallest k. It uses no information after r. Only gaps of at most max_gap

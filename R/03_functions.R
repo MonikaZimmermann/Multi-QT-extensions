@@ -1849,7 +1849,7 @@ parameter_source <- c(studentized_zero = "studentized", median_constant_zero = "
 # probability in the score").
 flip_methods <- c("power_flip", "level_flip", "width_flip")
 phase_methods <- c("phase_power", "phase_oracle")
-# Phase from outside data (R/05_phase_probabilities.R; since 17 November 2026).
+# Bias and phase probabilities (R/05_phase_probabilities.R; the models of 23 November 2026).
 outside_methods <- c("phase_angle", "phase_hidden")
 # Controls of phase_angle (20 November 2026; diagnostic, not in method_groups, so neither in
 # 06's tree nor in 04's trade-off pages; their page: diagnostic_groups): one power-scale
@@ -1932,7 +1932,8 @@ method_groups <- list(
   "Sign-flip experts" = c("original", "studentized_power", "studentized_level_rms",
     flip_methods, "polar"),
   "Two-phase trackers" = c("original", "studentized_power", phase_methods),
-  "Phase from outside data" = c("original", "phase_oracle", outside_methods, hindsight_hidden))
+  "Bias and phase probabilities" = c("original", "phase_oracle", outside_methods,
+    hindsight_hidden))
 # Only the methods that run: a group keeps its active methods and is dropped when only the
 # base and Fixed MultiQT are left.
 method_groups <- Filter(function(group) length(setdiff(group, c("original", "fixed"))) > 0L,
@@ -1964,7 +1965,7 @@ method_short_labels <- c(original = "Base", fixed = "Fixed MultiQT", leaky = "Le
   power_flip = "Sign-flip experts: power scale", level_flip = "Sign-flip experts: level RMS",
   width_flip = "Sign-flip experts: half the base IQR",
   phase_power = "Two-phase power scale (decline probability)",
-  phase_angle = "Angle + slow offset (bias probability, outside data)",
+  phase_angle = "Angle + slow offset (bias probability)",
   phase_hidden = "Hidden-phase model (three phases, outside data)",
   phase_oracle = "Two-phase power scale (phase in hindsight)",
   hidden_oracle = "Three phases (phase in hindsight)",
@@ -2009,7 +2010,7 @@ method_short_labels <- c(method_short_labels, unlist(lapply(names(scale_titles),
 # first group of method_groups that lists it, one shade per method; common-weight and outer
 # variants share their method's shade. Every method group needs a palette (an hcl.colors()
 # palette or one colour per method): methods of a group without one get no colour and are
-# not drawn. The phase methods from outside data in amber and violet, hues no other method
+# not drawn. The bias and phase probability methods in amber and violet, hues no other method
 # has: in shades of one palette they could not be told apart from each other and from the
 # phase oracle drawn with them.
 group_palettes <- list("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
@@ -2019,7 +2020,7 @@ group_palettes <- list("Single trackers" = "Blues 3", "Log1p tracker" = "Earth",
   "Studentized full base" = "BluGrn", "Power scale" = "Peach",
   "Spread scale" = "Purp", "Leak chosen online" = "Reds 3", "Sign-flip experts" = "Magenta",
   "Two-phase trackers" = "Dark Mint",
-  "Phase from outside data" = c(phase_angle = "#E69F00", phase_hidden = "#7815C4",
+  "Bias and phase probabilities" = c(phase_angle = "#E69F00", phase_hidden = "#7815C4",
     hidden_oracle = "#C9A0F0"))
 home_group <- local({
   home <- character()
@@ -2383,8 +2384,8 @@ apply_methods <- function(case, settings, params = method_parameters(), methods 
     if (want("phase_oracle")) predictions$phase_oracle <- phase(ifelse(
       is.finite(case$relative_week), as.numeric(case$relative_week > 0), .5))
   }
-  # Phase from outside data (R/05_phase_probabilities.R; notes, "The angle from a phase
-  # probability", "Weather, holidays and the hidden-phase model"), on the power scale at the
+  # Bias and phase probabilities (R/05_phase_probabilities.R; notes, "The angle from a phase
+  # probability", "Bias and phase probabilities"), on the power scale at the
   # adaptive rate of phase_power: phase_angle, the angle with the probability that the base is
   # too high plus a slow per-level offset (phase_slow); phase_hidden, three free phases with the
   # hidden-phase model's probabilities, learned with the probabilities as known when each
@@ -2649,4 +2650,1119 @@ cached <- function(name, fun, ...) {
   saveRDS(value, temporary)
   file.rename(temporary, file)
   value
+}
+
+# PHASE AND BIAS PROBABILITIES (R/05_phase_probabilities.R; notes, "Bias and phase
+# probabilities") -------------------------------------------------------------------------
+# The inputs of phase_angle (p_t, the probability that the report falls below the base median)
+# and phase_hidden (P_t^k and W_{s,t}^k, the probabilities of the phases rise, overshoot, tail),
+# computed by R/05 at every issuance cutoff of the base from what is known then, for the pooled
+# locations. Every function takes the data it uses as arguments (`pp`, the list built by R/05:
+# states, incomplete, reports, nssp, nrevss, erviss); none reads files or global data.
+#   bias   one binomial GAM per disease and base (G0): logit p = Xlin beta + f(year_phase) +
+#          f(g1) + a_state, refitted at every cutoff on the labels known then; the label is the
+#          report as of target-week end + 11 days (COVID) or + 4 days (flu);
+#   phase  a hidden semi-Markov chain (40 rise ages, 4 overshoot weeks, 40 tail ages), reset at
+#          reporting gaps, with disease-specific transitions and observations: COVID, exit hazards
+#          from the durations of the European waves (ERVISS) and conditional-growth GAMs of the
+#          hospital and NSSP growth (O2) at the NSSP lead chosen per 13-week block from earlier
+#          blocks; flu, exit-hazard GAMs of duration and calendar on the completed episodes of the
+#          hospital reports and NREVSS, and phase-mean Gaussians of both growths at lead 0 (O1).
+pp_classes <- c("rise", "over", "tail")
+pp_settings <- list(
+  label_days = c(covid = 11, flu = 4),          # Label: report as of target-week end + days.
+  clip = .02,                                   # Operational p_t in [.02, .98].
+  bias_terms = c("base_growth", "horizon", "hol_break", "hol_post", "hol_thanks"),
+  bias_rule = list(min_n = 200, min_class = 20, min_weeks = 8, min_states = 3,
+    max_coef_ratio = .2),
+  bias_distinct = list(year_phase = 12, g1 = 8),
+  peak = list(halfwidth = 8L, drop = .3, min_prominence = .1, smooth = 3L, min_age = 56,
+    pair_age = 84),
+  D = 40L, ahead = 6L, window_weeks = 80L,
+  hazard_rule = list(min_events = 20L, min_nonevents = 20L, min_states = 3L,
+    min_span_days = 730, min_ages = 4L, min_year_phase = 12L),
+  hazard_clip = 1e-6,
+  sd_floor = .05, min_rows = 20L, min_lag_distinct = 8L, rho_prior = 50, rho_cap = .9,
+  nrevss_lag = 14, erviss_known = 182, erviss_min_weeks = 100, erviss_min_median = 5,
+  covid_variants = paste0("O2_L", 0:2), flu_variant = "O1_L0", block_weeks = 13L)
+
+# Peaks of a weekly series x: local maxima of its centred `smooth`-week mean s that are
+# the largest value of s within `halfwidth` weeks on either side (ties: the earliest) and
+# whose prominence is at least `drop` times their height and `min_prominence` times
+# `scale`. Prominence: the height above the higher of the two lowest points between the
+# week and the nearest higher week on each side (or the end of the series), so a
+# maximum at the end of the series has none. Each peak is placed at the largest x within
+# one week. Returns the rows of x and the relative prominence. (R/01's peaks and the episodes
+# of the phase model.)
+find_peaks <- function(x, halfwidth = 8L, drop = .3, min_prominence = .1, smooth = 3L,
+                       scale = max(x)) {
+  n <- length(x)
+  s <- if (smooth > 1L) as.numeric(stats::filter(x, rep(1 / smooth, smooth), sides = 2)) else x
+  s[is.na(s)] <- x[is.na(s)]
+  prominence <- vapply(seq_len(n), function(i) {
+    higher_left <- which(s[seq_len(i - 1L)] > s[i])
+    higher_right <- i + which(s[i + seq_len(n - i)] > s[i])
+    left <- min(s[(if (length(higher_left)) max(higher_left) else 1L):i])
+    right <- min(s[i:(if (length(higher_right)) min(higher_right) else n)])
+    s[i] - max(left, right)
+  }, numeric(1))
+  local_max <- vapply(seq_len(n), function(i) {
+    around <- max(1L, i - halfwidth):min(n, i + halfwidth)
+    s[i] == max(s[around]) && !any(s[around[around < i]] == s[i])
+  }, logical(1))
+  top <- which(local_max & prominence > 0 & prominence >= drop * s &
+    prominence >= min_prominence * scale)
+  row <- vapply(top, function(i) {
+    near <- max(1L, i - 1L):min(n, i + 1L)
+    near[which.max(x[near])]
+  }, integer(1))
+  data.frame(row, relative_prominence = prominence[top] / s[top])
+}
+
+# REPORTS AS KNOWN AT A DATE --------------------------------------------------------------------
+# r: the versions of one disease and location (target_end_date, version, value; a masked
+# version has value NA and stays, so it is never replaced by an older one).
+# The reports known at `date`: the latest version per target week.
+report_known_at <- function(r, date) {
+  r <- r[r$version <= date, ]
+  r <- r[!duplicated(r$target_end_date, fromLast = TRUE), ]
+  r[order(r$target_end_date), c("target_end_date", "value")]
+}
+# Value of the targets `target` as of the dates `date` (one each): the latest version by then.
+report_value_at <- function(r, target, date) {
+  idx <- split(seq_len(nrow(r)), as.numeric(r$target_end_date))
+  vapply(seq_along(target), function(i) {
+    j <- idx[[as.character(as.numeric(target[i]))]]
+    if (is.null(j)) return(NA_real_)
+    k <- findInterval(as.numeric(date[i]), as.numeric(r$version[j]))
+    if (k == 0L) NA_real_ else r$value[j][k]
+  }, numeric(1))
+}
+# Known at `date` with a value (a masked latest version leaves its week out); _complete also
+# without the weeks of incomplete reporting (pp$incomplete, inclusive).
+pp_known_valid <- function(r, date) {
+  x <- report_known_at(r, date)
+  x[is.finite(x$value), ]
+}
+pp_known_complete_valid <- function(pp, r, date) {
+  x <- report_known_at(r, date)
+  x <- x[x$target_end_date < pp$incomplete[1] | x$target_end_date > pp$incomplete[2], ]
+  x[is.finite(x$value), ]
+}
+# Revision shift at a cutoff: for the ages a = 0, 1, 2 weeks after the newest report (lag_days
+# after its target week), the median of log1p(now) - log1p(at that age) over the reports of the
+# pooled states whose target week lies 9 to 61 weeks before the cutoff and after the weeks of
+# incomplete reporting; 0 with fewer than 8 such pairs. Added to log1p of the newest three
+# reports (a = 0 the newest).
+pp_revision_shift <- function(pp, disease, cutoff, lag_days) {
+  vapply(0:2, function(a) {
+    d <- unlist(lapply(pp$states, function(l) {
+      r <- pp$reports[[paste(disease, l)]]
+      targets <- unique(r$target_end_date[r$target_end_date <= cutoff - 63 &
+        r$target_end_date > cutoff - 63 - 364 & r$target_end_date > pp$incomplete[2]])
+      if (!length(targets)) return(NULL)
+      now <- report_value_at(r, targets, rep(cutoff, length(targets)))
+      young <- report_value_at(r, targets, targets + lag_days + 7 * a)
+      log1p(now) - log1p(young)
+    }))
+    d <- d[is.finite(d)]
+    if (length(d) < 8L) 0 else median(d)
+  }, numeric(1))
+}
+# Report age of the newest report at a cutoff (days from its target week end), from the first
+# pooled state: with all versions (bias inputs) or without incomplete weeks (phase series).
+pp_lag <- function(pp, disease, cutoff) {
+  r <- pp_known_valid(pp$reports[[paste(disease, pp$states[1])]], cutoff)
+  as.numeric(cutoff - max(r$target_end_date))
+}
+pp_hidden_shift <- function(pp, disease, cutoff) {
+  lag <- as.numeric(cutoff - max(pp_known_complete_valid(pp,
+    pp$reports[[paste(disease, pp$states[1])]], cutoff)$target_end_date))
+  pp_revision_shift(pp, disease, cutoff, lag)
+}
+# Holidays of target weeks ending t: hol_break, the share of the week's 7 days in 22 December -
+# 3 January; hol_post, the week ends 1-21 days after 3 January; hol_thanks, it ends 0-6 days
+# after the fourth Thursday of November.
+holiday_covariates <- function(t) {
+  in_break <- function(d) { md <- format(d, "%m-%d"); md >= "12-22" | md <= "01-03" }
+  jan3 <- as.Date(paste0(format(t, "%Y"), "-01-03"))
+  thanksgiving <- vapply(as.integer(format(t, "%Y")), function(y) {
+    nov <- as.Date(paste0(y, "-11-01")) + 0:29
+    as.numeric(nov[format(nov, "%u") == "4"][4])
+  }, numeric(1))
+  days <- matrix(vapply(0:6, function(k) in_break(t - k), logical(length(t))), length(t), 7)
+  data.frame(hol_break = rowMeans(days),
+    hol_post = as.numeric(as.numeric(t - jan3) %in% 1:21),
+    hol_thanks = as.numeric((as.numeric(t) - thanksgiving) %in% 0:6))
+}
+# Fraction of the calendar year elapsed at date d (days since 1 January over the days of the year).
+year_phase <- function(d) {
+  y <- as.integer(format(d, "%Y"))
+  start <- as.Date(paste0(y, "-01-01")); end <- as.Date(paste0(y + 1L, "-01-01"))
+  as.numeric(d - start) / as.numeric(end - start)
+}
+
+# BIAS PROBABILITY ------------------------------------------------------------------------------
+# The rows of every case (pooled states, every horizon of the base): base growth (horizon-3 minus
+# horizon-0 base median of the reference week, log1p), the label B = 1{report as of target +
+# label_days < base median} (missing when no report or a masked one), the mature label (latest
+# report; evaluation only), holidays, year_phase, and g1 at R/05's feature cutoffs (the cutoffs of
+# the horizon-0 cases): the newest weekly growth of the revision-shifted log1p reports known at
+# the cutoff, with at least four reports and the newest two 7 days apart.
+pp_bias_rows <- function(pp, prepared, horizons, label_days = pp_settings$label_days,
+                         cores = 1L) {
+  med <- 12L
+  grid <- expand.grid(disease = c("covid", "flu"), location = pp$states, horizon = horizons,
+    stringsAsFactors = FALSE)
+  rows <- do.call(rbind, parallel::mclapply(seq_len(nrow(grid)), function(i) {
+    disease <- grid$disease[i]; location <- grid$location[i]; horizon <- grid$horizon[i]
+    case <- get_case(prepared, disease, location, horizon, 0L, FALSE)
+    stopifnot(case$alpha[med] == .5)
+    h <- case$context_forecasts
+    h <- h[!is.na(h$as_of) & is.finite(h$median) & h$median >= 0, ]
+    m <- function(ref, hz) log1p(h$median[match(paste(ref, hz), paste(h$reference_date,
+      h$horizon))])
+    r <- pp$reports[[paste(disease, location)]]
+    label_date <- case$target_date + label_days[[disease]]
+    now <- report_value_at(r, case$target_date, label_date)
+    latest <- report_value_at(r, case$target_date, rep(as.Date("2100-01-01"),
+      length(case$target_date)))
+    data.frame(disease, location, horizon, row = seq_len(nrow(case$base)),
+      reference_date = case$reference_date, target_date = case$target_date,
+      cutoff = case$as_of, period = case$period,
+      base_growth = m(case$reference_date, 3) - m(case$reference_date, 0), label_date,
+      label_report = now, base_median = case$base[, med],
+      bias = as.numeric(now < case$base[, med]), bias_mature = as.numeric(latest <
+        case$base[, med]), holiday_covariates(case$target_date),
+      year_phase = year_phase(case$target_date))
+  }, mc.cores = cores))
+  jobs <- do.call(rbind, lapply(c("covid", "flu"), function(d) data.frame(disease = d,
+    cutoff = sort(unique(do.call(c, lapply(pp$states, function(l)
+      prepared$cases[[paste(d, l, 0, sep = "_")]]$as_of)))))))
+  shifts <- parallel::mclapply(seq_len(nrow(jobs)), function(i) pp_revision_shift(pp,
+    jobs$disease[i], jobs$cutoff[i], pp_lag(pp, jobs$disease[i], jobs$cutoff[i])),
+    mc.cores = cores)
+  shift_of <- setNames(shifts, paste(jobs$disease, jobs$cutoff))
+  feats <- merge(jobs, data.frame(location = pp$states), by = NULL)
+  feats$g1 <- unlist(parallel::mclapply(seq_len(nrow(feats)), function(i) {
+    r <- pp_known_valid(pp$reports[[paste(feats$disease[i], feats$location[i])]],
+      feats$cutoff[i])
+    last <- nrow(r)
+    if (last < 4L) return(NA_real_)
+    shift <- shift_of[[paste(feats$disease[i], feats$cutoff[i])]]
+    y <- log1p(r$value[last - 0:3]) + c(shift, shift[3])
+    if (as.numeric(r$target_end_date[last] - r$target_end_date[last - 1]) != 7) NA_real_
+    else y[1] - y[2]
+  }, mc.cores = cores))
+  rows <- merge(rows, feats, by = c("disease", "location", "cutoff"), all.x = TRUE, sort = FALSE)
+  rows <- rows[order(rows$disease, rows$location, rows$horizon, rows$row), ]
+  rownames(rows) <- NULL
+  list(rows = rows, shifts = shift_of)
+}
+# Runs expr, recording every warning (text) and an error instead of stopping.
+capture <- function(expr) {
+  warnings <- character()
+  value <- withCallingHandlers(tryCatch(expr, error = function(e) structure(conditionMessage(e),
+    class = "capture_error")), warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w)); invokeRestart("muffleWarning") })
+  error <- if (inherits(value, "capture_error")) as.character(value) else NA_character_
+  if (!is.na(error)) value <- NULL
+  list(value = value, warnings = unique(warnings), error = error)
+}
+# Linear design columns and their training-only standardization (columns with sd <= 1e-10 of the
+# training rows are dropped and recorded).
+numeric_design <- function(data, terms) {
+  X <- vapply(terms, function(term) {
+    parts <- strsplit(term, ":", fixed = TRUE)[[1]]
+    Reduce(`*`, lapply(parts, function(v) as.numeric(data[[v]])))
+  }, numeric(nrow(data)))
+  if (is.null(dim(X))) X <- matrix(X, nrow(data), length(terms), dimnames = list(NULL, terms))
+  X
+}
+fit_scaler <- function(X) {
+  if (!ncol(X)) return(list(centre = numeric(), scale = numeric(), columns = character(),
+    dropped = character()))
+  centre <- colMeans(X)
+  scale <- apply(X, 2, sd)
+  keep <- is.finite(scale) & scale > 1e-10
+  list(centre = centre[keep], scale = scale[keep], columns = colnames(X)[keep],
+    dropped = colnames(X)[!keep])
+}
+apply_scaler <- function(s, X) {
+  X <- X[, s$columns, drop = FALSE]
+  sweep(sweep(X, 2, s$centre, "-"), 2, s$scale, "/")
+}
+# Eligibility of the training rows: both labels with min_class rows each, min_n rows, min_weeks
+# target weeks, min_states states and the distinct values of the listed smooth variables.
+train_check <- function(train, rule, y = "bias", week = "target_date", state = "location",
+                        distinct = NULL) {
+  n <- nrow(train)
+  ones <- sum(train[[y]] == 1); zeros <- sum(train[[y]] == 0)
+  why <- character()
+  if (n < rule$min_n) why <- c(why, sprintf("rows %d < %d", n, rule$min_n))
+  if (min(ones, zeros) < rule$min_class) why <- c(why, sprintf("smaller class %d < %d",
+    min(ones, zeros), rule$min_class))
+  weeks <- length(unique(train[[week]]))
+  if (weeks < rule$min_weeks) why <- c(why, sprintf("target weeks %d < %d", weeks, rule$min_weeks))
+  states <- length(unique(train[[state]]))
+  if (states < rule$min_states) why <- c(why, sprintf("states %d < %d", states, rule$min_states))
+  for (v in names(distinct)) {
+    k <- length(unique(train[[v]]))
+    if (k < distinct[[v]]) why <- c(why, sprintf("distinct %s %d < %d", v, k, distinct[[v]]))
+  }
+  list(ok = !length(why), reason = paste(why, collapse = "; "), n = n, ones = ones,
+    zeros = zeros, weeks = weeks, states = states)
+}
+# Coefficients, smoothing parameters, edf per term (Xlin summed), penalty ranks of a GAM.
+gam_summary <- function(m) {
+  labels <- vapply(m$smooth, function(s) s$label, "")
+  edf <- setNames(vapply(m$smooth, function(s) sum(m$edf[s$first.para:s$last.para]), 1), labels)
+  lin <- grep("^Xlin", names(coef(m)))
+  list(coef = coef(m), sp = m$sp, edf = c(Xlin = sum(m$edf[lin]), edf), edf_total = sum(m$edf),
+    penalty_rank = setNames(vapply(m$smooth, function(s) sum(vapply(s$S, function(S)
+      qr(S)$rank, 1)), 1), labels),
+    n_coef_smooth = setNames(vapply(m$smooth, function(s) s$last.para - s$first.para + 1, 1),
+      labels),
+    design_rank = qr(model.matrix(m))$rank, n_coef = length(coef(m)),
+    outer = if (is.null(m$outer.info$conv)) NA_character_ else m$outer.info$conv)
+}
+# The bias GAM: B ~ Xlin + s(year_phase, cc, 6) + s(g1, cr, 4) + s(state, re), binomial, logit,
+# REML, select = TRUE, cyclic year_phase on [0, 1], Xlin the standardized linear terms with an
+# identity (ridge) penalty whose strength REML estimates; an unpenalized intercept.
+pp_bias_formula <- B ~ Xlin + s(year_phase, bs = "cc", k = 6) + s(g1, bs = "cr", k = 4) +
+  s(state, bs = "re")
+pp_bias_data <- function(data, states, scaler = NULL) {
+  X <- numeric_design(data, pp_settings$bias_terms)
+  if (is.null(scaler)) scaler <- fit_scaler(X)
+  d <- data.frame(B = if (is.null(data$bias)) NA_real_ else data$bias,
+    year_phase = data$year_phase, g1 = data$g1, state = factor(data$location, levels = states))
+  d$Xlin <- apply_scaler(scaler, X)
+  list(data = d, scaler = scaler)
+}
+pp_bias_gam <- function(train, states, max_coef_ratio = pp_settings$bias_rule$max_coef_ratio) {
+  g <- pp_bias_data(train, states)
+  p <- ncol(g$data$Xlin)
+  if (!p) return(list(error = "no non-constant linear column", warnings = character()))
+  r <- capture(mgcv::gam(pp_bias_formula, family = binomial(link = "logit"), data = g$data,
+    method = "REML", select = TRUE, knots = list(year_phase = c(0, 1)),
+    paraPen = list(Xlin = list(diag(p))), drop.unused.levels = FALSE))
+  m <- r$value
+  if (!is.null(m)) {
+    conv <- m$outer.info$conv
+    if (!isTRUE(m$converged)) r$error <- "inner iteration did not converge"
+    else if (!is.null(conv) && !conv %in% c("full convergence", "step failed"))
+      r$error <- paste("outer:", conv)
+    else if (length(coef(m)) > max_coef_ratio * nrow(train))
+      r$error <- sprintf("%d coefficients > %.2f x %d rows", length(coef(m)), max_coef_ratio,
+        nrow(train))
+    else if (!all(is.finite(coef(m)))) r$error <- "non-finite coefficients"
+    if (!is.null(conv) && conv == "step failed")
+      r$warnings <- c(r$warnings, "outer REML step failed (smoothing parameter at a boundary)")
+  }
+  list(fit = if (is.na(r$error)) m else NULL, scaler = g$scaler, states = states,
+    train_states = sort(unique(train$location)), warnings = r$warnings, error = r$error)
+}
+# Prediction; a state without training rows gets zero state deviation.
+pp_bias_predict <- function(obj, newdata) {
+  g <- pp_bias_data(newdata, obj$states, obj$scaler)
+  labels <- vapply(obj$fit$smooth, function(s) s$label, "")
+  st <- labels[grepl("state", labels)]
+  eta <- predict(obj$fit, g$data, type = "link")
+  unseen <- !newdata$location %in% obj$train_states
+  if (any(unseen)) eta[unseen] <- predict(obj$fit, g$data[unseen, , drop = FALSE],
+    type = "link", exclude = st)
+  as.numeric(plogis(eta))
+}
+# One disease at one issuance cutoff: trained on the rows issued before the cutoff whose label has
+# arrived (label_date <= cutoff) and whose inputs are complete; predicted for the rows issued at
+# the cutoff. Ineligible or failed fit, or missing prediction inputs: the smoothed label frequency
+# (sum B + 1) / (n + 2) over every label known by then (1/2 before any). p_raw and the operational
+# p (clipped to [.02, .98]), source ("gam" / "frequency"), reason, record, object (keep).
+pp_bias_fit_at <- function(rows, disease, cutoff, states, keep = FALSE) {
+  x <- rows$disease == disease
+  inputs <- c("year_phase", pp_settings$bias_terms, "g1")
+  complete <- Reduce(`&`, lapply(inputs, function(v) is.finite(rows[[v]])))
+  labels <- which(x & is.finite(rows$bias) & rows$label_date <= cutoff & rows$cutoff < cutoff)
+  train <- rows[labels[complete[labels]], ]
+  now <- which(x & rows$cutoff == cutoff)
+  frequency <- (sum(rows$bias[labels]) + 1) / (length(labels) + 2)
+  chk <- train_check(train, pp_settings$bias_rule, distinct = pp_settings$bias_distinct)
+  record <- data.frame(disease, cutoff, labels_available = length(labels), frequency,
+    n = chk$n, ones = chk$ones, zeros = chk$zeros, target_weeks = chk$weeks,
+    states = chk$states, eligible = chk$ok, reason = chk$reason, fitted = FALSE,
+    error = NA_character_, warnings = "", dropped_columns = "", n_coef = NA_integer_, edf = "",
+    sp = "", outer = NA_character_, issued_rows = length(now),
+    complete_issued_rows = sum(complete[now]))
+  stopifnot(!nrow(train) || (max(train$label_date) <= cutoff && max(train$cutoff) < cutoff))
+  p <- rep(NA_real_, length(now))
+  why <- rep(if (!chk$ok) paste("training rows:", chk$reason) else "", length(now))
+  obj <- NULL
+  if (chk$ok) {
+    obj <- pp_bias_gam(train, states)
+    record$warnings <- paste(obj$warnings, collapse = "; ")
+    record$dropped_columns <- paste(obj$scaler$dropped, collapse = " ")
+    if (!is.null(obj$fit)) {
+      use <- complete[now]
+      pg <- if (any(use)) pp_bias_predict(obj, rows[now[use], ]) else numeric()
+      if (!all(is.finite(pg))) obj$error <- "non-finite predictions" else {
+        p[use] <- pg
+        why[!use] <- "prediction inputs missing"
+        s <- gam_summary(obj$fit)
+        record$fitted <- TRUE
+        record$n_coef <- s$n_coef
+        record$edf <- paste(sprintf("%s=%.3g", names(s$edf), s$edf), collapse = " ")
+        record$sp <- paste(sprintf("%s=%.4g", names(obj$fit$sp), obj$fit$sp), collapse = " ")
+        record$outer <- s$outer
+      }
+    }
+    if (is.null(obj$fit) || !is.na(obj$error)) {
+      record$error <- obj$error
+      why[] <- paste("fit failed:", obj$error)
+      p[] <- NA_real_
+    }
+  }
+  source <- ifelse(is.finite(p), "gam", "frequency")
+  p_raw <- ifelse(is.finite(p), p, frequency)
+  list(record = record, rows = now, p_raw = p_raw,
+    p = pmin(pmax(p_raw, pp_settings$clip), 1 - pp_settings$clip), source = source,
+    reason = why, object = if (keep && record$fitted) obj)
+}
+
+# PHASE PROBABILITIES: SERIES AND EPISODES ---------------------------------------------------------
+# One disease and state as known at the cutoff: the complete weeks (incomplete reporting and
+# masked versions left out), x = log1p(count) with the newest three shifted by the revision
+# shift, contiguous weekly segments, growth G = diff(x) within a segment, holidays, year_phase.
+pp_series <- function(pp, disease, location, cutoff, shift) {
+  s <- pp_known_complete_valid(pp, pp$reports[[paste(disease, location)]], cutoff)
+  s$x <- log1p(s$value)
+  n <- nrow(s)
+  if (n >= 3L) s$x[n - 0:2] <- s$x[n - 0:2] + shift
+  gap <- c(TRUE, diff(as.numeric(s$target_end_date)) != 7)[seq_len(n)]
+  s$segment <- cumsum(gap)
+  s$growth <- c(NA, diff(s$x))[seq_len(n)]
+  s$growth[gap] <- NA
+  h <- holiday_covariates(s$target_end_date)
+  s$hol_break <- h$hol_break
+  s$hol_post <- h$hol_post
+  s$year_phase <- year_phase(s$target_end_date)
+  s
+}
+# Peaks within each contiguous segment (find_peaks(value, 8, .3, .1, 3, scale = the segment's
+# maximum); a segment shorter than 3 weeks has none), at least 56 days old at the cutoff.
+pp_peaks <- function(s, cutoff, peak = pp_settings$peak) {
+  out <- lapply(unique(s$segment), function(g) {
+    k <- which(s$segment == g)
+    v <- s$value[k]
+    if (length(v) < 3L || !any(v > 0)) return(NULL)
+    rows <- find_peaks(v, peak$halfwidth, peak$drop, peak$min_prominence, peak$smooth,
+      scale = max(v))$row
+    if (!length(rows)) return(NULL)
+    data.frame(week = s$target_end_date[k[rows]], segment = g)
+  })
+  p <- do.call(rbind, out)
+  if (is.null(p)) return(data.frame(week = as.Date(character()), segment = integer()))
+  p[p$week <= cutoff - peak$min_age, ]
+}
+# Adjacent retained peaks a < b give one completed tail episode (a + 35 .. m, exit at m) and one
+# completed rise episode (m + 7 .. b, exit at b), m = a + 7 floor((b - a) / 14) days; overshoot a + 7
+# .. a + 28. Admitted only if a and b lie in one segment, b <= t - 84 and m >= a + 35.
+pp_pairs <- function(peaks, cutoff, pair_age = pp_settings$peak$pair_age) {
+  if (nrow(peaks) < 2L) return(data.frame(a = as.Date(character()), b = as.Date(character()),
+    m = as.Date(character()), admitted = logical(), reason = character()))
+  peaks <- peaks[order(peaks$week), ]
+  a <- peaks$week[-nrow(peaks)]; b <- peaks$week[-1]
+  m <- a + 7 * floor(as.numeric(b - a) / 14)
+  reason <- ifelse(peaks$segment[-nrow(peaks)] != peaks$segment[-1], "gap between the peaks",
+    ifelse(b > cutoff - pair_age, "second peak less than 84 days old",
+      ifelse(m < a + 35, "peaks too close (midpoint before week 5 after the first)", "")))
+  data.frame(a, b, m, admitted = reason == "", reason)
+}
+# Labelled weeks and risk rows of the admitted pairs of one series s. Risk rows: every week of an
+# episode with its age d (1 = first week), the capped age min(d, D), the year fraction of the
+# risk week and event = 1 only in the episode's last week (the exit at the end of that week).
+pp_episode_rows <- function(s, pairs, location, D = pp_settings$D) {
+  pairs <- pairs[pairs$admitted, , drop = FALSE]
+  if (!nrow(pairs)) return(list(labels = NULL, risk = NULL))
+  labels <- list(); risk <- list()
+  for (i in seq_len(nrow(pairs))) {
+    a <- pairs$a[i]; b <- pairs$b[i]; m <- pairs$m[i]
+    over <- a + 7 * (1:4)
+    tail <- seq(a + 35, m, by = 7)
+    rise <- seq(m + 7, b, by = 7)
+    weeks <- c(over, tail, rise)
+    stopifnot(all(weeks %in% s$target_end_date))
+    labels[[i]] <- data.frame(location, pair = i, week = weeks,
+      phase = factor(rep(c("over", "tail", "rise"), c(4L, length(tail), length(rise))),
+        pp_classes))
+    episode <- function(w, phase) data.frame(location, pair = i, phase, week = w,
+      age = seq_along(w), age_cap = pmin(seq_along(w), D),
+      year_phase = year_phase(w), event = as.numeric(seq_along(w) == length(w)))
+    risk[[i]] <- rbind(episode(tail, "tail"), episode(rise, "rise"))
+  }
+  labels <- do.call(rbind, labels)
+  k <- match(labels$week, s$target_end_date)
+  labels <- cbind(labels, s[k, c("growth", "hol_break", "hol_post")])
+  list(labels = labels, risk = do.call(rbind, risk))
+}
+# An outside series (NREVSS) as known at the cutoff: the weeks at least `lag` days old with a
+# value, contiguous weekly segments.
+pp_long_series <- function(x, cutoff, lag) {
+  x <- x[x$target_end_date <= cutoff - lag & is.finite(x$value), ]
+  gap <- c(TRUE, diff(as.numeric(x$target_end_date)) != 7)[seq_len(nrow(x))]
+  data.frame(target_end_date = x$target_end_date, value = x$value, segment = cumsum(gap),
+    growth = rep(NA_real_, nrow(x)), hol_break = rep(NA_real_, nrow(x)),
+    hol_post = rep(NA_real_, nrow(x)))
+}
+# The NREVSS episode risk rows at a cutoff (same episode rules), series ids "nrevss:<state>".
+pp_nrevss_risk <- function(pp, cutoff, D = pp_settings$D) {
+  risk <- list(); log <- list()
+  for (id in names(pp$nrevss)) {
+    s <- pp_long_series(pp$nrevss[[id]], cutoff, pp_settings$nrevss_lag)
+    if (nrow(s) < 3L) next
+    pr <- pp_pairs(pp_peaks(s, cutoff), cutoff)
+    sid <- paste0("nrevss:", id)
+    if (nrow(pr)) log[[id]] <- cbind(location = sid, pr)
+    risk[[id]] <- pp_episode_rows(s, pr, sid, D)$risk
+  }
+  list(risk = do.call(rbind, risk), pairs = do.call(rbind, log))
+}
+
+# PHASE PROBABILITIES: TRANSITIONS --------------------------------------------------------------
+# Exit hazards of one phase from its risk rows: the GAM event ~ s(age_cap, cr, 4) +
+# s(year_phase, cc, 6), binomial, REML, select = TRUE, cyclic on [0, 1], when eligible (20
+# events, 20 non-events, 3 series, a 730-day span, 4 capped ages, 12 year fractions, a full-rank
+# design, a converged fit); else the constant (E + 1) / (N + 2) when both classes exist; else
+# unavailable.
+pp_hazard_fit <- function(risk, rule = pp_settings$hazard_rule) {
+  E <- sum(risk$event); N <- nrow(risk)
+  rec <- data.frame(events = E, risk_rows = N, nonevents = N - E,
+    states = length(unique(risk$location)),
+    span_days = if (N) as.numeric(max(risk$week) - min(risk$week)) else 0,
+    first_week = if (N) min(risk$week) else as.Date(NA),
+    last_week = if (N) max(risk$week) else as.Date(NA),
+    distinct_ages = length(unique(risk$age_cap)),
+    distinct_year_phase = length(unique(risk$year_phase)),
+    max_age = if (N) max(risk$age) else NA_integer_,
+    episodes = length(unique(paste(risk$location, risk$pair))),
+    kind = NA_character_, reason = "", error = NA_character_, warnings = "",
+    edf_age = NA_real_, edf_year_phase = NA_real_, sp = "", constant = NA_real_)
+  if (E == 0L || N - E == 0L) {
+    rec$kind <- "unavailable"
+    rec$reason <- "no events or no non-events"
+    return(list(record = rec))
+  }
+  rec$constant <- (E + 1) / (N + 2)
+  why <- character()
+  if (E < rule$min_events) why <- c(why, sprintf("events %d < 20", E))
+  if (N - E < rule$min_nonevents) why <- c(why, sprintf("non-events %d < 20", N - E))
+  if (rec$states < rule$min_states) why <- c(why, sprintf("states %d < 3", rec$states))
+  if (rec$span_days < rule$min_span_days)
+    why <- c(why, sprintf("span %.0f days < 730", rec$span_days))
+  if (rec$distinct_ages < rule$min_ages)
+    why <- c(why, sprintf("distinct ages %d < 4", rec$distinct_ages))
+  if (rec$distinct_year_phase < rule$min_year_phase)
+    why <- c(why, sprintf("distinct year fractions %d < 12", rec$distinct_year_phase))
+  fit <- NULL
+  if (!length(why)) {
+    d <- data.frame(event = risk$event, age_cap = risk$age_cap, year_phase = risk$year_phase)
+    r <- capture(mgcv::gam(event ~ s(age_cap, bs = "cr", k = 4) +
+      s(year_phase, bs = "cc", k = 6), family = binomial(link = "logit"), data = d,
+      method = "REML", select = TRUE, knots = list(year_phase = c(0, 1))))
+    m <- r$value
+    if (!is.null(m)) {
+      X <- model.matrix(m)
+      if (qr(X)$rank < ncol(X)) r$error <- sprintf("design rank %d < %d", qr(X)$rank, ncol(X))
+      else if (!isTRUE(m$converged)) r$error <- "inner iteration did not converge"
+      else if (!all(is.finite(coef(m)))) r$error <- "non-finite coefficients"
+    }
+    rec$warnings <- paste(r$warnings, collapse = "; ")
+    if (is.na(r$error)) {
+      fit <- m
+      labels <- vapply(m$smooth, function(s) s$label, "")
+      edf <- vapply(m$smooth, function(s) sum(m$edf[s$first.para:s$last.para]), 1)
+      rec$edf_age <- edf[labels == "s(age_cap)"]
+      rec$edf_year_phase <- edf[labels == "s(year_phase)"]
+      rec$sp <- paste(sprintf("%s=%.4g", names(m$sp), m$sp), collapse = " ")
+    } else {
+      rec$error <- r$error
+      why <- paste("fit failed:", r$error)
+    }
+  }
+  rec$kind <- if (!is.null(fit)) "gam" else "constant"
+  rec$reason <- paste(why, collapse = "; ")
+  list(record = rec, fit = fit)
+}
+# Hazards h[d, week] (rows: ages 1..D; columns: weeks), raw and clipped to [1e-6, 1 - 1e-6].
+pp_hazard_grid <- function(h, weeks, D = pp_settings$D) {
+  if (h$record$kind == "gam") {
+    nd <- expand.grid(age_cap = pmin(seq_len(D), D), week = seq_along(weeks))
+    nd$year_phase <- year_phase(weeks[nd$week])
+    raw <- matrix(as.numeric(predict(h$fit, nd, type = "response")), D, length(weeks))
+  } else raw <- matrix(h$record$constant, D, length(weeks))
+  c0 <- pp_settings$hazard_clip
+  list(raw = raw, h = pmin(pmax(raw, c0), 1 - c0))
+}
+# COVID's duration prior (no calendar term): rise and tail durations of the waves of the European
+# countries (ERVISS; series of at least 100 weeks with a median of at least 5 admissions, judged on
+# the whole snapshot), each series truncated at cutoff - 182 days before its peaks are found
+# (find_peaks, the segment-free series); a rise from the midpoint between two peaks to the peak, a
+# tail from week 5 after a peak to the next midpoint. Hazard of duration d: events / at risk pooled
+# over d - 1 .. d + 1, clipped to [.01, .6], .3 with fewer than 3 at risk.
+pp_duration_hazard <- function(durations, D = pp_settings$D) {
+  durations <- pmin(pmax(durations[is.finite(durations)], 1), D)
+  e <- tabulate(durations, D); r <- rev(cumsum(rev(e)))
+  vapply(seq_len(D), function(d) {
+    k <- max(1, d - 1):min(D, d + 1)
+    if (sum(r[k]) < 3) .3 else min(max(sum(e[k]) / sum(r[k]), .01), .6)
+  }, numeric(1))
+}
+pp_covid_prior <- function(pp, cutoff, D = pp_settings$D) {
+  known <- cutoff - pp_settings$erviss_known
+  pk_ <- pp_settings$peak
+  w <- do.call(rbind, lapply(pp$erviss, function(s) {
+    s <- s[s$target_end_date <= known & is.finite(s$value), ]
+    if (nrow(s) < 3L) return(NULL)
+    pk <- s$target_end_date[find_peaks(s$value, pk_$halfwidth, pk_$drop, pk_$min_prominence,
+      pk_$smooth, scale = max(s$value))$row]
+    if (length(pk) < 2L) return(NULL)
+    mid <- as.Date(floor((as.numeric(pk[-1]) + as.numeric(pk[-length(pk)])) / 2),
+      origin = "1970-01-01")
+    data.frame(rise = round(as.numeric(pk[-1] - mid) / 7),
+      tail = round(as.numeric(mid - pk[-length(pk)]) / 7) - 4)
+  }))
+  list(hr = pp_duration_hazard(w$rise, D), ht = pp_duration_hazard(w$tail, D),
+    record = data.frame(kind = "duration prior", waves = if (is.null(w)) 0L else nrow(w),
+      known_until = known))
+}
+# The transitions of one disease at a cutoff: a function of grid weeks giving HR and HT (D x
+# weeks), a record, and whether they are available. own_risk: the pooled states' hospital episode
+# rows. Flu: the hazard GAMs on the hospital and NREVSS episodes; COVID: the duration prior.
+pp_transitions <- function(pp, disease, cutoff, own_risk, D = pp_settings$D) {
+  if (disease == "flu") {
+    ex <- pp_nrevss_risk(pp, cutoff, D)
+    risk <- if (is.null(ex$risk)) own_risk else rbind(own_risk, ex$risk[names(own_risk)])
+    haz <- lapply(c(rise = "rise", tail = "tail"), function(k)
+      pp_hazard_fit(risk[risk$phase == k, ]))
+    rec <- data.frame(kind = paste(haz$rise$record$kind, haz$tail$record$kind, sep = "/"),
+      events_rise = haz$rise$record$events, events_tail = haz$tail$record$events,
+      extra_pairs = if (is.null(ex$pairs)) 0L else sum(ex$pairs$admitted), waves = NA_integer_,
+      edf_rise = paste(round(c(haz$rise$record$edf_age, haz$rise$record$edf_year_phase), 3),
+        collapse = "/"), edf_tail = paste(round(c(haz$tail$record$edf_age,
+        haz$tail$record$edf_year_phase), 3), collapse = "/"),
+      sp = paste(haz$rise$record$sp, haz$tail$record$sp, sep = " | "),
+      warnings = paste(haz$rise$record$warnings, haz$tail$record$warnings, sep = " | "),
+      reason = paste(haz$rise$record$reason, haz$tail$record$reason, sep = " | "))
+    available <- all(vapply(haz, function(h) h$record$kind != "unavailable", TRUE))
+    grid <- function(weeks) list(HR = pp_hazard_grid(haz$rise, weeks, D)$h,
+      HT = pp_hazard_grid(haz$tail, weeks, D)$h)
+  } else {
+    pr <- pp_covid_prior(pp, cutoff, D)
+    rec <- data.frame(kind = pr$record$kind, events_rise = NA_integer_, events_tail = NA_integer_,
+      extra_pairs = NA_integer_, waves = pr$record$waves, edf_rise = "", edf_tail = "", sp = "",
+      warnings = "", reason = "")
+    available <- pr$record$waves > 0
+    grid <- function(weeks) list(HR = matrix(pr$hr, D, length(weeks)),
+      HT = matrix(pr$ht, D, length(weeks)))
+  }
+  list(grid = grid, record = rec, available = available)
+}
+
+# PHASE PROBABILITIES: THE CHAIN ---------------------------------------------------------------
+# States 1..D rise ages, D + 1..D + 4 overshoot weeks, D + 5..2D + 4 tail ages. step(a, hr, ht):
+# the distribution one week later given a and the exit hazards of the current week (an exit at
+# week w changes the phase at w + 1); age D stays at D and can still exit; back(): its transpose.
+pp_index <- function(D) list(R = seq_len(D), O = D + 1:4, T = D + 4L + seq_len(D), S = 2L * D + 4L)
+pp_step <- function(a, hr, ht, D) {
+  i <- pp_index(D); out <- numeric(i$S)
+  out[i$R[1]] <- sum(a[i$T] * ht)
+  if (D > 1L) out[i$R[-1]] <- a[i$R[-D]] * (1 - hr[-D])
+  out[i$R[D]] <- out[i$R[D]] + a[i$R[D]] * (1 - hr[D])
+  out[i$O[1]] <- sum(a[i$R] * hr)
+  out[i$O[2:4]] <- a[i$O[1:3]]
+  out[i$T[1]] <- out[i$T[1]] + a[i$O[4]]
+  if (D > 1L) out[i$T[-1]] <- out[i$T[-1]] + a[i$T[-D]] * (1 - ht[-D])
+  out[i$T[D]] <- out[i$T[D]] + a[i$T[D]] * (1 - ht[D])
+  out
+}
+pp_back <- function(v, hr, ht, D) {
+  i <- pp_index(D); out <- numeric(i$S)
+  nextR <- if (D > 1L) c(i$R[-1], i$R[D]) else i$R[D]
+  nextT <- if (D > 1L) c(i$T[-1], i$T[D]) else i$T[D]
+  out[i$R] <- (1 - hr) * v[nextR] + hr * v[i$O[1]]
+  out[i$O[1:3]] <- v[i$O[2:4]]
+  out[i$O[4]] <- v[i$T[1]]
+  out[i$T] <- (1 - ht) * v[nextT] + ht * v[i$R[1]]
+  out
+}
+pp_transition_matrix <- function(hr, ht, D) {
+  S <- pp_index(D)$S
+  t(vapply(seq_len(S), function(z) pp_step(replace(numeric(S), z, 1), hr, ht, D), numeric(S)))
+}
+# Initial distribution of a segment: 1/3 per coarse phase, uniform over its internal states.
+pp_initial <- function(D) {
+  i <- pp_index(D); a <- numeric(i$S)
+  a[i$R] <- 1 / (3 * D); a[i$O] <- 1 / 12; a[i$T] <- 1 / (3 * D)
+  a
+}
+pp_coarse <- function(A, D) {
+  i <- pp_index(D)
+  if (is.null(dim(A))) A <- matrix(A, 1)
+  cbind(rise = rowSums(A[, i$R, drop = FALSE]), over = rowSums(A[, i$O, drop = FALSE]),
+    tail = rowSums(A[, i$T, drop = FALSE]))
+}
+# Forward filter and backward smoother within each contiguous segment of s (reset at every gap),
+# with the weekly likelihoods L3 (weeks x 3 coarse phases) and hazards HR, HT (D x weeks, the
+# hazards of the week the transition leaves); then `ahead` predictive weeks after the last row.
+pp_filter <- function(s, L3, HR, HT, D = pp_settings$D, ahead = 6L, HR_ahead = NULL,
+                      HT_ahead = NULL) {
+  i <- pp_index(D); n <- nrow(s)
+  Lf <- cbind(matrix(L3[, 1], n, D), matrix(L3[, 2], n, 4), matrix(L3[, 3], n, D))
+  alpha <- matrix(NA_real_, n, i$S); smooth <- alpha
+  for (g in unique(s$segment)) {
+    k <- which(s$segment == g)
+    a <- pp_initial(D) * Lf[k[1], ]
+    alpha[k[1], ] <- a / sum(a)
+    if (length(k) > 1L) for (j in 2:length(k)) {
+      a <- pp_step(alpha[k[j - 1], ], HR[, k[j - 1]], HT[, k[j - 1]], D) * Lf[k[j], ]
+      alpha[k[j], ] <- a / sum(a)
+    }
+    beta <- rep(1, i$S)
+    smooth[k[length(k)], ] <- alpha[k[length(k)], ]
+    if (length(k) > 1L) for (j in (length(k) - 1L):1) {
+      b <- pp_back(Lf[k[j + 1], ] * beta, HR[, k[j]], HT[, k[j]], D)
+      beta <- b / sum(b)
+      sm <- alpha[k[j], ] * beta
+      smooth[k[j], ] <- sm / sum(sm)
+    }
+  }
+  pred <- matrix(NA_real_, ahead, i$S)
+  a <- alpha[n, ]
+  hr <- HR[, n]; ht <- HT[, n]
+  for (m in seq_len(ahead)) {
+    a <- pp_step(a, hr, ht, D)
+    pred[m, ] <- a
+    if (m < ahead) { hr <- HR_ahead[, m]; ht <- HT_ahead[, m] }
+  }
+  list(filtered = pp_coarse(alpha, D), smoothed = pp_coarse(smooth, D),
+    ahead = pp_coarse(pred, D), last_state = alpha[n, ])
+}
+
+# PHASE PROBABILITIES: OBSERVATIONS ----------------------------------------------------------------
+# NSSP as known at a cutoff (published with issue + 6 <= cutoff; the latest issue of each week)
+# and its weekly log growth (consecutive weeks), lag growth and holidays of the NSSP week.
+pp_nssp_known <- function(pp, disease, location, cutoff) {
+  n <- pp$nssp[[paste(disease, location)]]
+  n <- n[n$issue + 6 <= cutoff, ]
+  n <- n[order(n$week_end, n$issue), ]
+  n <- n[!duplicated(n$week_end, fromLast = TRUE), ]
+  n[order(n$week_end), ]
+}
+pp_nssp_growth <- function(pp, disease, location, cutoff) {
+  n <- pp_nssp_known(pp, disease, location, cutoff)
+  if (nrow(n) < 2L) return(data.frame(week = as.Date(character()), ng = numeric(),
+    ng_lag = numeric(), n_hol_break = numeric(), n_hol_post = numeric()))
+  lv <- log(n$value)
+  consecutive <- c(FALSE, diff(as.numeric(n$week_end)) == 7)
+  ng <- ifelse(consecutive, c(NA, diff(lv)), NA)
+  ng_lag <- c(NA, ng[-length(ng)])
+  ng_lag[!consecutive] <- NA
+  h <- holiday_covariates(n$week_end)
+  data.frame(week = n$week_end, ng, ng_lag, n_hol_break = h$hol_break, n_hol_post = h$hol_post)
+}
+# The observation rows of one series s at NSSP lead L: hospital growth and lag growth
+# (consecutive), holidays; the NSSP growth of week w - L, its lag and holidays; plus the weeks
+# after the newest report up to the newest NSSP week + L (at most 6), informed by NSSP alone.
+pp_obs_frame <- function(s, nssp, L, extend = TRUE) {
+  hosp_lag <- c(NA, s$growth[-nrow(s)])
+  hosp_lag[c(TRUE, diff(s$segment) != 0)] <- NA
+  x <- data.frame(week = s$target_end_date, segment = s$segment, growth = s$growth,
+    lag_growth = hosp_lag, hol_break = s$hol_break, hol_post = s$hol_post, extension = FALSE)
+  if (extend && nrow(nssp)) {
+    last <- max(s$target_end_date)
+    ext <- last + 7 * seq_len(6)
+    ext <- ext[ext - 7 * L <= max(nssp$week)]
+    if (length(ext)) {
+      h <- holiday_covariates(ext)
+      x <- rbind(x, data.frame(week = ext, segment = s$segment[nrow(s)], growth = NA,
+        lag_growth = c(s$growth[nrow(s)], rep(NA, length(ext) - 1L)), hol_break = h$hol_break,
+        hol_post = h$hol_post, extension = TRUE))
+    }
+  }
+  k <- match(x$week - 7 * L, nssp$week)
+  x$ng <- nssp$ng[k]; x$ng_lag <- nssp$ng_lag[k]
+  x$n_hol_break <- nssp$n_hol_break[k]; x$n_hol_post <- nssp$n_hol_post[k]
+  x
+}
+# One channel's phase-mean model: growth ~ 0 + phase + holidays (least squares), phase-specific
+# residual sds (floor .05); at least 20 rows per phase; an all-zero holiday column is dropped.
+pp_channel_lm <- function(x, y, hol) {
+  x <- x[is.finite(x[[y]]), ]
+  counts <- table(factor(x$phase, pp_classes))
+  if (any(counts < pp_settings$min_rows)) return(list(available = FALSE,
+    reason = sprintf("rows per phase %s < %d", paste(counts, collapse = "/"),
+      pp_settings$min_rows)))
+  dropped <- hol[colSums(abs(x[hol])) == 0]
+  fit <- lm(reformulate(c("0", "phase", setdiff(hol, dropped)), y), x)
+  if (fit$rank < length(coef(fit)) || anyNA(coef(fit)))
+    return(list(available = FALSE, reason = "phase-mean regression not estimable"))
+  cf <- coef(fit)
+  delta <- setNames(vapply(hol, function(h) if (h %in% names(cf)) cf[[h]] else 0, 1), hol)
+  list(available = TRUE, kind = "lm", mu = cf[paste0("phase", pp_classes)], delta = delta,
+    sd = pmax(tapply(residuals(fit), x$phase, sd), pp_settings$sd_floor)[pp_classes], hol = hol,
+    rows = nrow(x), dropped = paste(dropped, collapse = " "))
+}
+# One channel's conditional-growth GAM: growth ~ 0 + phase + s(lag growth, cr, 4) + holidays
+# (Gaussian, REML, select = TRUE); at least 20 rows with a lag per phase and 8 distinct lags.
+pp_channel_gam <- function(x, y, lag, hol) {
+  x <- x[is.finite(x[[y]]) & is.finite(x[[lag]]), ]
+  counts <- table(factor(x$phase, pp_classes))
+  if (any(counts < pp_settings$min_rows)) return(list(available = FALSE,
+    reason = sprintf("rows with lag per phase %s < %d", paste(counts, collapse = "/"),
+      pp_settings$min_rows)))
+  if (length(unique(x[[lag]])) < pp_settings$min_lag_distinct) return(list(available = FALSE,
+    reason = "too few distinct lag growths"))
+  dropped <- hol[colSums(abs(x[hol])) == 0]
+  d <- data.frame(g = x[[y]], phase = x$phase, lag = x[[lag]], x[setdiff(hol, dropped)])
+  form <- as.formula(paste("g ~ 0 + phase + s(lag, bs = \"cr\", k = 4)",
+    paste(c("", setdiff(hol, dropped)), collapse = " + ")))
+  r <- capture(mgcv::gam(form, data = d, method = "REML", select = TRUE))
+  m <- r$value
+  if (is.null(m) || !isTRUE(m$converged) || !all(is.finite(coef(m))))
+    return(list(available = FALSE, reason = paste("GAM failed:", r$error)))
+  list(available = TRUE, kind = "gam", fit = m, hol = setdiff(hol, dropped),
+    sd = pmax(tapply(residuals(m), x$phase, sd), pp_settings$sd_floor)[pp_classes],
+    rows = nrow(x), edf_lag = sum(m$edf[grep("s\\(lag\\)", names(coef(m)))]),
+    sp = paste(sprintf("%.4g", m$sp), collapse = " "), warnings = paste(r$warnings,
+      collapse = "; "))
+}
+# Channel means (n x 3) of a channel model for the rows of x (NA where its inputs are missing).
+pp_channel_means <- function(ch, x, y, lag, hol_names) {
+  n <- nrow(x)
+  if (ch$kind == "lm") {
+    M <- matrix(ch$mu, n, 3, byrow = TRUE)
+    for (h in names(ch$delta)) M <- M + ch$delta[[h]] * x[[hol_names[[h]]]]
+    return(M)
+  }
+  M <- matrix(NA_real_, n, 3)
+  ok <- is.finite(x[[lag]]) & Reduce(`&`, lapply(ch$hol, function(h)
+    is.finite(x[[hol_names[[h]]]])), rep(TRUE, n))
+  if (!any(ok)) return(M)
+  for (k in seq_along(pp_classes)) {
+    nd <- data.frame(phase = factor(pp_classes[k], pp_classes), lag = x[[lag]][ok])
+    for (h in ch$hol) nd[[h]] <- x[[hol_names[[h]]]][ok]
+    M[ok, k] <- as.numeric(predict(ch$fit, nd))
+  }
+  M
+}
+pp_hosp_names <- c(hol_break = "hol_break", hol_post = "hol_post")
+pp_nssp_names <- c(n_hol_break = "n_hol_break", n_hol_post = "n_hol_post")
+# Means and sds of both channels (n x 3 each): the GAM where its inputs exist (O2), else the
+# channel's phase-mean model.
+pp_channel_moments <- function(model, x) {
+  mh <- pp_channel_means(model$hosp, x, "growth", "lag_growth", pp_hosp_names)
+  sh <- matrix(model$hosp$sd, nrow(x), 3, byrow = TRUE)
+  if (!is.null(model$hosp_gam)) {
+    g <- pp_channel_means(model$hosp_gam, x, "growth", "lag_growth", pp_hosp_names)
+    use <- is.finite(g[, 1])
+    mh[use, ] <- g[use, ]
+    sh[use, ] <- matrix(model$hosp_gam$sd, sum(use), 3, byrow = TRUE)
+  }
+  out <- list(mh = mh, sh = sh, mn = NULL, sn = NULL)
+  if (!is.null(model$nssp)) {
+    xn <- x
+    xn$n_hol_break[!is.finite(xn$n_hol_break)] <- 0
+    xn$n_hol_post[!is.finite(xn$n_hol_post)] <- 0
+    mn <- pp_channel_means(model$nssp, xn, "ng", "ng_lag", pp_nssp_names)
+    sn <- matrix(model$nssp$sd, nrow(x), 3, byrow = TRUE)
+    if (!is.null(model$nssp_gam)) {
+      g <- pp_channel_means(model$nssp_gam, xn, "ng", "ng_lag", pp_nssp_names)
+      use <- is.finite(g[, 1])
+      mn[use, ] <- g[use, ]
+      sn[use, ] <- matrix(model$nssp_gam$sd, sum(use), 3, byrow = TRUE)
+    }
+    out$mn <- mn; out$sn <- sn
+  }
+  out
+}
+# Standardized residuals of the labelled rows at their own phase (for the correlation).
+pp_standardized <- function(model, lab) {
+  m <- pp_channel_moments(model, lab)
+  k <- match(as.character(lab$phase), pp_classes)
+  idx <- cbind(seq_len(nrow(lab)), k)
+  list(h = (lab$growth - m$mh[idx]) / m$sh[idx],
+    n = if (is.null(m$mn)) rep(NA_real_, nrow(lab)) else (lab$ng - m$mn[idx]) / m$sn[idx])
+}
+# The record of an observation model (the same columns whether or not it could be fitted).
+pp_obs_record <- function(variant, reason = "") data.frame(variant, hospital = FALSE,
+  hospital_reason = reason, nssp = FALSE, nssp_reason = "", hospital_gam = FALSE,
+  nssp_gam = FALSE, rho_raw = NA_real_, rho = 0, rho_rows = 0L, gam_note = "")
+# Fit an observation model on the labelled weeks: "O1" hospital and NSSP phase-mean models; "O2"
+# their conditional-growth GAMs on top (each falling back to its phase-mean model). Correlation of
+# the paired standardized residuals, shrunk by n / (n + 50), capped at |rho| <= .9 (0 with fewer
+# than 3 pairs).
+pp_obs_fit <- function(lab, variant) {
+  hosp <- pp_channel_lm(lab, "growth", c("hol_break", "hol_post"))
+  rec <- pp_obs_record(variant, if (hosp$available) "" else hosp$reason)
+  rec$hospital <- hosp$available
+  if (!hosp$available) return(list(available = FALSE, record = rec))
+  model <- list(variant = variant, hosp = hosp, nssp = NULL, rho = 0)
+  zero_na <- function(x) transform(x, n_hol_break = ifelse(is.finite(n_hol_break), n_hol_break, 0),
+    n_hol_post = ifelse(is.finite(n_hol_post), n_hol_post, 0))
+  if (variant %in% c("O1", "O2")) {
+    nssp <- pp_channel_lm(zero_na(lab), "ng", c("n_hol_break", "n_hol_post"))
+    rec$nssp <- nssp$available
+    rec$nssp_reason <- if (nssp$available) "" else nssp$reason
+    if (nssp$available) model$nssp <- nssp
+  }
+  if (variant == "O2") {
+    hg <- pp_channel_gam(lab, "growth", "lag_growth", c("hol_break", "hol_post"))
+    rec$hospital_gam <- hg$available
+    if (hg$available) model$hosp_gam <- hg else rec$gam_note <- paste("hospital:", hg$reason)
+    if (!is.null(model$nssp)) {
+      ng <- pp_channel_gam(zero_na(lab), "ng", "ng_lag", c("n_hol_break", "n_hol_post"))
+      rec$nssp_gam <- ng$available
+      if (ng$available) model$nssp_gam <- ng else rec$gam_note <- paste(rec$gam_note,
+        "NSSP:", ng$reason)
+    }
+  }
+  if (!is.null(model$nssp)) {
+    z <- pp_standardized(model, lab)
+    both <- is.finite(z$h) & is.finite(z$n)
+    if (sum(both) >= 3L) {
+      raw <- cor(z$h[both], z$n[both])
+      rec$rho_raw <- raw
+      rec$rho_rows <- sum(both)
+      model$rho <- max(min(raw * sum(both) / (sum(both) + pp_settings$rho_prior),
+        pp_settings$rho_cap), -pp_settings$rho_cap)
+      rec$rho <- model$rho
+    }
+  }
+  list(available = TRUE, model = model, record = rec)
+}
+# Log-likelihood (n x 3) of the observations of x under each phase: the joint Gaussian when both
+# channels are observed, the marginal of the observed one, 0 (likelihood 1) when none is.
+pp_loglik <- function(model, x) {
+  m <- pp_channel_moments(model, x)
+  n <- nrow(x)
+  gh <- matrix(x$growth, n, 3); oh <- is.finite(x$growth)
+  ll <- matrix(0, n, 3)
+  zh <- (gh - m$mh) / m$sh
+  if (is.null(m$mn)) {
+    ll[oh, ] <- dnorm(gh[oh, , drop = FALSE], m$mh[oh, , drop = FALSE], m$sh[oh, , drop = FALSE],
+      log = TRUE)
+    return(ll)
+  }
+  gn <- matrix(x$ng, n, 3); on <- is.finite(x$ng) & is.finite(m$mn[, 1])
+  zn <- (gn - m$mn) / m$sn
+  rho <- model$rho
+  both <- oh & on; honly <- oh & !on; nonly <- on & !oh
+  if (any(both)) ll[both, ] <- -log(2 * pi) - log(m$sh[both, , drop = FALSE]) -
+    log(m$sn[both, , drop = FALSE]) - .5 * log(1 - rho^2) -
+    (zh[both, , drop = FALSE]^2 - 2 * rho * zh[both, , drop = FALSE] * zn[both, , drop = FALSE] +
+      zn[both, , drop = FALSE]^2) / (2 * (1 - rho^2))
+  if (any(honly)) ll[honly, ] <- dnorm(gh[honly, , drop = FALSE], m$mh[honly, , drop = FALSE],
+    m$sh[honly, , drop = FALSE], log = TRUE)
+  if (any(nonly)) ll[nonly, ] <- dnorm(gn[nonly, , drop = FALSE], m$mn[nonly, , drop = FALSE],
+    m$sn[nonly, , drop = FALSE], log = TRUE)
+  ll
+}
+# The hospital growth's moments per phase given, where observed, the same week's NSSP growth
+# (the conditional Gaussian): the predictive density of the lead-selection score.
+pp_hosp_conditional <- function(model, x) {
+  m <- pp_channel_moments(model, x)
+  mu <- m$mh; sd <- m$sh
+  if (!is.null(m$mn)) {
+    on <- is.finite(x$ng) & is.finite(m$mn[, 1])
+    if (any(on)) {
+      zn <- (matrix(x$ng, nrow(x), 3)[on, , drop = FALSE] - m$mn[on, , drop = FALSE]) /
+        m$sn[on, , drop = FALSE]
+      mu[on, ] <- mu[on, , drop = FALSE] + model$rho * sd[on, , drop = FALSE] * zn
+      sd[on, ] <- sd[on, , drop = FALSE] * sqrt(1 - model$rho^2)
+    }
+  }
+  list(mu = mu, sd = sd)
+}
+
+# PHASE PROBABILITIES: ONE DISEASE AND CUTOFF ----------------------------------------------------
+# Episodes, transitions and each observation variant ("O1_L<lead>", "O2_L<lead>") at a cutoff.
+# Per variant the probabilities of the 80-week grid (the pooled states' weeks up to 80 weeks back,
+# "smoothed"; the 6 weeks after the newest hospital report: "nssp" where shifted NSSP informs
+# them, else "ahead"), the predictive inputs of the next hospital week, and the records.
+# Unavailable transitions or observation model: (1/3, 1/3, 1/3).
+pp_hidden_at <- function(pp, disease, cutoff, variants, D = pp_settings$D,
+                         ahead = pp_settings$ahead, window_weeks = pp_settings$window_weeks,
+                         keep = FALSE) {
+  shift <- pp_hidden_shift(pp, disease, cutoff)
+  ser <- lapply(setNames(nm = pp$states), function(l) pp_series(pp, disease, l, cutoff, shift))
+  pairs <- lapply(ser, function(s) pp_pairs(pp_peaks(s, cutoff), cutoff))
+  ep <- lapply(pp$states, function(l) pp_episode_rows(ser[[l]], pairs[[l]], l, D))
+  labels <- do.call(rbind, lapply(ep, `[[`, "labels"))
+  risk <- do.call(rbind, lapply(ep, `[[`, "risk"))
+  if (is.null(risk)) risk <- data.frame(location = character(), pair = integer(),
+    phase = character(), week = as.Date(character()), age = integer(), age_cap = integer(),
+    year_phase = numeric(), event = numeric())
+  tr <- pp_transitions(pp, disease, cutoff, risk, D)
+  nssp <- lapply(setNames(nm = pp$states), function(l) pp_nssp_growth(pp, disease, l, cutoff))
+  pair_log <- do.call(rbind, lapply(pp$states, function(l) if (nrow(pairs[[l]]))
+    cbind(location = l, pairs[[l]])))
+  out <- list(); scores <- list(); records <- list(); models <- list()
+  for (v in variants) {
+    L <- as.integer(sub(".*_L", "", v))
+    base_variant <- sub("_L.*", "", v)
+    frames <- lapply(setNames(nm = pp$states), function(l) pp_obs_frame(ser[[l]], nssp[[l]], L))
+    lab <- NULL
+    if (!is.null(labels)) {
+      lab <- do.call(rbind, lapply(pp$states, function(l) {
+        x <- labels[labels$location == l, c("location", "week", "phase")]
+        f <- frames[[l]]
+        cbind(x, f[match(x$week, f$week), c("growth", "lag_growth", "hol_break", "hol_post",
+          "ng", "ng_lag", "n_hol_break", "n_hol_post")])
+      }))
+    }
+    om <- if (is.null(lab)) list(available = FALSE, record = pp_obs_record(base_variant,
+      "no admitted pair")) else pp_obs_fit(lab, base_variant)
+    available <- isTRUE(om$available) && tr$available
+    rec <- data.frame(disease, cutoff, variant = v, lead = L, transition_kind = tr$record$kind[1],
+      available, labelled_weeks = if (is.null(lab)) 0L else nrow(lab),
+      pairs_found = if (is.null(pair_log)) 0L else nrow(pair_log),
+      pairs_admitted = if (is.null(pair_log)) 0L else sum(pair_log$admitted))
+    records[[v]] <- cbind(rec, om$record[setdiff(names(om$record), "variant")])
+    if (keep && isTRUE(om$available)) models[[v]] <- om$model
+    probs <- list(); sc <- list()
+    for (l in pp$states) {
+      s <- ser[[l]]; f <- frames[[l]]
+      n_h <- nrow(s); last <- s$target_end_date[n_h]
+      grid_after <- last + 7 * seq_len(ahead)
+      if (!available) {
+        keep_w <- s$target_end_date[s$target_end_date >= cutoff - 7 * window_weeks]
+        third <- matrix(1 / 3, length(keep_w) + ahead, 3, dimnames = list(NULL, pp_classes))
+        probs[[l]] <- data.frame(disease, location = l, cutoff, week = c(keep_w, grid_after),
+          kind = rep(c("smoothed", "ahead"), c(length(keep_w), ahead)), third)
+        next
+      }
+      ll <- pp_loglik(om$model, f)
+      L3 <- exp(ll - apply(ll, 1, max))
+      n_f <- nrow(f); n_ext <- sum(f$extension); n_ahead <- ahead - n_ext
+      weeks_all <- c(f$week, if (n_ahead > 0) f$week[n_f] + 7 * seq_len(n_ahead))
+      g <- tr$grid(weeks_all)
+      fs <- data.frame(target_end_date = f$week, segment = f$segment)
+      res <- suppressWarnings(pp_filter(fs, L3, g$HR[, seq_len(n_f), drop = FALSE],
+        g$HT[, seq_len(n_f), drop = FALSE], D, n_ahead,
+        g$HR[, n_f + seq_len(max(n_ahead, 0)), drop = FALSE],
+        g$HT[, n_f + seq_len(max(n_ahead, 0)), drop = FALSE]))
+      k <- which(!f$extension & f$week >= cutoff - 7 * window_weeks)
+      e <- which(f$extension)
+      probs[[l]] <- rbind(
+        data.frame(disease, location = l, cutoff, week = f$week[k], kind = "smoothed",
+          res$smoothed[k, , drop = FALSE]),
+        if (length(e)) data.frame(disease, location = l, cutoff, week = f$week[e], kind = "nssp",
+          res$smoothed[e, , drop = FALSE]),
+        if (n_ahead > 0) data.frame(disease, location = l, cutoff,
+          week = f$week[n_f] + 7 * seq_len(n_ahead), kind = "ahead", res$ahead))
+      nxt <- last + 7
+      j <- match(nxt, f$week)
+      pi_next <- if (!is.na(j)) res$filtered[j, ] else res$ahead[1, ]
+      xr <- if (!is.na(j)) f[j, ] else {
+        h <- holiday_covariates(nxt)
+        data.frame(week = nxt, segment = NA, growth = NA, lag_growth = s$growth[n_h],
+          hol_break = h$hol_break, hol_post = h$hol_post, extension = TRUE, ng = NA, ng_lag = NA,
+          n_hol_break = NA, n_hol_post = NA)
+      }
+      hm <- pp_hosp_conditional(om$model, xr)
+      sc[[l]] <- data.frame(disease, location = l, cutoff, variant = v, last_week = last,
+        last_growth = s$growth[n_h], next_week = nxt, nssp_informed = !is.na(j),
+        p_rise = pi_next[1], p_over = pi_next[2], p_tail = pi_next[3], mu_rise = hm$mu[1, 1],
+        mu_over = hm$mu[1, 2], mu_tail = hm$mu[1, 3], sd_rise = hm$sd[1, 1],
+        sd_over = hm$sd[1, 2], sd_tail = hm$sd[1, 3])
+    }
+    out[[v]] <- do.call(rbind, probs)
+    rownames(out[[v]]) <- NULL
+    scores[[v]] <- do.call(rbind, sc)
+  }
+  list(probabilities = out, scores = do.call(rbind, scores), records = do.call(rbind, records),
+    transition = cbind(disease, cutoff, tr$record), pairs = pair_log,
+    models = if (keep) models)
+}
+
+# PHASE PROBABILITIES: LEAD SELECTION (COVID) -------------------------------------------------------
+# Blocks of 13 weeks of cutoffs from the first cutoff of the base. The score of a cutoff's next
+# hospital week, log sum_k pi_k N(G; mu_k, sd_k), counts once that week's growth is reported (its
+# growth as the newest report of a later cutoff, revision-shifted). The lead of block j: the largest
+# summed score over the weeks reported before block j begins (ties: the smallest lead); lead 0
+# while a lead has no score.
+pp_block_of <- function(cutoff, first, weeks = pp_settings$block_weeks)
+  as.integer(as.numeric(cutoff - first) %/% (7 * weeks))
+pp_predictive_scores <- function(sc) {
+  realized <- unique(sc[c("disease", "location", "last_week", "last_growth", "cutoff")])
+  realized <- realized[order(realized$cutoff), ]
+  realized <- realized[!duplicated(realized[c("disease", "location", "last_week")]), ]
+  names(realized)[names(realized) == "cutoff"] <- "reported_at"
+  k <- match(paste(sc$disease, sc$location, sc$next_week), paste(realized$disease,
+    realized$location, realized$last_week))
+  sc$realized <- realized$last_growth[k]
+  sc$reported_at <- realized$reported_at[k]
+  P <- as.matrix(sc[c("p_rise", "p_over", "p_tail")])
+  dens <- P[, 1] * dnorm(sc$realized, sc$mu_rise, sc$sd_rise) + P[, 2] * dnorm(sc$realized,
+    sc$mu_over, sc$sd_over) + P[, 3] * dnorm(sc$realized, sc$mu_tail, sc$sd_tail)
+  sc$log_score <- log(pmax(dens, 1e-300))
+  sc
+}
+pp_select_leads <- function(sc, family, first, cutoffs, leads = 0:2) {
+  x <- sc[startsWith(sc$variant, paste0(family, "_L")) & is.finite(sc$log_score), ]
+  blocks <- sort(unique(pp_block_of(cutoffs, first)))
+  do.call(rbind, lapply(unique(sc$disease), function(d) do.call(rbind, lapply(blocks,
+    function(b) {
+      start <- first + 7 * pp_settings$block_weeks * b
+      y <- x[x$disease == d & x$reported_at < start, ]
+      tot <- vapply(leads, function(L) sum(y$log_score[y$variant == paste0(family, "_L", L)]), 1)
+      n <- vapply(leads, function(L) sum(y$variant == paste0(family, "_L", L)), 1)
+      lead <- if (!nrow(y) || any(n == 0)) 0L else leads[which.max(tot)]
+      data.frame(disease = d, family, block = b, block_start = start, lead, scored_weeks = min(n),
+        score_L0 = tot[1], score_L1 = tot[2], score_L2 = tot[3])
+    }))))
+}
+
+# PHASE PROBABILITIES: OUTSIDE SERIES ----------------------------------------------------------------
+# NREVSS (WHO/NREVSS clinical-laboratory files of Delphi's flu auxiliary data, external/delphi/
+# aux_data/flusion_data): positives / specimens per pooled state and MMWR week (Saturday week ends),
+# New York City added to New York by counts (New Jersey has no series before October 2023).
+pp_nrevss_series <- function(dir, states) {
+  num <- function(x) suppressWarnings(as.numeric(x))
+  pooled_names <- c("06" = "California", "48" = "Texas", "36" = "New York",
+    "42" = "Pennsylvania", "17" = "Illinois", "39" = "Ohio", "13" = "Georgia",
+    "37" = "North Carolina", "26" = "Michigan", "34" = "New Jersey")
+  stopifnot(setequal(names(pooled_names), states))
+  old <- read.csv(file.path(dir, "WHO_NREVSS_Combined_prior_to_2015_16_State.csv"), skip = 1,
+    check.names = FALSE)
+  old$positives <- num(old[["TOTAL SPECIMENS"]]) * num(old[["PERCENT POSITIVE"]]) / 100
+  new <- read.csv(file.path(dir, "WHO_NREVSS_Clinical_Labs_State.csv"), skip = 1,
+    check.names = FALSE)
+  new$positives <- num(new[["TOTAL A"]]) + num(new[["TOTAL B"]])
+  lab <- rbind(old[c("REGION", "YEAR", "WEEK", "TOTAL SPECIMENS", "positives")],
+    new[c("REGION", "YEAR", "WEEK", "TOTAL SPECIMENS", "positives")])
+  names(lab) <- c("region", "year", "week", "specimens", "positives")
+  lab$specimens <- num(lab$specimens)
+  lab$region[lab$region == "New York City"] <- "New York"
+  lab <- lab[lab$region %in% pooled_names & is.finite(lab$specimens) &
+    is.finite(lab$positives), ]
+  lab <- aggregate(cbind(specimens, positives) ~ region + year + week, lab, sum)
+  lab <- lab[lab$specimens > 0, ]
+  jan4 <- as.Date(paste0(lab$year, "-01-04"))
+  lab$target_end_date <- jan4 - as.integer(format(jan4, "%w")) + 7 * (lab$week - 1) + 6
+  lab$value <- lab$positives / lab$specimens
+  lapply(split(lab[c("target_end_date", "value")], lab$region), function(x)
+    x[order(x$target_end_date), ])
+}
+# ERVISS (ECDC, weekly SARS-CoV-2 hospital admissions of the EU/EEA countries; a snapshot): one
+# series per country with at least 100 weeks and a median of at least 5 admissions (ISO week ends).
+pp_erviss_series <- function(file) {
+  eu <- as.data.frame(arrow::read_parquet(file))
+  y <- as.integer(substr(eu$yearweek, 1, 4)); w <- as.integer(substr(eu$yearweek, 7, 8))
+  jan4 <- as.Date(paste0(y, "-01-04"))
+  eu$target_end_date <- jan4 - (as.integer(format(jan4, "%u")) - 1) + 7 * (w - 1) + 6
+  eu <- eu[order(eu$country, eu$target_end_date), ]
+  eu$value <- as.numeric(eu$value)
+  Filter(function(s) nrow(s) >= pp_settings$erviss_min_weeks &&
+    median(s$value) >= pp_settings$erviss_min_median,
+    split(eu[c("target_end_date", "value")], eu$country))
 }
