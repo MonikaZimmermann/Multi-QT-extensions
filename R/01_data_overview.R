@@ -260,13 +260,14 @@ print(available_then)
 #   see fill_missing_rounds() below; the gap from May to November 2024 stays.
 shared <- multiqt_settings()                  # base_model and output_dir (R/03_functions.R).
 base_model <- shared$base_model               # "cmu_submission" or "windowed_seasonal".
+# First forecast round and end of tuning of each base (both drawn in section 7's plot).
+base_start_dates <- as.Date(c(cmu_submission = "2024-11-23", windowed_seasonal = "2023-10-14"))
+base_tuning_through <- as.Date(c(cmu_submission = "2025-05-31", windowed_seasonal = "2024-04-27"))
 prepare_settings <- list(base_model = base_model,
                          base = c(covid = base_model, flu = base_model),
                          hhs_reports = base_model == "windowed_seasonal",
-                         start_date = as.Date(c(cmu_submission = "2024-11-23",
-                           windowed_seasonal = "2023-10-14")[[base_model]]),
-                         tuning_through = as.Date(c(cmu_submission = "2025-05-31",
-                           windowed_seasonal = "2024-04-27")[[base_model]]),
+                         start_date = base_start_dates[[base_model]],
+                         tuning_through = base_tuning_through[[base_model]],
                          evaluation_through = as.Date("2026-09-30"),
                          peak_halfwidth = 8L, peak_drop = .3, peak_min_prominence = .1,
                          peak_smooth = 3L,
@@ -792,3 +793,100 @@ cat("\nREPORTS AND FINALIZED TRUTHS: missing values by source and disease\n",
 print(report_missing_summary, n = Inf, width = 140)
 cat("\nREPORTS AND FINALIZED TRUTHS: affected target weeks\n")
 print(report_missing_weeks, n = Inf, width = 140)
+
+
+# 7. LATEST REPORTS OF THE POOLED STATES -----------------------------------------
+# One page, <output_dir>/pdf/latest_reports_pooled_states.pdf: the latest report of every
+# target week (NHSN's newest version, `latest` of section 4) per 100k residents (2019
+# census), COVID above and flu below, for the pooled locations of multiqt_settings() (the
+# 10 largest states without Florida). The five largest states are solid lines, the next
+# five dashed in the same five colours. Top: the tuning and evaluation periods of both
+# bases (target weeks); grey: the weeks of incomplete reporting (incomplete_weeks), not
+# forecast.
+census <- epidatasets::state_census
+pooled_latest <- as.data.frame(latest) %>%
+  filter(!is.na(location), location %in% shared$pooled_locations) %>%
+  transmute(disease, location, state = toupper(geo_value), target_end_date = time_value,
+    per_100k = value / census$pop[match(location, census$fips)] * 1e5)
+stopifnot(setequal(unique(pooled_latest$location), shared$pooled_locations),
+  !anyDuplicated(pooled_latest[c("disease", "location", "target_end_date")]))
+weeks <- seq(min(pooled_latest$target_end_date), max(pooled_latest$target_end_date), by = 7)
+state_order <- toupper(census$abbr[match(shared$pooled_locations, census$fips)])
+state_colours <- setNames(rep(c("#2a78d6", "#e5482f", "#1baf7a", "#eda100", "#b5179e"), 2),
+  state_order)
+state_lty <- setNames(rep(c(1, 2), each = 5), state_order)
+state_names <- setNames(census$name[match(shared$pooled_locations, census$fips)], state_order)
+incomplete <- prepare_settings$incomplete_weeks
+x_range <- c(min(weeks) - 7, max(weeks) + 7)
+ticks <- seq(as.Date(format(min(weeks), "%Y-01-01")), max(weeks), by = "6 months")
+period_bars <- do.call(rbind, lapply(names(base_start_dates), function(base) {
+  tuning_end <- base_tuning_through[[base]]
+  evaluation_start <- if (tuning_end < incomplete[2]) incomplete[2] + 7 else tuning_end + 7
+  data.frame(base, period = c("tuning", "evaluation"),
+    from = c(base_start_dates[[base]], evaluation_start),
+    to = c(tuning_end, prepare_settings$evaluation_through))
+}))
+grey_weeks <- function() {
+  usr <- par("usr")
+  rect(incomplete[1] - 3.5, usr[3], incomplete[2] + 3.5, usr[4], col = "gray90", border = NA)
+}
+
+figure_dir <- file.path(shared$output_dir, "pdf")
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+cairo_pdf(file.path(figure_dir, "latest_reports_pooled_states.pdf"), width = 16, height = 11.5,
+  family = "DejaVu Sans")
+layout(matrix(1:3), heights = c(1.4, 4, 4))
+par(oma = c(1, 0, 2.2, 0))
+# Periods of the two bases, each label above its bar.
+par(mar = c(.4, 12.5, .2, 1.5))
+plot(NA, xlim = x_range, ylim = c(.5, 2.9), xaxs = "i", axes = FALSE, xlab = "", ylab = "")
+grey_weeks()
+for (i in seq_len(nrow(period_bars))) {
+  b <- period_bars[i, ]
+  y <- match(b$base, rev(names(base_start_dates)))
+  rect(b$from - 3.5, y - .17, b$to + 3.5, y + .17, border = NA,
+    col = if (b$period == "tuning") "gray70" else "gray40")
+  text(b$from + (b$to - b$from) / 2, y + .2, adj = c(.5, 0), cex = .9,
+    paste0(b$period, ", ", format(b$from, "%b %Y"), " to ", format(b$to, "%b %Y")))
+}
+axis(2, at = 1:2, labels = paste(rev(names(base_start_dates)), "base"), las = 1, tick = FALSE,
+  cex.axis = .95)
+mtext(paste0("Weekly hospital admissions per 100k residents, latest report (NHSN, version of ",
+  format(max(vintages$version), "%d %B %Y"), "), the 10 largest states without Florida"),
+  side = 3, outer = TRUE, line = .6, cex = 1.15, font = 2)
+for (disease in c("covid", "flu")) {
+  d <- pooled_latest[pooled_latest$disease == disease, , drop = FALSE]
+  y_max <- max(d$per_100k, na.rm = TRUE) * 1.04
+  par(mar = c(if (disease == "flu") 3 else 1.2, 12.5, 2.2, 1.5))
+  plot(NA, xlim = x_range, ylim = c(0, y_max), xaxs = "i", yaxs = "i", axes = FALSE,
+    xlab = "", ylab = "")
+  grey_weeks()
+  abline(h = pretty(c(0, y_max)), col = "gray88", lwd = .6)
+  abline(v = c(base_start_dates, base_tuning_through, prepare_settings$evaluation_through),
+    col = "gray45", lty = 3, lwd = .8)
+  for (s in state_order) {
+    x <- d[d$state == s, , drop = FALSE]
+    lines(weeks, x$per_100k[match(weeks, x$target_end_date)],  # NA breaks the line.
+      col = state_colours[[s]], lty = state_lty[[s]], lwd = 1.5)
+  }
+  axis(2, las = 1, cex.axis = .9, col = "gray45")
+  axis.Date(1, at = ticks, format = "%b %Y", cex.axis = .9, col = "gray45",
+    labels = disease == "flu")
+  box(col = "gray45")
+  mtext(c(covid = "COVID-19", flu = "Influenza")[[disease]], side = 3, adj = 0, line = .5,
+    font = 2, cex = 1.05)
+  mtext("per 100k residents", side = 2, line = 3, cex = .9)
+  if (disease == "covid") {
+    text(incomplete[1] + (incomplete[2] - incomplete[1]) / 2, .97 * y_max, adj = c(.5, 1),
+      "incomplete\nreporting", cex = .8, col = "gray35")
+    legend("topright", inset = .01, legend = state_names, col = state_colours, lty = state_lty,
+      lwd = 1.8, ncol = 2, cex = .9, bg = "white", box.col = "gray75")
+  }
+}
+invisible(dev.off())
+cat("\nLATEST REPORTS OF THE POOLED STATES:", file.path(figure_dir,
+  "latest_reports_pooled_states.pdf"), "\n")
+print(do.call(rbind, lapply(split(pooled_latest, pooled_latest$disease), function(d)
+  data.frame(disease = d$disease[1], first_week = min(d$target_end_date),
+    last_week = max(d$target_end_date), weeks = length(unique(d$target_end_date))))),
+  row.names = FALSE)
